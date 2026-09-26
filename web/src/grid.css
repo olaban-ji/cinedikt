@@ -1108,8 +1108,14 @@ button {
   line-height: 1;
 }
 
+/* The stroke runs to the very edge of the viewBox: the bowl's outside
+   is its bottom and left edge, and the round ends reach a hair past its
+   right. Clipped to its box, as an SVG is by default, the bowl lost its
+   bottom whenever the box fell between device pixels. The loader draws
+   past its box the same way, so the mark it lands as is the mark it was. */
 .cd-mark {
   display: block;
+  overflow: visible;
 }
 
 /* The dot is the searched film, so it is the accent. Set here rather
