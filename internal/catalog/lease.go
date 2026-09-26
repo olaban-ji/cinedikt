@@ -49,12 +49,24 @@ const (
 	NotifyReady     = "poster_ready"
 )
 
-// Wakes is what a job loop waits on: one channel per signal, each
-// holding at most one pending wake.
+// Wakes is what a job loop waits on: one channel per loop that reacts
+// to a signal, each holding at most one pending wake.
+//
+// One loop per channel, never two. A send is taken by whichever
+// receiver gets there first, so two loops waiting on the same channel
+// would share one wake between them: a publish would start one and
+// leave the other asleep until its backstop. A second job that wants
+// the same signal gets a channel of its own, poked alongside the first.
 type Wakes struct {
+	// A new generation, for the OMDb poster backfill.
 	Published chan struct{}
-	Wanted    chan struct{}
-	Ready     chan struct{}
+	// The same signal, for the TMDb id matcher.
+	PublishedIDs chan struct{}
+	// A reader met a film with no picture, for the TMDb poster
+	// fallback.
+	Wanted chan struct{}
+	// A poster landed, for the opening screen's colours.
+	Ready chan struct{}
 }
 
 func newWakes() *Wakes {
@@ -64,9 +76,29 @@ func newWakes() *Wakes {
 		// returns", not "start a second pass". OMDb saving five
 		// hundred posters a second must not start five hundred colour
 		// runs.
-		Published: make(chan struct{}, 1),
-		Wanted:    make(chan struct{}, 1),
-		Ready:     make(chan struct{}, 1),
+		Published:    make(chan struct{}, 1),
+		PublishedIDs: make(chan struct{}, 1),
+		Wanted:       make(chan struct{}, 1),
+		Ready:        make(chan struct{}, 1),
+	}
+}
+
+// signal wakes every loop that a notification on `channel` concerns.
+// It is apart from listen so the fan-out can be tested without a
+// Postgres connection to carry the notification.
+func (w *Wakes) signal(channel string) {
+	switch channel {
+	case NotifyPublished:
+		// A new generation brings new titles, which need TMDb ids and
+		// posters, which need colours.
+		poke(w.Published)
+		poke(w.PublishedIDs)
+		poke(w.Wanted)
+		poke(w.Ready)
+	case NotifyWanted:
+		poke(w.Wanted)
+	case NotifyReady:
+		poke(w.Ready)
 	}
 }
 
@@ -159,18 +191,7 @@ func listen(ctx context.Context, conn *pgx.Conn, wakes *Wakes) error {
 		if err != nil {
 			return err
 		}
-		switch note.Channel {
-		case NotifyPublished:
-			// A new generation brings new titles, which need posters,
-			// which need colours.
-			poke(wakes.Published)
-			poke(wakes.Wanted)
-			poke(wakes.Ready)
-		case NotifyWanted:
-			poke(wakes.Wanted)
-		case NotifyReady:
-			poke(wakes.Ready)
-		}
+		wakes.signal(note.Channel)
 	}
 }
 

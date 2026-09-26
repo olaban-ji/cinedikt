@@ -281,7 +281,9 @@ func fillTMDbIDs(ctx context.Context, job *TMDbIDJob, logger *slog.Logger, wakes
 			}
 		}
 		// A new generation is the only thing that brings new titles.
-		if !waitFor(ctx, wakes.Published, wait) {
+		// Its own channel, not the poster backfill's: sharing one
+		// would give a publish to whichever of the two took it first.
+		if !waitFor(ctx, wakes.PublishedIDs, wait) {
 			return
 		}
 	}

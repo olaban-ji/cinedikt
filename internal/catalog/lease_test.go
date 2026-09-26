@@ -105,3 +105,50 @@ func TestTheLeasePassesOnWhenAHolderStops(t *testing.T) {
 		t.Error("the two overlapped")
 	}
 }
+
+// TestAPublishWakesEveryLoopThatWaitsForIt is why each loop has a
+// channel of its own. A send is taken by exactly one receiver, so the
+// OMDb backfill and the TMDb id matcher sharing one would split a
+// publish between them, and the one that missed it would sleep out its
+// backstop with a new generation's titles waiting.
+func TestAPublishWakesEveryLoopThatWaitsForIt(t *testing.T) {
+	wakes := newWakes()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Each loop waits between passes on the channel it waits on in the
+	// runner, with a backstop far longer than the test, so only the
+	// wake can end the wait.
+	loops := map[string]chan struct{}{
+		"omdb posters":    wakes.Published,
+		"tmdb ids":        wakes.PublishedIDs,
+		"tmdb posters":    wakes.Wanted,
+		"opening colours": wakes.Ready,
+	}
+	woke := make(chan string, len(loops))
+	for name, wake := range loops {
+		go func() {
+			if waitFor(ctx, wake, time.Hour) {
+				woke <- name
+			}
+		}()
+	}
+
+	// One notification, as listen hands it on.
+	wakes.signal(NotifyPublished)
+
+	seen := map[string]bool{}
+	for range loops {
+		select {
+		case name := <-woke:
+			seen[name] = true
+		case <-time.After(2 * time.Second):
+			for name := range loops {
+				if !seen[name] {
+					t.Errorf("one publish did not wake the %s loop", name)
+				}
+			}
+			return
+		}
+	}
+}
