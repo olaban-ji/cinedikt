@@ -401,8 +401,12 @@ export function railLabelTop(row: Row): number {
 /** Where the searched card's "Searched" tag goes: 10px in from the
  *  card's left edge and 10px above its top, so it sits on the card's
  *  ring. It is drawn beside the card, not inside it, because the card
- *  clips what overflows it. */
-export function searchedTagAt(anchor: Placed): { left: number; top: number } {
+ *  clips what overflows it. The copy that lands on the card carries the
+ *  same tag in the same place, from a box of its own at 0, 0. */
+export function searchedTagAt(anchor: { left: number; top: number }): {
+  left: number;
+  top: number;
+} {
   return { left: anchor.left + 10, top: anchor.top - 10 };
 }
 

@@ -25,6 +25,7 @@ import {
   type GridPerson,
   type GridSettings,
   type Placed,
+  type SpineFilm,
 } from './grid';
 import { PosterImage } from './PosterImage';
 import { posterFallback, sheetPosterPx, sheetPosterURL } from './poster';
@@ -37,17 +38,14 @@ import {
   ARRIVE_DELAY_MS,
   ARRIVE_MS,
   AXIS_FADE_MS,
-  EASE,
   FLIP_MS,
   GHOST_MS,
-  LAND_MS,
   REFLOW_MS,
   REVEAL_FLIP_MS,
   SPREAD_AFTER_LANDING_MS,
   SPREAD_RISE_PX,
   SPREAD_SCALE,
   animate,
-  landingTransform,
   revealWindow,
   stillNow,
   type Box,
@@ -57,16 +55,18 @@ import {
  *  film (see GridApp's glideTo). The map hides that card until the copy
  *  is on it, then shows it in the same frame the copy goes. */
 export interface Landing {
-  /** Where the copy was drawn before it flew: its own box, untransformed. */
-  from: Box;
-  /** The copy itself, which the landing moves. */
-  flyer: RefObject<HTMLDivElement | null>;
-  /** The flight that carried it to the middle, cancelled as the landing
-   *  takes over from wherever it has got to. */
-  flight: RefObject<Animation | null>;
+  /** Turns the copy, wherever it has got to, towards this box, and calls
+   *  `done` once it is on it. How long that will take, or null when it
+   *  cannot move and has in effect already landed. */
+  land: (to: Box, done: () => void) => number | null;
   /** Called once the copy is on the card. */
   onLanded: () => void;
 }
+
+/** How long past a landing's own length to wait for its finish before
+ *  taking it as landed anyway: a page nobody is painting never plays the
+ *  animation to its end. */
+const LANDED_GRACE_MS = 120;
 
 interface Props {
   /** What each visible card says, by film id. A card with nothing here
@@ -105,9 +105,9 @@ interface Props {
   /** Marked before every scroll the map makes by itself, so the header
    *  lying over it can tell those from the reader's own. */
   appScroll?: RefObject<AppScroll>;
-  /** The card lifted off the map on its way to becoming the next one.
-   *  Everything else dims under it. */
-  lifted?: string | null;
+  /** The card a copy has just taken off from, on its way to becoming the
+   *  next map. It goes from this map at once: the copy is it now. */
+  flown?: string | null;
   /** This map is being left: it fades out, and while the next one is
    *  fetched it stays out of sight and out of reach. */
   leaving?: boolean;
@@ -118,11 +118,6 @@ interface Props {
 /** How opaque a card that does not match the selection is. */
 const DIM_SELECTED = 0.12;
 const DIM_PREVIEW = 0.22;
-/** While a card is lifted off the map to become the next one, every
- *  other card steps back to this, and the searched film — which is
- *  about to stop being the searched film — to a little more. */
-export const DIM_LIFT = 0.3;
-export const ANCHOR_LIFT = 0.45;
 
 /** Roughly how long Recenter's smooth scroll takes, after which the
  *  searched card is ringed so the reader can see where they were put,
@@ -140,7 +135,7 @@ export function ringDelay(reduced: boolean): number {
 /** The transitions a card wears while the map spreads open, in the
  *  order the stylesheet lists them on .cd-card-entering, and the delay
  *  each takes: the card's own wait for the arrival, and none at all for
- *  the rest, so hover and lift answer at once even mid-spread. */
+ *  the rest, so hover answers at once even mid-spread. */
 export function spreadDelays(delay: number): string {
   return `${delay}ms, ${delay}ms, 0s, 0s, 0s`;
 }
@@ -171,7 +166,7 @@ export function GridMap({
   overlayH = 0,
   compact,
   appScroll,
-  lifted = null,
+  flown = null,
   leaving = false,
   landing = null,
 }: Props) {
@@ -337,18 +332,11 @@ export function GridMap({
   const recentre = useCallback(
     (smooth: boolean) => {
       const el = scroller.current;
-      const card = layout?.anchor;
-      if (!el || !card) return;
+      const to = layout && el ? centredScroll(layout, el, overlayH) : null;
+      if (!el || !to) return;
       const reduced = stillNow();
       markAppScroll(appScroll, smooth && !reduced);
-      el.scrollTo({
-        left: Math.max(0, card.left + layout.metrics.cardW / 2 - el.clientWidth / 2),
-        top: Math.max(
-          0,
-          card.top + overlayH + layout.metrics.cardH / 2 - (el.clientHeight + overlayH) / 2,
-        ),
-        behavior: smooth && !reduced ? 'smooth' : 'auto',
-      });
+      el.scrollTo({ ...to, behavior: smooth && !reduced ? 'smooth' : 'auto' });
       if (!smooth) return;
       playRing(ringDelay(reduced));
     },
@@ -398,10 +386,11 @@ export function GridMap({
   }, [payload.anchor.id, layout, reveal.entering, scroller]);
 
   // The landing. Once the new map is centred on its searched film, the
-  // flown copy goes from wherever its flight has got to onto that card's
-  // exact box; then the card takes its place in the same frame and
-  // rings. A timer stands behind the animation's own finish, which a
-  // page nobody is painting never reaches.
+  // flown copy is turned, from wherever its flight has got to and at
+  // whatever speed, onto that card's exact box; then the card takes its
+  // place in the same frame and rings. A timer stands behind the
+  // animation's own finish, which a page nobody is painting never
+  // reaches.
   const landingRef = useRef(landing);
   landingRef.current = landing;
   const landingOn = landing != null;
@@ -432,29 +421,13 @@ export function GridMap({
       }
     };
     const plan = landingRef.current;
-    const fly = plan?.flyer.current;
     const to = node?.getBoundingClientRect();
-    if (!plan || !fly || !to || !(to.width > 0)) {
+    const took = plan && to && to.width > 0 ? plan.land(to, done) : null;
+    if (took == null) {
       done();
       return;
     }
-    const was = getComputedStyle(fly).transform;
-    const t = landingTransform(plan.from, to);
-    const land = animate(
-      fly,
-      [
-        { transform: was && was !== 'none' ? was : 'none' },
-        { transform: `translate(${t.tx}px, ${t.ty}px) scale(${t.sx}, ${t.sy})` },
-      ],
-      { duration: LAND_MS, easing: EASE.glide, fill: 'forwards' },
-    );
-    plan.flight.current?.cancel();
-    if (!land) {
-      done();
-      return;
-    }
-    land.onfinish = done;
-    timer = window.setTimeout(done, LAND_MS);
+    timer = window.setTimeout(done, took + LANDED_GRACE_MS);
     return () => {
       // Called off (the glide was cancelled) or run again (StrictMode's
       // second mount): a later finish must not ring a card nobody
@@ -693,14 +666,14 @@ export function GridMap({
                   // not the old card sliding across from where it was.
                   key={`${payload.anchor.id}:${c.film.id}`}
                   card={c}
-                  said={detail.get(c.film.id)}
+                  said={wordsFor(c.film, detail, payload.anchor)}
                   layout={layout}
                   people={byId}
                   codes={codes}
                   opacity={
-                    c.film.isAnchor && anchorHidden
+                    (c.film.isAnchor && anchorHidden) || isFlown(c, flown)
                       ? 0
-                      : opacityOf(c, selectedIdx, hoveredIdx, settings.minRating, lifted)
+                      : opacityOf(c, selectedIdx, hoveredIdx, settings.minRating)
                   }
                   eager={inWarmSpan(c.top, layout.metrics.cardH, screen)}
                   enter={
@@ -712,7 +685,7 @@ export function GridMap({
                       : null
                   }
                   ringed={confirming && c.film.isAnchor}
-                  lifted={lifted === c.film.id}
+                  flown={isFlown(c, flown)}
                   snap={snap && c.film.isAnchor}
                   theme={theme}
                   arriving={reflow.arriving.has(c.film.id)}
@@ -770,9 +743,65 @@ export function GridMap({
   );
 }
 
-/** Where a new grid should open: the searched film in the middle of the
- *  screen, in the same steps the scroll listener uses, so the first paint
- *  and the paint after measuring ask for the same cards. */
+/** Where the scroller goes to put the searched card in the middle of what
+ *  the reader can see: below a header lying over the top of it, and no
+ *  further than the plot goes, so a card near an edge of a map, or on a
+ *  map smaller than the screen, sits where the edge leaves it. The plot
+ *  is `overlayH` down the scroller; the axis over it takes no room
+ *  (grid.css). Across, it runs its full width and on past it wherever a
+ *  card nudged into a lane (fitLane) hangs over the edge, as the
+ *  browser's own scroll width does, so a top-rated card is never left
+ *  cut off at the right. */
+export function centredScroll(
+  layout: GridLayout,
+  view: { clientWidth: number; clientHeight: number },
+  overlayH: number,
+): { left: number; top: number } | null {
+  const card = layout.anchor;
+  if (!card) return null;
+  const { cardW, cardH } = layout.metrics;
+  const wide = layout.cards.reduce((w, c) => Math.max(w, c.left + cardW), layout.plotW);
+  const fit = (want: number, most: number) => Math.max(0, Math.min(want, most));
+  return {
+    left: fit(card.left + cardW / 2 - view.clientWidth / 2, wide - view.clientWidth),
+    top: fit(
+      card.top + overlayH + cardH / 2 - (view.clientHeight + overlayH) / 2,
+      overlayH + layout.plotH - view.clientHeight,
+    ),
+  };
+}
+
+/** Where a map's searched card will be on screen once that map has opened
+ *  in this scroller, centred as every new map opens, on a clean slate:
+ *  no one selected and no filters, as a map opened forward starts. A copy
+ *  flying to the map uses it to head straight there, before the map is
+ *  even drawn, rather than for the middle and then back out to a card
+ *  the edge of the plot has kept from it. Laid out exactly as GridMap
+ *  will lay it out, from the same width and settings. */
+export function openingBox(
+  payload: GridPayload,
+  settings: GridSettings,
+  scroller: HTMLElement,
+  overlayH: number,
+  compact: boolean,
+): Box | null {
+  const width = scroller.clientWidth || window.innerWidth;
+  if (!(width > 0)) return null;
+  const none = new Set<number>();
+  const lit = (f: SpineFilm) => isLit(f, none, settings.minRating);
+  const layout = layoutGrid(payload, width, settings, lit, compact);
+  const card = layout.anchor;
+  const at = centredScroll(layout, scroller, overlayH);
+  if (!card || !at) return null;
+  const r = scroller.getBoundingClientRect();
+  return {
+    left: r.left + scroller.clientLeft + card.left - at.left,
+    top: r.top + scroller.clientTop + overlayH + card.top - at.top,
+    width: layout.metrics.cardW,
+    height: layout.metrics.cardH,
+  };
+}
+
 /** A card the reader can see, so a later layout can keep that spot still. */
 function cardOnGlass(
   layout: GridLayout,
@@ -835,6 +864,9 @@ function useReveal(
   return { entering: state.entering, shown: state.shown, after: state.after };
 }
 
+/** Where a new grid should open: the searched film in the middle of the
+ *  screen, in the same steps the scroll listener uses, so the first paint
+ *  and the paint after measuring ask for the same cards. */
 function openedAt(layout: GridLayout, viewH: number): number {
   const card = layout.anchor;
   if (!card || viewH <= 0) return 0;
@@ -998,7 +1030,7 @@ const Card = memo(function Card({
   eager,
   enter,
   ringed,
-  lifted = false,
+  flown = false,
   snap = false,
   theme,
   arriving = false,
@@ -1022,8 +1054,9 @@ const Card = memo(function Card({
   enter: { hidden: boolean; delay: number } | null;
   /** Just been scrolled back to, and saying so for a moment. */
   ringed: boolean;
-  /** Lifted off the map on its way to becoming the next one. */
-  lifted?: boolean;
+  /** Taken off the map by a copy on its way to becoming the next one:
+   *  gone in a single frame, as the copy appears over it. */
+  flown?: boolean;
   /** Shown and hidden without a fade: the searched card while a copy
    *  lands on it, and for the ring after. */
   snap?: boolean;
@@ -1067,7 +1100,7 @@ const Card = memo(function Card({
         // A card waiting to spread is put in its hidden state at once
         // (.cd-card-held has no transitions), and let go into it from
         // there with its own delay.
-        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${lifted ? ' cd-card-lifted' : ''}${snap ? ' cd-card-snap' : ''}${fadingIn ? ' cd-card-arrive' : ''}${ghost ? ' cd-card-ghost' : ''}`}
+        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${flown ? ' cd-card-flown' : ''}${snap ? ' cd-card-snap' : ''}${fadingIn ? ' cd-card-arrive' : ''}${ghost ? ' cd-card-ghost' : ''}`}
         style={{
           left: card.left,
           top: card.top,
@@ -1141,12 +1174,28 @@ const Card = memo(function Card({
   );
 });
 
+/** What a card says. The searched film's words come with the map, so its
+ *  card has them from the first paint rather than waiting on the detail
+ *  like the rest: a copy landing on it must be taken over by the same
+ *  card, not by an empty box that fills in a moment later. */
+export function wordsFor(
+  film: { id: string; isAnchor: boolean },
+  detail: Map<string, GridFilm>,
+  anchor: GridFilm,
+): GridFilm | undefined {
+  return detail.get(film.id) ?? (film.isAnchor && anchor.id === film.id ? anchor : undefined);
+}
+
+/** Whether this is the card a copy has just taken off from. Never the
+ *  searched film: that is the one the copy is flying to, on the next map. */
+export function isFlown(card: Placed, flown: string | null): boolean {
+  return flown != null && card.film.id === flown && !card.film.isAnchor;
+}
+
 /** A card is full strength when nothing is narrowing the grid, or when it
  *  holds someone being previewed or selected and clears the rating floor.
  *  A hovered chip previews just that person and overrides the selection
- *  while the pointer is on it. A card lifted off the map to be mapped
- *  next overrides everything: it is the one thing lit, and the searched
- *  film dims back with the rest, a little less.
+ *  while the pointer is on it.
  *
  *  Judged on the spine, which says who is on every card from the first
  *  paint. The detail is not needed, and waiting for it would light a card
@@ -1164,13 +1213,7 @@ export function opacityOf(
    *  left — is any index no card carries, and dims them all. */
   hovered: number | null,
   minRating: number | null = null,
-  /** The card lifted off the map, by film id, while it is. */
-  lifted: string | null = null,
 ): number {
-  if (lifted != null) {
-    if (card.film.isAnchor) return ANCHOR_LIFT;
-    return card.film.id === lifted ? 1 : DIM_LIFT;
-  }
   if (card.film.isAnchor) return 1;
   if (hovered != null) {
     return passesFloor(card.film.rating, minRating) && card.film.people.includes(hovered)

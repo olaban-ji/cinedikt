@@ -186,10 +186,11 @@
   --shTile: inset 0 0 0 1px var(--ln2), 0 10px 24px rgba(0, 0, 0, 0.22);
   --shTileHi: 0 0 0 2px var(--acc), 0 20px 40px rgba(0, 0, 0, 0.32);
   /* The searched card, the ring it plays after a recenter or a landing,
-     a card lifted for a move to its map, and the copy of it in flight. */
+     and the copy of a card in flight to its map. The flight's and the
+     searched card's are the same three shadows, so one settles into the
+     other as the copy lands. */
   --shAnchor: 0 0 0 2px var(--acc), 0 0 0 6px var(--accSoft), 0 14px 34px rgba(0, 0, 0, 0.3);
   --shAnchorRing: 0 0 0 2px var(--acc), 0 0 0 14px var(--accSoft);
-  --shLift: 0 0 0 2px var(--acc), 0 0 0 6px var(--accSoft), 0 14px 30px rgba(0, 0, 0, 0.4);
   --shFlyer: 0 0 0 2px var(--acc), 0 0 0 7px var(--accSoft), 0 24px 60px rgba(0, 0, 0, 0.45);
   --shSheet: inset 0 0 0 1px var(--ln2), 0 30px 80px rgba(0, 0, 0, 0.45);
   --shPoster: 0 16px 36px rgba(0, 0, 0, 0.35);
@@ -556,9 +557,9 @@ button {
    at 96%, over .46s on the spread curve, each with its own delay for
    how far it sits from the searched film (spreadDelays in GridMap.tsx
    writes one per property, in this order), so the map opens from the
-   middle outwards. Hover and lift keep their own quick transitions
-   meanwhile. The class is dropped a second later and dimming goes back
-   to its usual .18s. */
+   middle outwards. Hover keeps its own quick transitions meanwhile.
+   The class is dropped a second later and dimming goes back to its
+   usual .18s. */
 .cd-card-entering {
   transition:
     opacity 0.46s var(--ease-spread),
@@ -628,15 +629,11 @@ button {
   scale: 0.98;
 }
 
-/* The card tapped in the sheet, lifted off the map on its way to being
-   mapped: it rises 3px and takes the lifted shadow, on the card's own
-   translate and shadow transitions. Written twice so it outranks the
-   hover rule above for a card that happens to be under the pointer. */
-.cd-card.cd-card-lifted,
-.cd-card.cd-card-lifted:hover {
-  z-index: 5;
-  translate: 0 -3px;
-  box-shadow: var(--shLift);
+/* The card tapped in the sheet, once a copy of it has taken off for the
+   next map: gone in the frame the copy appears over it, with no fade, or
+   the two would be seen apart as the copy leaves. */
+.cd-card.cd-card-flown {
+  transition: none;
 }
 
 /* The searched card while a flown copy lands on it, and for its ring
@@ -652,32 +649,42 @@ button {
   transition: none;
 }
 
-/* The copy of a card that flies to the middle of the map while the next
-   one loads, then lands on its searched card. Drawn as a searched card
-   already, with a wider soft ring and a deeper shadow for being off the
-   page. It is fixed: it leaves one map and arrives on another. */
+/* The copy of a card that flies from one map to the next and lands on
+   its searched card. It is fixed: it leaves one map and arrives on
+   another. The box only carries the flight (GridApp's Flyer steers its
+   transform); what is seen are its two faces, copies of the card
+   itself, and the Searched tag it lands with. */
 .cd-flyer {
   position: fixed;
   z-index: 50;
-  box-sizing: border-box;
-  display: flex;
-  gap: 9px;
-  padding: 6px;
-  border-radius: 13px;
-  background: var(--ancBg);
-  color: var(--t);
-  box-shadow: var(--shFlyer);
   transform-origin: 50% 50%;
   pointer-events: none;
   will-change: transform;
 }
 
-.cd-flyer .cd-card-body {
-  padding: 2px 0 1px;
+/* Each face sits at the flyer's corner. Nothing about it is left to a
+   transition: the faces fade by script, and the dressed one's shadow is
+   given its landing's own length when it lands. */
+.cd-flyer-face {
+  transition: none;
 }
 
-.cd-flyer .cd-card-title {
-  line-height: 1.2;
+/* Dressed as the searched card, with a wider soft ring and a deeper
+   shadow for being off the page, which settle to the searched card's
+   own as it lands. */
+.cd-flyer-face.cd-card-anchor {
+  box-shadow: var(--shFlyer);
+}
+
+.cd-flyer-face.cd-card-anchor.cd-flyer-land {
+  box-shadow: var(--shAnchor);
+}
+
+/* Faded in over the end of the landing (TAG_IN_MS); out of sight until
+   then. */
+.cd-searched-tag.cd-flyer-tag {
+  opacity: 0;
+  transition: none;
 }
 
 .cd-card:focus-visible {

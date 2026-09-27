@@ -27,6 +27,7 @@ import {
   nothingLit,
   onPlot,
   rangeHoldsNone,
+  searchedTagAt,
   spineOf,
   yearBounds,
   yearCounts,
@@ -34,7 +35,7 @@ import {
   type GridPayload,
   type GridSettings,
 } from './grid';
-import { GridMap } from './GridMap';
+import { GridMap, openingBox } from './GridMap';
 import { GridSheet } from './GridSheet';
 import { PeopleChips, filmCounts } from './PeopleChips';
 import { NOTHING_SHOWN, assignHues, nextShown } from './personColour';
@@ -68,20 +69,22 @@ import {
   CHIP_IN_MS,
   CHIP_IN_RISE_PX,
   EASE,
-  FLY_MS,
+  FACE_MS,
   FLY_SCALE,
   FOCUS_DELAY_MS,
   FOCUS_KEYFRAMES,
   FOCUS_MS,
   GLIDE_BLUR_PX,
   GLIDE_MS,
-  LAND_MS,
-  LIFT_MS,
+  Glider,
+  LAND_TIMEOUT_MS,
   LOADER_H,
   LOADER_W,
+  PLAIN_OUT_MS,
   RETURN_RISE_PX,
   RETURN_TILE_MS,
   SET_AT_MS,
+  TAG_IN_MS,
   TILES_AFTER_LIFT_MS,
   VEIL_AT_MS,
   VEIL_OUT_MS,
@@ -90,12 +93,14 @@ import {
   chipInDelay,
   chipShift,
   flightTo,
+  landingTransform,
   loaderSpot,
   markFlight,
   openingPlan,
   returnTileDelay,
   stillNow,
   type Box,
+  type Pose,
   type Spot,
 } from './motion';
 import {
@@ -122,10 +127,10 @@ export type Opening = 'draw' | 'word' | 'done';
  *  available. */
 const FONT_WAIT_MS = 400;
 
-/** The move to another map (glideTo), step by step: the tapped card is
- *  lifted, a copy of it flies to the middle while the old map fades, the
- *  new map is set, and the copy lands on its searched film. */
-type GlidePhase = 'lift' | 'fly' | 'set';
+/** The move to another map (glideTo): a copy of the tapped card takes
+ *  off while the old map fades, the new map is set underneath it, and
+ *  the copy lands on its searched film. One flight throughout. */
+type GlidePhase = 'fly' | 'set';
 
 interface Glide {
   /** Which glide this is. A later one, or anything that cancels it,
@@ -135,8 +140,22 @@ interface Glide {
   film: GridFilm;
   phase: GlidePhase;
   /** The card's box as the copy took off from it. */
-  rect: Box | null;
-  posterW: number;
+  rect: Box;
+  /** The card itself, copied as it stood, so the copy that takes off
+   *  from it is it to the pixel. */
+  face: HTMLElement;
+  /** Where the new map will put its searched card, worked out at take-off
+   *  when that map is already in hand, so the copy heads straight there.
+   *  Null when it is still on its way: the copy makes for the middle and
+   *  waits. */
+  aim: Box | null;
+}
+
+/** What the flying copy is asked to do once the new map is placed:
+ *  land on this box, and say when it is there. How long that will take,
+ *  or null if it cannot move and the landing is simply over. */
+interface FlyerHandle {
+  land: (to: Box, done: () => void) => number | null;
 }
 
 /** Where each chip in the header sits, by `data-chip`, so a move to
@@ -353,8 +372,8 @@ export function GridApp() {
   glideRef.current = glide;
   const glideToken = useRef(0);
   const glideTimers = useRef<number[]>([]);
-  const flyerEl = useRef<HTMLDivElement>(null);
-  const flight = useRef<Animation | null>(null);
+  // The copy in flight, for the landing to steer. Its own, and gone with it.
+  const flyer = useRef<FlyerHandle | null>(null);
   // The chips as they stood when the card took off, for the chip row to
   // slide from once the new map is in.
   const chipsWere = useRef<Map<string, DOMRect> | null>(null);
@@ -363,8 +382,6 @@ export function GridApp() {
     glideToken.current += 1;
     glideTimers.current.forEach(window.clearTimeout);
     glideTimers.current = [];
-    flight.current?.cancel();
-    flight.current = null;
     chipsWere.current = null;
     glideRef.current = null;
     setGlide(null);
@@ -428,7 +445,7 @@ export function GridApp() {
   const stale = drawn != null && drawn.id !== movieId;
   // A move to another map that has taken off and not yet been handed its
   // map: the progress line runs and the chips wait as for any load.
-  const gliding = glide != null && glide.phase !== 'lift' && drawn?.id !== glide.film.id;
+  const gliding = glide != null && drawn?.id !== glide.film.id;
   // The map being left. It fades out and is kept, out of sight and out
   // of reach, until the next one takes its place — except when the next
   // one is already in hand, when there is no wait to cover and the new
@@ -742,26 +759,31 @@ export function GridApp() {
   }, []);
 
   // "Map <title>" in a card's sheet. The sheet has already gone on its
-  // own exit (GridSheet's leave); then the tapped card is lifted off the
-  // map, a copy of it flies to the middle while the old map fades and
-  // the new one loads, the new map is set, and the copy lands on its
-  // searched film (the landing is GridMap's, once the map is centred).
+  // own exit (GridSheet's leave). Then a copy of the tapped card takes
+  // off from it, in the same frame the card itself goes, and flies while
+  // the old map fades: straight for the spot the new map will put its
+  // searched film in, when that map is already here to work it out
+  // from, or for the middle to wait for it. The new map is set
+  // underneath it, and the copy lands on its searched film from
+  // wherever it has got to (the landing is GridMap's, once the map is
+  // centred, steering the Flyer below).
   //
   // The route moves at the moment the new map is set, not at the tap:
-  // until then the reader is still on the old map, watching it lift.
-  // Nothing about fetching changes — the sheet asked for this map when
-  // it opened (openFilm), and setting the route finds it in the cache,
-  // or joins the request still out and waits with the copy held in the
+  // until then the reader is still on the old map, watching the card
+  // leave it. Nothing about fetching changes — the sheet asked for this
+  // map when it opened (openFilm), and setting the route finds it in the
+  // cache, or joins the request still out while the copy rests in the
   // middle.
   //
   // A reader who has asked for no movement, or a card that is not on
-  // the glass to lift, is simply taken there.
+  // the glass to take off from, is simply taken there.
   const glideTo = useCallback(
     (film: GridFilm) => {
       const node = scrollerRef.current?.querySelector<HTMLElement>(
         `[data-card="${CSS.escape(film.id)}"]`,
       );
-      if (stillNow() || !node || !drawnRef.current) {
+      const r = node?.getBoundingClientRect();
+      if (stillNow() || !node || !r || !(r.width > 0) || !drawnRef.current) {
         // Not through setMovieId: this runs as the sheet's own exit
         // completes, while the sheet is still mounted, and closeLayers
         // would re-arm the exit of a layer already on its way out, whose
@@ -779,39 +801,35 @@ export function GridApp() {
       toast.hide();
       titleRef.current = { id: film.id, title: film.title };
       prefetch(film.id);
-      setGlide({ token, film, phase: 'lift', rect: null, posterW: 0 });
+      // Taken before the chips give way to skeletons, so the row can
+      // slide from exactly here once the new map is in.
+      chipsWere.current = chipBoxes(headerRef.current);
+      // A map opened forward starts with nothing narrowed (see
+      // useFilmRoute), so that is the map the landing is worked out on,
+      // under the header as it lies over any map on this screen.
+      const next = grids.peek(film.id);
+      const sc = scrollerRef.current;
+      const nextSettings = applyFilters(settingsRef.current, freshFilters());
+      const over = screen.overlay ? overOffset(screen) : 0;
+      setGlide({
+        token,
+        film,
+        phase: 'fly',
+        rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+        face: node.cloneNode(true) as HTMLElement,
+        aim: next && sc ? openingBox(next, nextSettings, sc, over, screen.overlay) : null,
+      });
       glideTimers.current.push(
         window.setTimeout(() => {
           if (!live()) return;
-          const r = node.getBoundingClientRect();
-          if (!node.isConnected || !(r.width > 0)) {
-            endGlide();
-            openMovie(film.id, film.title);
-            return;
-          }
-          // Taken before the chips give way to skeletons, so the row can
-          // slide from exactly here once the new map is in.
-          chipsWere.current = chipBoxes(headerRef.current);
-          setGlide({
-            token,
-            film,
-            phase: 'fly',
-            rect: { left: r.left, top: r.top, width: r.width, height: r.height },
-            posterW: node.querySelector('.cd-card-poster')?.getBoundingClientRect().width ?? 0,
-          });
-          glideTimers.current.push(
-            window.setTimeout(() => {
-              if (!live()) return;
-              setGlide((g) => (g && g.token === token ? { ...g, phase: 'set' } : g));
-              if (movieRef.current !== film.id) openMovie(film.id, film.title);
-            }, SET_AT_MS),
-          );
-        }, LIFT_MS),
+          setGlide((g) => (g && g.token === token ? { ...g, phase: 'set' } : g));
+          if (movieRef.current !== film.id) openMovie(film.id, film.title);
+        }, SET_AT_MS),
       );
     },
     // The toaster's own functions are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [endGlide, openMovie, prefetch],
+    [endGlide, openMovie, prefetch, grids, screen],
   );
   const onRemap = glideTo;
 
@@ -913,17 +931,20 @@ export function GridApp() {
   const loadingTitle = titleRef.current?.id === pendingId ? titleRef.current.title : null;
   const progress = useProgress(loading || gliding);
 
-  // The card lifted off the map, from the lift until the new map is set.
-  const lifted = glide && glide.phase !== 'set' ? glide.film.id : null;
+  // The card the copy took off from. It goes from the map being left in
+  // the frame the copy appears over it, so there are never two of it.
+  const flown = glide?.film.id ?? null;
   // The copy lands once its map is the one drawn.
-  const landingGlide = glide?.phase === 'set' && glide.rect && drawn?.id === glide.film.id ? glide : null;
+  const landingGlide = glide?.phase === 'set' && drawn?.id === glide.film.id ? glide : null;
   const landingToken = landingGlide?.token;
   const onLanded = useCallback(() => {
     if (landingToken != null && glideRef.current?.token === landingToken) endGlide();
   }, [landingToken, endGlide]);
   const landing = useMemo(
     () =>
-      landingGlide?.rect ? { from: landingGlide.rect, flyer: flyerEl, flight, onLanded } : null,
+      landingGlide
+        ? { land: (to: Box, done: () => void) => flyer.current?.land(to, done) ?? null, onLanded }
+        : null,
     // One landing per glide.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [landingToken, onLanded],
@@ -932,7 +953,7 @@ export function GridApp() {
   // never lays it out — it is not left hanging over the map for good.
   useEffect(() => {
     if (landingToken == null) return;
-    const t = window.setTimeout(onLanded, LAND_MS * 4);
+    const t = window.setTimeout(onLanded, LAND_TIMEOUT_MS);
     return () => window.clearTimeout(t);
   }, [landingToken, onLanded]);
 
@@ -1082,7 +1103,7 @@ export function GridApp() {
           overlayH={overlayH}
           compact={screen.overlay}
           appScroll={appScroll}
-          lifted={lifted}
+          flown={flown}
           leaving={leaving}
           landing={landing}
         />
@@ -1110,13 +1131,14 @@ export function GridApp() {
         />
       )}
 
-      {glide && glide.phase !== 'lift' && glide.rect && (
+      {glide && (
         <Flyer
-          film={glide.film}
+          // One copy per glide: a new move puts down a new one.
+          key={glide.token}
+          face={glide.face}
           rect={glide.rect}
-          posterW={glide.posterW}
-          elRef={flyerEl}
-          flight={flight}
+          aim={glide.aim}
+          handle={flyer}
           scroller={scrollerRef}
           over={overOffset(screen)}
         />
@@ -1206,84 +1228,140 @@ export function GridApp() {
 /** What a map being left asks for: nothing. */
 function ignoreDetail() {}
 
-/** The copy of a card that flies from the map being left to the middle
- *  of the map, and waits there for the next one. It is drawn as a
- *  searched card already: that is what it is about to become. The
- *  flight starts as it is put down, before it is painted, so it is
- *  never seen standing still over the card it came from. */
+/** The copy of a card that flies from the map being left to the new
+ *  map's searched film.
+ *
+ *  It is two copies of the card itself, taken as it stood, one over the
+ *  other. The one below is the card exactly, so the copy takes off
+ *  without a seam. The one above is dressed as the searched card — its
+ *  fill, its ring and a shadow for being off the page, and none of the
+ *  person marks the searched card does not carry — and fades in as the
+ *  copy leaves, with the one below fading out from under it after. It
+ *  lands dressed exactly as the card it lands on, its shadow settling to
+ *  that card's and the Searched tag coming in over the last of the
+ *  landing, so the card can take over from it in a single frame without
+ *  anything changing.
+ *
+ *  The flight starts as it is put down, before it is painted, and the
+ *  landing turns it towards the new card from wherever it has got to
+ *  (see Glider). */
 function Flyer({
-  film,
+  face,
   rect,
-  posterW,
-  elRef,
-  flight,
+  aim,
+  handle,
   scroller,
   over,
 }: {
-  film: GridFilm;
+  face: HTMLElement;
   rect: Box;
-  posterW: number;
-  elRef: RefObject<HTMLDivElement | null>;
-  flight: RefObject<Animation | null>;
+  /** Where it will land, when that is known as it takes off. */
+  aim: Box | null;
+  handle: RefObject<FlyerHandle | null>;
   scroller: RefObject<HTMLDivElement | null>;
   /** How much of the top of the map the header is lying over. */
   over: number;
 }) {
-  const theme = useResolvedTheme();
+  const el = useRef<HTMLDivElement>(null);
+  const tag = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
-    const el = elRef.current;
-    const sc = scroller.current?.getBoundingClientRect();
-    if (!el || !sc) return;
-    const { tx, ty } = flightTo(rect, sc, over);
-    const fly = animate(
-      el,
-      [{ transform: 'none' }, { transform: `translate(${tx}px, ${ty}px) scale(${FLY_SCALE})` }],
-      { duration: FLY_MS, easing: EASE.glide, fill: 'forwards' },
-    );
-    flight.current = fly;
-    // The landing takes over from it (GridMap); this is for StrictMode's
-    // second mount, which would otherwise leave a first flight running
-    // under the second.
+    const box = el.current;
+    if (!box) return;
+    const plain = flyerFace(face, false);
+    const dressed = flyerFace(face, true);
+    box.prepend(plain, dressed);
+    const glider = new Glider(box);
+    glider.aim(takeOff(rect, aim, scroller.current?.getBoundingClientRect(), over));
+    animate(dressed, [{ opacity: 0 }, { opacity: 1 }], { duration: FACE_MS, easing: 'ease' });
+    animate(plain, [{ opacity: plain.style.opacity || 1 }, { opacity: 0 }], {
+      duration: PLAIN_OUT_MS,
+      delay: FACE_MS,
+      fill: 'forwards',
+    });
+    let tagIn: Animation | null = null;
+    const mine: FlyerHandle = {
+      land(to, done) {
+        const t = landingTransform(rect, to);
+        const took = glider.aim({ x: t.tx, y: t.ty, sx: t.sx, sy: t.sy }, done);
+        if (took == null) return null;
+        dressed.style.transition = `box-shadow ${Math.round(took)}ms ${EASE.glide}`;
+        dressed.classList.add('cd-flyer-land');
+        // All of it inside the landing, however short, so the tag is
+        // whole by the time the card takes over.
+        const fade = Math.min(TAG_IN_MS, took);
+        tagIn?.cancel();
+        tagIn = animate(tag.current, [{ opacity: 0 }, { opacity: 1 }], {
+          duration: fade,
+          delay: took - fade,
+          fill: 'both',
+        });
+        glider.follow(tagIn);
+        return took;
+      },
+    };
+    handle.current = mine;
+    // Called off, or StrictMode's second mount, which puts it down again
+    // and starts the flight over from the card.
     return () => {
-      fly?.cancel();
-      if (flight.current === fly) flight.current = null;
+      glider.cancel();
+      plain.remove();
+      dressed.remove();
+      if (handle.current === mine) handle.current = null;
     };
     // Once, as the copy is put down.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const tagAt = searchedTagAt({ left: 0, top: 0 });
   return (
     <div
-      ref={elRef}
+      ref={el}
       className="cd-flyer"
-      style={{
-        left: rect.left,
-        top: rect.top,
-        width: rect.width,
-        height: rect.height,
-        ['--poster-w' as string]: `${posterW}px`,
-      }}
+      style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }}
       aria-hidden="true"
+      inert
     >
-      <PosterImage
-        id={film.id}
-        url={film.poster}
-        cssPx={posterW}
-        className="cd-card-poster"
-        width={posterW}
-        height={Math.max(0, rect.height - 12)}
-        eager
-        style={{ ['--poster-fill' as string]: posterFallback(film.title, theme) }}
-      />
-      <span className="cd-card-body">
-        <span className="cd-card-title">{film.title}</span>
-        <span className="cd-card-foot">
-          <span className={`cd-card-rating${film.rating == null ? ' cd-card-unrated' : ''}`}>
-            {film.rating == null ? 'No rating' : film.rating.toFixed(1)}
-          </span>
-        </span>
+      <span ref={tag} className="cd-searched-tag cd-flyer-tag" style={tagAt}>
+        Searched
       </span>
     </div>
   );
+}
+
+/** Where the copy first heads, grown towards the reader: straight for
+ *  the card it will land on when the next map is in hand, and otherwise
+ *  for the middle of the map, to wait there. */
+function takeOff(rect: Box, aim: Box | null, scroller: Box | undefined, over: number): Pose {
+  if (aim) {
+    const t = landingTransform(rect, aim);
+    return { x: t.tx, y: t.ty, sx: t.sx * FLY_SCALE, sy: t.sy * FLY_SCALE };
+  }
+  const { tx, ty } = scroller ? flightTo(rect, scroller, over) : { tx: 0, ty: 0 };
+  return { x: tx, y: ty, sx: FLY_SCALE, sy: FLY_SCALE };
+}
+
+/** One face of the flying copy: a copy of the card as it stood, put at
+ *  the flyer's corner and cut loose from the map. Dressed, it wears the
+ *  searched card's classes and drops the marks that card does not show. */
+function flyerFace(card: HTMLElement, dressed: boolean): HTMLElement {
+  const face = card.cloneNode(true) as HTMLElement;
+  for (const a of ['data-card', 'aria-label', 'tabindex', 'type']) face.removeAttribute(a);
+  face.className = `cd-card cd-flyer-face${dressed ? ' cd-card-anchor' : ''}`;
+  const s = face.style;
+  s.left = '0px';
+  s.top = '0px';
+  // The plain face is the card as it stood, dimmed under a selection or
+  // a floor included, so the copy takes off at the card's own strength
+  // and brightens as the dressed face comes in over it. The dressed one
+  // starts from clear.
+  s.opacity = dressed ? '' : card.style.opacity;
+  s.transform = '';
+  s.transitionDelay = '';
+  s.pointerEvents = '';
+  // A poster the card has already drawn is drawn again at once, rather
+  // than decoded off to the side for a frame with nothing in its place.
+  for (const img of face.querySelectorAll('img')) img.decoding = 'sync';
+  if (dressed) for (const n of face.querySelectorAll('.cd-card-mark, .cd-more')) n.remove();
+  return face;
 }
 
 /** The cold start, keeping whatever query the page was opened with. */

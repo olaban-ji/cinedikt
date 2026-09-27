@@ -9,21 +9,23 @@ import {
   COPY_STEP_MS,
   EASE,
   FAST_PATH_MS,
-  FLY_MS,
+  FACE_MS,
   FLY_SCALE,
+  FRAME_MS,
   FOCUS_DELAY_MS,
   FOCUS_END_MS,
   FOCUS_KEYFRAMES,
   FOCUS_MS,
   GLIDE_MS,
-  LAND_MS,
-  LIFT_MS,
+  GLIDE_SPRING,
+  LAND_TIMEOUT_MS,
   LOADER_H,
   LOADER_W,
   MAP_FADE_MS,
   REFLOW_MS,
   ARRIVE_MS,
   ARRIVE_DELAY_MS,
+  REST,
   REVEAL_WINDOW_MS,
   SET_AT_MS,
   SPREAD_AFTER_LANDING_MS,
@@ -36,11 +38,15 @@ import {
   chipShift,
   flightTo,
   landingTransform,
+  legAt,
+  legFrames,
   loaderSpot,
   markFlight,
   openingPlan,
+  poseTransform,
   returnTileDelay,
   revealWindow,
+  springAxis,
   tileCaptionDelay,
   tileFillDelay,
 } from './motion';
@@ -188,13 +194,14 @@ describe('markFlight', () => {
 });
 
 describe('the move to another map', () => {
-  it('matches the design’s steps', () => {
-    expect(LIFT_MS).toBe(240);
-    expect([FLY_MS, FLY_SCALE]).toEqual([380, 1.14]);
-    expect(SET_AT_MS).toBe(560);
-    expect(LAND_MS).toBe(320);
-    expect(SPREAD_AFTER_LANDING_MS).toBe(220);
+  it('sets the next map once the old one has faded, and flies on meanwhile', () => {
     expect(MAP_FADE_MS).toBe(220);
+    expect(SET_AT_MS).toBeGreaterThan(MAP_FADE_MS);
+    expect(SET_AT_MS).toBeLessThan(MAP_FADE_MS + 50);
+    expect(FLY_SCALE).toBe(1.12);
+    expect(FACE_MS).toBe(240);
+    expect(SPREAD_AFTER_LANDING_MS).toBe(160);
+    expect(GLIDE_SPRING).toEqual({ omega: 11, zeta: 0.92 });
   });
 
   it('flies the copy to the middle of the map the reader can see', () => {
@@ -232,7 +239,7 @@ describe('the move to another map', () => {
 
   it('keeps the spread open long enough for the landing’s later start', () => {
     // A card's longest wait is 520 ms and its arrival 460 ms. A map a copy
-    // lands on starts spreading 220 ms later, so its window is that much
+    // lands on starts spreading 160 ms later, so its window is that much
     // longer, or the last cards would lose their timing mid-arrival.
     expect(SPREAD_MS).toBe(460);
     expect(revealWindow(0)).toBe(REVEAL_WINDOW_MS);
@@ -248,6 +255,116 @@ describe('the move to another map', () => {
     expect([CHIP_FLIP_MS, CHIP_IN_MS]).toEqual([420, 260]);
     expect(chipInDelay(0)).toBe(260);
     expect(chipInDelay(4)).toBe(260 + 4 * 35);
+  });
+});
+
+describe('the flight’s spring', () => {
+  const s = GLIDE_SPRING;
+
+  it('starts where it was let go, at the speed it was going', () => {
+    expect(springAxis(-200, 0, s, 0)).toEqual({ d: -200, v: 0 });
+    const at = springAxis(-200, 350, s, 0);
+    expect(at.d).toBeCloseTo(-200);
+    expect(at.v).toBeCloseTo(350);
+  });
+
+  it('gathers speed from rest rather than leaving at full tilt', () => {
+    // The old flight covered 47px of a 255px trip in its first frame.
+    const frame = (n: number) => 255 + springAxis(-255, 0, s, (n * FRAME_MS) / 1000).d;
+    const steps = [1, 2, 3, 4].map((n) => frame(n) - frame(n - 1));
+    expect(steps[0]).toBeLessThan(6);
+    expect(steps[1]).toBeGreaterThan(steps[0]);
+    expect(steps[2]).toBeGreaterThan(steps[1]);
+  });
+
+  it('is most of the way in a third of a second, and all but there in three quarters', () => {
+    expect(Math.abs(springAxis(-1, 0, s, 0.34).d)).toBeLessThan(0.1);
+    expect(Math.abs(springAxis(-255, 0, s, 0.75).d)).toBeLessThan(0.5);
+  });
+
+  it('overshoots by less than a pixel on a long trip', () => {
+    let most = 0;
+    for (let t = 0; t < 2; t += 0.004) most = Math.max(most, springAxis(-900, 0, s, t).d);
+    expect(most).toBeLessThan(1);
+  });
+
+  it('reports the speed it actually moves at', () => {
+    const t = 0.12;
+    const dt = 1e-5;
+    const ahead = springAxis(-255, 120, s, t + dt).d;
+    const behind = springAxis(-255, 120, s, t - dt).d;
+    const slope = (ahead - behind) / (2 * dt);
+    expect(springAxis(-255, 120, s, t).v).toBeCloseTo(slope, 2);
+  });
+
+  it('treats more than critical damping as critical', () => {
+    expect(springAxis(-10, 0, { omega: 11, zeta: 3 }, 0.2)).toEqual(
+      springAxis(-10, 0, { omega: 11, zeta: 1 }, 0.2),
+    );
+  });
+});
+
+describe('a leg of the flight', () => {
+  const to = { x: 120, y: -80, sx: 1.12, sy: 1.12 };
+  const leg = { from: REST, vel: { x: 0, y: 0, sx: 0, sy: 0 }, to, spring: GLIDE_SPRING };
+
+  it('is drawn a frame at a time and ends exactly on its spot', () => {
+    const { frames, duration } = legFrames(leg);
+    expect(frames[0]).toEqual(REST);
+    expect(frames[frames.length - 1]).toEqual(to);
+    expect(duration).toBeCloseTo((frames.length - 1) * FRAME_MS);
+    // Comes to rest in under a second.
+    expect(duration).toBeLessThan(1000);
+    expect(duration).toBeGreaterThan(400);
+  });
+
+  it('never steps further than the frame before would suggest', () => {
+    // No frame jumps: each step is within a little of the one before it.
+    const { frames } = legFrames(leg);
+    const steps = frames.slice(1).map((f, i) => Math.hypot(f.x - frames[i].x, f.y - frames[i].y));
+    for (let i = 1; i < steps.length; i++) {
+      expect(Math.abs(steps[i] - steps[i - 1])).toBeLessThan(6);
+    }
+  });
+
+  it('hands over in mid-air at the same place and speed', () => {
+    // The landing takes over from the flight 280 ms in, towards a spot a
+    // little off the middle. Its first moment is the flight's last.
+    const was = legAt(leg, 0.28);
+    const landing = {
+      from: was.pose,
+      vel: was.vel,
+      to: { x: 126, y: -60, sx: 1, sy: 1 },
+      spring: GLIDE_SPRING,
+    };
+    const now = legAt(landing, 0);
+    for (const k of ['x', 'y', 'sx', 'sy'] as const) {
+      expect(now.pose[k]).toBeCloseTo(was.pose[k], 6);
+      expect(now.vel[k]).toBeCloseTo(was.vel[k], 6);
+    }
+    // And the next frame is where the flight's would have been, give or
+    // take the few pixels the new spot pulls it by.
+    const next = legAt(landing, FRAME_MS / 1000).pose;
+    const would = legAt(leg, 0.28 + FRAME_MS / 1000).pose;
+    expect(Math.hypot(next.x - would.x, next.y - would.y)).toBeLessThan(1);
+  });
+
+  it('lands from rest in place when there is nowhere to go', () => {
+    const still = legFrames({ ...leg, to: REST });
+    expect(still.frames).toEqual([REST, REST]);
+  });
+
+  it('writes a pose as a transform about the copy’s own centre', () => {
+    expect(poseTransform({ x: 1.234, y: -5, sx: 1.12, sy: 1 })).toBe(
+      'translate(1.23px, -5.00px) scale(1.1200, 1.0000)',
+    );
+  });
+
+  it('gives a landing time to finish before calling it off', () => {
+    // The longest leg the page will ever ask for is under a second; the
+    // move is only called off for a map that never lands at all.
+    const far = legFrames({ ...leg, to: { x: 900, y: 700, sx: 0.8, sy: 0.8 } });
+    expect(far.duration).toBeLessThan(LAND_TIMEOUT_MS / 2);
   });
 });
 

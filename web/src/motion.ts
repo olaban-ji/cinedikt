@@ -247,19 +247,234 @@ export function revealWindow(after: number): number {
 }
 
 // ---- moving between maps ----
+//
+// The move is one flight. A copy of the tapped card takes off from it,
+// comes towards the reader on its way to where the next map will hold
+// it, and sinks back into that map as its searched film. It rides a
+// spring rather than a curve: a spring can say where it is and how fast
+// it is going at any moment, so when the next map is in and the exact
+// place to land is known, the flight is steered onto it in mid-air with
+// no jolt, and a map that is slow to arrive leaves the copy resting in
+// the middle until it does. A curve would stop dead at each of those
+// points and start again at full speed.
 
-/** The card tapped in the sheet rises and the rest of the map dims. */
-export const LIFT_MS = 240;
-/** A copy of it flies to the middle of the map and grows a little. */
-export const FLY_MS = 380;
-export const FLY_SCALE = 1.14;
-/** The next map is set this long after the flight starts. */
-export const SET_AT_MS = 560;
-/** The copy lands on the new searched card. */
-export const LAND_MS = 320;
-/** The rest of the new map spreads from it this much later than a map
- *  opened any other way. */
-export const SPREAD_AFTER_LANDING_MS = 220;
+/** How the copy flies. Its natural frequency (radians a second) and its
+ *  damping: a hair under 1, so it arrives sooner than a critically
+ *  damped spring would, and overshoots by less than a pixel. From rest
+ *  it gathers speed over its first few frames rather than leaving at
+ *  full tilt, is most of the way to the middle in a third of a second,
+ *  and comes to rest in about three quarters. */
+export const GLIDE_SPRING: Spring = { omega: 11, zeta: 0.92 };
+
+/** How far the copy grows towards the reader while it is in the air. It
+ *  gets this far only when it has to wait for its map; a map already in
+ *  hand turns it back towards the page a little before. */
+export const FLY_SCALE = 1.12;
+
+/** The next map is set once the one being left has faded out, if it is
+ *  in hand by then, and as soon as it lands otherwise. The copy flies on
+ *  meanwhile. */
+export const SET_AT_MS = MAP_FADE_MS + 20;
+
+/** The copy takes on the searched card's fill and ring over this as it
+ *  leaves, and the card it was copied from, marks and all, fades out
+ *  from under it after. */
+export const FACE_MS = 240;
+export const PLAIN_OUT_MS = 120;
+
+/** The Searched tag fades in on the copy over the end of its landing,
+ *  and is there on the real card in the same place when it takes over. */
+export const TAG_IN_MS = 220;
+
+/** The rest of the new map spreads from the landing card this much
+ *  later than a map opened any other way, so the map opens round the
+ *  card as it settles. */
+export const SPREAD_AFTER_LANDING_MS = 160;
+
+/** The longest a landing may take before the move is called off
+ *  anyway. A page nobody is painting never lays the map out, and a copy
+ *  must not be left hanging over it for good. */
+export const LAND_TIMEOUT_MS = 2000;
+
+/** A spring: its natural frequency, in radians a second, and its damping
+ *  ratio (1 arrives without overshooting; less is quicker and overshoots). */
+export interface Spring {
+  omega: number;
+  zeta: number;
+}
+
+/** Where the copy is, as a move from its own untransformed box: a
+ *  translation in pixels and a scale on each axis. */
+export interface Pose {
+  x: number;
+  y: number;
+  sx: number;
+  sy: number;
+}
+
+/** The copy as it was put down: where it started, standing still. */
+export const REST: Pose = { x: 0, y: 0, sx: 1, sy: 1 };
+const STILL: Pose = { x: 0, y: 0, sx: 0, sy: 0 };
+
+/** One leg of a flight: let go at `from` with velocity `vel` (per
+ *  second), and heading for `to`. */
+export interface Leg {
+  from: Pose;
+  vel: Pose;
+  to: Pose;
+  spring: Spring;
+}
+
+/** One axis of a damped spring, in closed form: `t` seconds after it was
+ *  let go `d0` from its rest point at velocity `v0`, how far from that
+ *  point it is and how fast it is going. Anything damped more than
+ *  critically is treated as critical. */
+export function springAxis(
+  d0: number,
+  v0: number,
+  { omega: w, zeta }: Spring,
+  t: number,
+): { d: number; v: number } {
+  const z = Math.min(zeta, 1);
+  if (z >= 1) {
+    const b = v0 + w * d0;
+    const e = Math.exp(-w * t);
+    return { d: (d0 + b * t) * e, v: (v0 - w * b * t) * e };
+  }
+  const wd = w * Math.sqrt(1 - z * z);
+  const b = (v0 + z * w * d0) / wd;
+  const e = Math.exp(-z * w * t);
+  const c = Math.cos(wd * t);
+  const s = Math.sin(wd * t);
+  return {
+    d: e * (d0 * c + b * s),
+    v: e * ((b * wd - z * w * d0) * c - (d0 * wd + z * w * b) * s),
+  };
+}
+
+const AXES = ['x', 'y', 'sx', 'sy'] as const;
+
+/** Where a leg has got to `t` seconds in, and how fast it is going. */
+export function legAt(leg: Leg, t: number): { pose: Pose; vel: Pose } {
+  const pose = { ...leg.to };
+  const vel = { ...STILL };
+  for (const k of AXES) {
+    const { d, v } = springAxis(leg.from[k] - leg.to[k], leg.vel[k], leg.spring, t);
+    pose[k] = leg.to[k] + d;
+    vel[k] = v;
+  }
+  return { pose, vel };
+}
+
+/** Close enough to land: under half a pixel from the spot and barely
+ *  moving, and within a fifth of a percent of the size. Below this the
+ *  last frame's step onto the exact spot cannot be seen. */
+const ARRIVED_PX = 0.5;
+const ARRIVED_PX_PER_S = 12;
+const ARRIVED_SCALE = 0.002;
+const ARRIVED_SCALE_PER_S = 0.03;
+
+function arrived(at: { pose: Pose; vel: Pose }, to: Pose): boolean {
+  return (
+    Math.abs(at.pose.x - to.x) < ARRIVED_PX &&
+    Math.abs(at.pose.y - to.y) < ARRIVED_PX &&
+    Math.hypot(at.vel.x, at.vel.y) < ARRIVED_PX_PER_S &&
+    Math.abs(at.pose.sx - to.sx) < ARRIVED_SCALE &&
+    Math.abs(at.pose.sy - to.sy) < ARRIVED_SCALE &&
+    Math.abs(at.vel.sx) < ARRIVED_SCALE_PER_S &&
+    Math.abs(at.vel.sy) < ARRIVED_SCALE_PER_S
+  );
+}
+
+/** A leg drawn out one frame at a time, for an animation to play back
+ *  on the compositor, where a busy page cannot make it stutter. The last
+ *  frame is exactly `to`. `duration` is in milliseconds. */
+export const FRAME_MS = 1000 / 60;
+const LONGEST_LEG_MS = 3000;
+
+export function legFrames(leg: Leg): { frames: Pose[]; duration: number } {
+  const frames: Pose[] = [leg.from];
+  for (let ms = FRAME_MS; ms < LONGEST_LEG_MS; ms += FRAME_MS) {
+    const at = legAt(leg, ms / 1000);
+    if (arrived(at, leg.to)) break;
+    frames.push(at.pose);
+  }
+  frames.push(leg.to);
+  return { frames, duration: (frames.length - 1) * FRAME_MS };
+}
+
+/** A pose as a transform, about the copy's own centre. */
+export function poseTransform(p: Pose): string {
+  const move = `translate(${p.x.toFixed(2)}px, ${p.y.toFixed(2)}px)`;
+  return `${move} scale(${p.sx.toFixed(4)}, ${p.sy.toFixed(4)})`;
+}
+
+/** Drives one element from pose to pose on GLIDE_SPRING, each leg
+ *  taking over from wherever the last one had got to and at whatever
+ *  speed it was going. Every leg is a Web Animation of the element's
+ *  transform, so it runs off the main thread: the next map can be put
+ *  together underneath it without the copy missing a frame. */
+export class Glider {
+  private leg: Leg | null = null;
+  private run: Animation | null = null;
+  private legMs = 0;
+
+  constructor(private readonly el: HTMLElement) {}
+
+  /** Where the element is now, and how fast it is going. */
+  private now(): { pose: Pose; vel: Pose } {
+    if (!this.leg || !this.run) return { pose: REST, vel: STILL };
+    const ms = Number(this.run.currentTime ?? 0);
+    return ms >= this.legMs ? { pose: this.leg.to, vel: STILL } : legAt(this.leg, ms / 1000);
+  }
+
+  /** Sends the element towards `to`, and calls `done` once it is there.
+   *  Returns how long that will take, in milliseconds, or null when
+   *  nothing moves at all (a reader who has asked for stillness, or a
+   *  browser without Web Animations): the caller carries on with the end
+   *  state. */
+  aim(to: Pose, done?: () => void): number | null {
+    const was = this.run;
+    const at = this.now();
+    const moving = was != null && was.playState === 'running' && was.startTime != null;
+    const leg: Leg = { from: at.pose, vel: at.vel, to, spring: GLIDE_SPRING };
+    const { frames, duration } = legFrames(leg);
+    const run = animate(
+      this.el,
+      frames.map((p) => ({ transform: poseTransform(p) })),
+      { duration, easing: 'linear', fill: 'forwards' },
+    );
+    if (!run) return null;
+    // A leg that takes over from one in flight starts at the moment the
+    // pose it starts from was read, so the two agree on the clock and
+    // the handover lands between frames. From rest it is left to start
+    // on the first frame it is drawn in, the default: work done before
+    // that frame must not be spent out of the gentle start.
+    if (moving) run.startTime = Number(was.startTime) + Number(was.currentTime ?? 0);
+    was?.cancel();
+    this.leg = leg;
+    this.run = run;
+    this.legMs = duration;
+    if (done) run.addEventListener('finish', () => done(), { once: true });
+    return duration;
+  }
+
+  /** Puts another animation on the current leg's clock, so that one
+   *  timed to end with the leg does. A leg that took over in mid-air
+   *  started when its pose was read, which can be a few frames before
+   *  anything started after it gets its first frame. */
+  follow(anim: Animation | null): void {
+    const start = this.run?.startTime;
+    if (anim && start != null) anim.startTime = start;
+  }
+
+  /** Drops the flight where it is. */
+  cancel(): void {
+    this.run?.cancel();
+    this.run = null;
+    this.leg = null;
+  }
+}
 
 /** How far the flying copy moves: from the card to the middle of the
  *  map the reader can see, which on a phone starts under the header
