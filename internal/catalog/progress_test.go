@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"cinedikt/internal/notify"
 )
 
 func TestProgressSaysHowFarAndHowLong(t *testing.T) {
@@ -25,35 +27,59 @@ func TestProgressSaysHowFarAndHowLong(t *testing.T) {
 	}
 }
 
-func TestProgressLineIsWhatABoardShows(t *testing.T) {
-	p := &progress{
-		what:  "filling in posters",
-		start: time.Now().Add(-(16*time.Minute + 35*time.Second)),
-		total: 1_000_000,
+// TestProgressEventNeverReadsAsFinished is the board's side of a tick:
+// a share that stops at 99%, so a pass that is nearly done is not
+// shown as done, and no ETA until there is enough behind it to trust.
+func TestProgressEventNeverReadsAsFinished(t *testing.T) {
+	base := notify.Event{Job: notify.JobPosters}
+
+	early := &progress{start: time.Now().Add(-10 * time.Minute), total: 1000}
+	e := early.event(base, 40)
+	if e.Kind != notify.Progress || e.Job != notify.JobPosters || e.Done != 40 || e.Total != 1000 {
+		t.Fatalf("event = %+v, want a posters Progress with done and total", e)
 	}
-	got := p.line(409632)
-	if !regexp.MustCompile(`^41% done, \d+ minutes left$`).MatchString(got) {
-		t.Errorf("line = %q, want a percentage and a time left in words", got)
+	if !e.ETA.IsZero() {
+		t.Errorf("ETA = %v at 4%%, want none before 5%%", e.ETA)
 	}
 
-	open := &progress{what: "loading movies", start: time.Now().Add(-2 * time.Second)}
-	if got := open.line(10); got != "10 rows read" {
-		t.Errorf("line = %q, want the row count when the total is unknown", got)
+	fresh := &progress{start: time.Now().Add(-30 * time.Second), total: 1000}
+	if e := fresh.event(base, 500); !e.ETA.IsZero() {
+		t.Errorf("ETA = %v after 30s, want none before two minutes", e.ETA)
+	}
+
+	going := &progress{start: time.Now().Add(-10 * time.Minute), total: 1000}
+	e = going.event(base, 500)
+	if e.ETA.IsZero() {
+		t.Fatal("no ETA at 50% after ten minutes")
+	}
+	if left := time.Until(e.ETA); left < 9*time.Minute || left > 11*time.Minute {
+		t.Errorf("ETA is %v away, want about ten minutes", left)
+	}
+
+	full := &progress{start: time.Now().Add(-10 * time.Minute), total: 1000}
+	if e := full.event(base, 1000); e.Share != 0.99 {
+		t.Errorf("share = %v at the last row, want 0.99 until the pass says it finished", e.Share)
+	}
+
+	download := &progress{start: time.Now(), bytes: true}
+	if e := download.event(base, 5<<20); e.Bytes != 5<<20 || e.Share != 0 {
+		t.Errorf("event = %+v, want bytes and no share when the length is unknown", e)
 	}
 }
 
-func TestRoughAndCountReadAsWords(t *testing.T) {
-	if got := rough(112 * time.Minute); got != "1 hour 52 minutes" {
-		t.Errorf("rough = %q", got)
+func TestStepTellsTheSinkAndDoneDoesNot(t *testing.T) {
+	var sink recordingSink
+	p := newProgress(quietLogger(), "filling in posters", 100)
+	p.watch(&sink, notify.Event{Job: notify.JobPosters})
+	p.last = time.Now().Add(-ProgressEvery)
+	p.step(10)
+	p.done(100)
+	got := sink.all()
+	if len(got) != 1 || got[0].Kind != notify.Progress || got[0].Done != 10 {
+		t.Fatalf("events = %+v, want one Progress from the step and nothing from done", got)
 	}
-	if got := rough(20 * time.Second); got != "less than a minute" {
-		t.Errorf("rough = %q", got)
-	}
-	if got := count(104738); got != "104,738" {
-		t.Errorf("count = %q", got)
-	}
-	if got := result(0, 16, "saved"); got != "none saved, 16 failed" {
-		t.Errorf("result = %q", got)
+	if got[0].At.IsZero() {
+		t.Error("a progress event went out without a time")
 	}
 }
 

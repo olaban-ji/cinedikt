@@ -1,0 +1,12 @@
+🔴 <b>TMDb turned down our key</b>
+<b>To fix:</b> check TMDB_ACCESS_TOKEN (or TMDB_API_KEY) under Variables in Railway, then redeploy.
+Backup posters and search matching have stopped. Films OMDb has no poster for stay blank until this is fixed.
+<blockquote expandable>Details: tmdb: HTTP 401: Invalid API key</blockquote>
+
+⚠️ <b>Opening colours failing since 13:10</b>
+Nothing for you to do yet. Next try by 15:00.
+All 87 poster images failed to download. New films on the opening screen show without their placeholder colour; nothing else is affected.
+<blockquote expandable>Details: catalog: all 87 lookups to poster hosts failed; the last: Get &#34;https://m.media-amazon.com/images/M/x.jpg&#34;: dial tcp: i/o timeout</blockquote>
+
+✅ <b>Posters done: 1,830 saved</b>
+Took 34 min. 1,204 films have no poster on OMDb.

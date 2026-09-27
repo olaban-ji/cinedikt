@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 )
@@ -222,6 +223,11 @@ func TestCheckRejectsAMixedGeneration(t *testing.T) {
 	if share >= MinIntegrity {
 		t.Errorf("integrity reported as %.4f, which should have passed", share)
 	}
+	// The notifier is told the share, not handed the sentence.
+	var ie *IntegrityError
+	if !errors.As(err, &ie) || ie.Share != share {
+		t.Errorf("err = %v, want an IntegrityError carrying %.4f", err, share)
+	}
 }
 
 func TestCheckRejectsAnEmptyTable(t *testing.T) {
@@ -235,8 +241,13 @@ func TestCheckRejectsAnEmptyTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Check(ctx, counts); err == nil {
-		t.Error("a load with an empty table was accepted")
+	_, err = s.Check(ctx, counts)
+	if err == nil {
+		t.Fatal("a load with an empty table was accepted")
+	}
+	var ie *IntegrityError
+	if !errors.As(err, &ie) || err.Error() != "catalog: no ratings loaded" {
+		t.Errorf("err = %v, want an IntegrityError with the text it always had", err)
 	}
 }
 
@@ -305,5 +316,44 @@ func TestPublishSwapsAndKeepsTheOldOneUntilNextRun(t *testing.T) {
 	}
 	if old {
 		t.Error("the previous generation was not dropped on the next run")
+	}
+}
+
+// TestTheNotifierRemembersThroughTheStore is the Memory half of the
+// Store: what it saves is what it reads back, and a database it has
+// never written to reads as nothing rather than an error.
+func TestTheNotifierRemembersThroughTheStore(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.notify`); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := s.LoadNotifyState(ctx)
+	if err != nil || raw != nil {
+		t.Fatalf("a fresh database read %q, %v; want nothing and no error", raw, err)
+	}
+	for _, want := range []string{`{"v": 1, "board_id": 77}`, `{"v": 1, "board_id": 78}`} {
+		if err := s.SaveNotifyState(ctx, []byte(want)); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.LoadNotifyState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("read back %s, want %s", got, want)
+		}
+	}
+}
+
+func TestPublishedFilmsIsTheLiveCount(t *testing.T) {
+	s := testStore(t)
+	publishFixture(t, s)
+	n, err := s.PublishedFilms(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Error("the live catalog has films, and PublishedFilms says none")
 	}
 }

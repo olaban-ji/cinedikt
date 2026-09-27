@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"cinedikt/internal/notify"
 	"cinedikt/internal/omdb"
 )
 
@@ -170,7 +171,8 @@ func TestPosterJobStoresWhatItLearnsAndDoesNotAskTwice(t *testing.T) {
 		t.Errorf("a failed lookup is %q, want missing so it is retried", status)
 	}
 
-	// A second run asks only about the one that failed.
+	// A second run straight away asks nothing: the failed lookup waits
+	// a day, rather than being asked again every twenty minutes.
 	fake.asked = nil
 	fake.errs = nil
 	//nolint:staticcheck // the job is not running; no lock needed here.
@@ -178,8 +180,138 @@ func TestPosterJobStoresWhatItLearnsAndDoesNotAskTwice(t *testing.T) {
 	if err := job.Run(ctx, Live); err != nil {
 		t.Fatal(err)
 	}
+	if fake.count() != 0 {
+		t.Errorf("an immediate second run asked for %v, want nothing until the retry is due", fake.asked)
+	}
+
+	// A day later it is asked again, and only it.
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE meta.posters SET fetched_at = now() - interval '25 hours' WHERE status = 'missing'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Run(ctx, Live); err != nil {
+		t.Fatal(err)
+	}
 	if fake.count() != 1 || fake.asked[0] != "tt0000001" {
-		t.Errorf("second run asked for %v, want only the failed one", fake.asked)
+		t.Errorf("the run after a day asked for %v, want only the failed one", fake.asked)
+	}
+}
+
+// pausedOMDb is a client whose daily quota is spent.
+type pausedOMDb struct {
+	fakeOMDb
+	until time.Time
+}
+
+func (p *pausedOMDb) PausedUntil() time.Time { return p.until }
+
+// TestAPausedClientIsNotAPass is the pair of messages that used to go
+// out every twenty minutes for the whole of a spent quota: a pass
+// starting, and at once pausing. A client that is known to be paused
+// is not asked, and nothing is said.
+func TestAPausedClientIsNotAPass(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.posters`); err != nil {
+		t.Fatal(err)
+	}
+	var sink recordingSink
+	fake := &pausedOMDb{until: time.Now().Add(time.Hour)}
+	job := &PosterJob{Store: s, Client: fake, Logger: quietLogger(), Batch: 100, Workers: 1, Notify: &sink}
+	if err := job.Run(ctx, Live); err != nil {
+		t.Fatal(err)
+	}
+	if fake.count() != 0 {
+		t.Errorf("a paused client was asked about %v", fake.asked)
+	}
+	if got := sink.all(); len(got) != 0 {
+		t.Errorf("a paused client said %+v, want nothing", got)
+	}
+}
+
+// TestARefusedKeyEndsThePass: every title after the first would be told
+// the same, and none of them should be written down as worth retrying.
+func TestARefusedKeyEndsThePass(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.posters`); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeOMDb{errs: map[string]error{
+		"tt0111161": omdb.ErrKey, "tt0133093": omdb.ErrKey, "tt0234215": omdb.ErrKey, "tt0000001": omdb.ErrKey, "tt0000002": omdb.ErrKey,
+	}}
+	job := &PosterJob{Store: s, Client: fake, Logger: quietLogger(), Batch: 100, Workers: 1}
+	err := job.Run(ctx, Live)
+	var key *KeyError
+	if !errors.As(err, &key) || key.Provider != "OMDb" {
+		t.Fatalf("err = %v, want a KeyError for OMDb", err)
+	}
+	if fake.count() != 1 {
+		t.Errorf("asked %v after the key was refused, want only the first", fake.asked)
+	}
+	var stored int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM meta.posters`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 0 {
+		t.Errorf("a refused key stored %d rows as failed lookups", stored)
+	}
+}
+
+// TestOnlyRecentlyFailedRowsAreNotAPass: a failure waiting out its day
+// is not work, so the pass that finds only those says nothing.
+func TestOnlyRecentlyFailedRowsAreNotAPass(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.posters`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO meta.posters (tconst, status, fetched_at)
+		SELECT tconst, CASE WHEN tconst = 'tt0000001' THEN 'missing' ELSE 'ok' END, now()
+		FROM `+Live+`.titles`); err != nil {
+		t.Fatal(err)
+	}
+	var sink recordingSink
+	fake := &fakeOMDb{}
+	job := &PosterJob{Store: s, Client: fake, Logger: quietLogger(), Batch: 100, Workers: 1, Notify: &sink}
+	if err := job.Run(ctx, Live); err != nil {
+		t.Fatal(err)
+	}
+	if fake.count() != 0 || len(sink.all()) != 0 {
+		t.Errorf("asked %v and said %+v, want neither", fake.asked, sink.all())
+	}
+}
+
+// TestAPassSaysItStartedAndHowItEnded is what the board is built from.
+func TestAPassSaysItStartedAndHowItEnded(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.posters`); err != nil {
+		t.Fatal(err)
+	}
+	var sink recordingSink
+	fake := &fakeOMDb{
+		answers: map[string]omdb.Title{"tt0133093": {Poster: "https://x/matrix.jpg"}},
+		errs:    map[string]error{"tt0000001": errors.New("dial tcp: connection refused")},
+	}
+	job := &PosterJob{Store: s, Client: fake, Logger: quietLogger(), Batch: 100, Workers: 1, Notify: &sink}
+	if err := job.Run(ctx, Live); err != nil {
+		t.Fatal(err)
+	}
+	started, finished := sink.of(notify.Started), sink.of(notify.Finished)
+	if len(started) != 1 || started[0].Total == 0 {
+		t.Fatalf("started = %+v, want one with the outstanding count", started)
+	}
+	// One poster, one failure, and every other title answered without
+	// a poster: those are answers, not posters, and are not counted as
+	// posters saved.
+	if len(finished) != 1 || finished[0].Errors != 1 || finished[0].Done != 1 || finished[0].None != started[0].Total-2 {
+		t.Errorf("finished = %+v, want 1 poster, 1 failure and the rest answered without one", finished)
 	}
 }
 

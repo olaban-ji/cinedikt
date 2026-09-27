@@ -1,0 +1,4 @@
+⚠️ <b>Catalog update failing since 13:15</b>
+Nothing for you to do. Next try 15:00.
+IMDb's download server isn't answering (error 503). The site is fine and still shows yesterday's catalog.
+<blockquote expandable>Details: catalog: GET title.principals: HTTP 503</blockquote>

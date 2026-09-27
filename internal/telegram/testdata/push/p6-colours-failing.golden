@@ -1,0 +1,4 @@
+⚠️ <b>Opening colours failing since 13:10</b>
+Nothing for you to do yet. Next try by 15:00.
+All 87 poster images failed to download. New films on the opening screen show without their placeholder colour; nothing else is affected.
+<blockquote expandable>Details: catalog: all 87 lookups to poster hosts failed; the last: Get &#34;https://m.media-amazon.com/images/M/x.jpg&#34;: dial tcp: i/o timeout</blockquote>

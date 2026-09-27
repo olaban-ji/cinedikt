@@ -27,6 +27,11 @@ var ErrNotFound = errors.New("omdb: not found")
 // the client then stops calling out for QuotaPause.
 var ErrQuota = errors.New("omdb: daily request limit reached")
 
+// ErrKey is OMDb refusing the key itself. Nothing but a new key fixes
+// it, so a caller should stop asking rather than spend the day being
+// told the same thing.
+var ErrKey = errors.New("omdb: invalid API key")
+
 // QuotaPause is how long lookups are skipped after a quota error. OMDb's
 // free quota resets daily; an hour keeps a long-running server from
 // spending the whole day being told no.
@@ -157,6 +162,14 @@ func (c *Client) paused() bool {
 	return c.now().Before(c.pausedTill)
 }
 
+// PausedUntil is when a spent daily quota lets this client ask again.
+// A zero or past time means it is not paused.
+func (c *Client) PausedUntil() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pausedTill
+}
+
 func (c *Client) pause() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -180,7 +193,13 @@ func (c *Client) get(ctx context.Context, q url.Values, what string) ([]byte, er
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("omdb: %w", err)
+		// A *url.Error quotes the whole request URL, and the URL carries
+		// the key. What went wrong is the error inside it.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("omdb: GET %s: %w", what, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -256,6 +275,12 @@ func saysNo(msg string) bool {
 	return false
 }
 
+// badKey is OMDb's answer to a key it does not accept: "Invalid API
+// key!" for one it has never issued, and the same for one it revoked.
+func badKey(msg string) bool {
+	return strings.Contains(strings.ToLower(msg), "invalid api key")
+}
+
 // parse reads OMDb's envelope. Ratings arrive as strings ("8.7",
 // "2,081,234") or "N/A".
 func parse(body []byte, asked string) (Rating, error) {
@@ -272,6 +297,8 @@ func parse(body []byte, asked string) (Rating, error) {
 		switch {
 		case strings.Contains(strings.ToLower(env.Error), "limit reached"):
 			return Rating{}, ErrQuota
+		case badKey(env.Error):
+			return Rating{}, ErrKey
 		case settled(env.Error, asked):
 			return Rating{}, ErrNotFound
 		}

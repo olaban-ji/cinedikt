@@ -17,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
@@ -27,6 +28,7 @@ import (
 	"cinedikt/internal/app"
 	"cinedikt/internal/catalog"
 	"cinedikt/internal/config"
+	"cinedikt/internal/notify"
 	"cinedikt/internal/rediscache"
 	"cinedikt/internal/telegram"
 	"cinedikt/internal/tmdb"
@@ -136,6 +138,18 @@ func run(logger *slog.Logger) error {
 		// importer — the attempt is held under an advisory lock, and
 		// whoever loses it exits.
 		if cfg.EmbeddedImporter {
+			// The chat the jobs report to. Closed on the way out, so
+			// the last board and anything still queued are sent; the
+			// lease has usually done that already, and then this
+			// returns at once.
+			sink := telegram.Start(ctx, telegram.Config{
+				Token:    cfg.TelegramBotToken,
+				ChatID:   cfg.TelegramChatID,
+				Location: telegram.Zone(cfg.NotifyTimezone, logger),
+				Env:      cfg.RailwayEnvironment,
+				Commit:   cfg.RailwayCommit,
+			}, logger)
+			defer notify.Close(sink, 4*time.Second)
 			// Its own pool, not the one serving requests. A bulk load
 			// and a two-hour poster drain must not sit on the ten
 			// connections a search is waiting for.
@@ -155,7 +169,7 @@ func run(logger *slog.Logger) error {
 				},
 				TMDbRate:          cfg.TMDBRatePerSecond,
 				TMDbSweepMinVotes: cfg.TMDbSweepMinVotes,
-				Notify:            telegram.Start(ctx, cfg.TelegramBotToken, cfg.TelegramChatID, logger),
+				Notify:            sink,
 			}).Start(ctx); err != nil {
 				return err
 			}

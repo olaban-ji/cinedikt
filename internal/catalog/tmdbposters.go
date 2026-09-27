@@ -75,8 +75,8 @@ type TMDbJob struct {
 	MinVotes int
 	// Batch is how many are claimed per round; zero takes TMDbBatch.
 	Batch int
-	// Notify hears when a pass starts, catches up, or fails. Nil leaves
-	// that in the log.
+	// Notify hears when a pass starts, how far it has got, and how it
+	// ends. Nil leaves that in the log.
 	Notify notify.Sink
 }
 
@@ -108,10 +108,11 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 	track := newProgress(j.Logger, "filling in posters from tmdb", outstanding)
 	run := pass{sink: j.Notify, job: notify.JobTMDbPosters}
 	if outstanding > 0 {
-		track.watch(j.Notify, notify.JobTMDbPosters)
+		track.watch(j.Notify, notify.Event{Job: notify.JobTMDbPosters})
 	}
 
 	var found, blank, failed int64
+	var last error
 	// A fault leaves the row unstamped on purpose, so the next pass
 	// tries it again — which means this pass must not, or a title TMDb
 	// keeps refusing would be handed back by every query and asked
@@ -142,10 +143,15 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 				j.Logger.Info("tmdb posters caught up",
 					"found", found, "none", blank, "failed", failed)
 			}
-			run.finish(notify.CaughtUp, pictureResult(found, blank, failed))
+			// Every lookup failing, with not one answer among them, is
+			// TMDb, or the way there, rather than a bad batch.
+			if failed >= failedLookups && found+blank == 0 {
+				return &LookupsFailedError{Provider: "TMDb", Count: failed, Last: last}
+			}
+			run.finish(found, blank, failed)
 			return nil
 		}
-		run.start(count(outstanding) + " still without a picture")
+		run.start(outstanding)
 		for _, id := range fresh {
 			tried[id] = true
 			if ctx.Err() != nil {
@@ -161,10 +167,15 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 				// storing it is what stops the title coming round again.
 				got = tmdb.Found{}
 				none = true
+			case refused(err):
+				// The key itself. Every title after this one would be
+				// told the same, so the pass ends here.
+				return &KeyError{Provider: "TMDb", Err: err}
 			case err != nil:
 				// A fault rather than an answer. Left unstamped, so the
 				// next pass tries it again — but not this one.
 				failed++
+				last = err
 				j.Logger.Warn("tmdb poster", "tconst", id, "err", err)
 				continue
 			}
@@ -194,6 +205,12 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 			track.step(found + blank + failed)
 		}
 	}
+}
+
+// refused reports whether TMDb turned the credentials down.
+func refused(err error) bool {
+	var se *tmdb.StatusError
+	return errors.As(err, &se) && (se.Status == 401 || se.Status == 403)
 }
 
 // tmdbOutstanding is how many titles this pass has to ask about. It is
@@ -331,10 +348,11 @@ func fillFromTMDb(ctx context.Context, job *TMDbJob, logger *slog.Logger, wakes 
 			wait = PosterWaitForCatalog
 		default:
 			waited = false
-			if err := job.Run(ctx); err != nil {
+			err := job.Run(ctx)
+			if err != nil && ctx.Err() == nil {
 				logger.Warn("tmdb posters", "err", err)
-				report(job.Notify, notify.JobTMDbPosters, notify.Failed, err.Error())
 			}
+			reportRun(ctx, job.Notify, notify.JobTMDbPosters, err, time.Now().Add(wait))
 		}
 		// A reader who opens a film with no picture is the best reason
 		// there is to ask TMDb about it, and they should not have to

@@ -19,6 +19,11 @@ export default defineRailway(() => {
       // never joins the load balancer. The timeout covers a cold start.
       healthcheckPath: "/api/healthz",
       healthcheckTimeout: 120,
+      // How long the old container keeps running after it is told to
+      // stop. The API gives in-flight requests up to ten seconds, and
+      // the notifier uses the first three of them to write its last
+      // board and save what it said before the next container reads it.
+      drainingSeconds: 10,
       // restartPolicyType (ON_FAILURE) and sleepApplication (false) are
       // Railway's defaults and are deliberately not declared: the API
       // stores a default as null, so declaring one leaves `config plan`
@@ -47,11 +52,14 @@ export default defineRailway(() => {
       DATABASE_URL: preserve(),
       POSTHOG_PROJECT_TOKEN: preserve(),
       POSTHOG_HOST: preserve(),
-      // A bot that says when an import starts and how the other catalog
-      // jobs are getting on. Both empty means silence. The token is from
+      // A bot that keeps a pinned status board of the catalog jobs and
+      // says when something needs attention. Both empty means silence. The token is from
       // BotFather; the chat id is the private chat or group it posts into.
       TELEGRAM_BOT_TOKEN: preserve(),
       TELEGRAM_CHAT_ID: preserve(),
+      // The zone the bot writes times in, such as Africa/Lagos. Unset
+      // means UTC, and the board says so.
+      NOTIFY_TIMEZONE: preserve(),
       WEB_DIR: preserve(),
     },
   });

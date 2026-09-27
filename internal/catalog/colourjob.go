@@ -36,8 +36,8 @@ type ColourJob struct {
 	Client *http.Client
 	// Batch is how many are claimed per round; zero takes ColourBatch.
 	Batch int
-	// Notify hears when a pass starts, catches up, or fails. Nil leaves
-	// that in the log.
+	// Notify hears when a pass starts, how far it has got, and how it
+	// ends. Nil leaves that in the log.
 	Notify notify.Sink
 }
 
@@ -62,10 +62,11 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 		return nil
 	}
 	track := newProgress(j.Logger, "colouring the opening screen", outstanding)
-	track.watch(j.Notify, notify.JobColours)
+	track.watch(j.Notify, notify.Event{Job: notify.JobColours})
 	run := pass{sink: j.Notify, job: notify.JobColours}
 
 	var done, failed int64
+	var last error
 	// A poster that will not load leaves its row uncoloured, which
 	// would hand it back on the next query for ever. Once per pass.
 	tried := make(map[string]bool)
@@ -89,10 +90,15 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 		if len(fresh) == 0 {
 			track.done(done + failed)
 			j.Logger.Info("opening screen coloured", "filled", done, "failed", failed)
-			run.finish(notify.CaughtUp, result(done, failed, "coloured"))
+			// Not one poster loading is the image hosts, or the way to
+			// them, rather than a batch of bad addresses.
+			if failed >= failedLookups && done == 0 {
+				return &LookupsFailedError{Provider: "poster hosts", Count: failed, Last: last}
+			}
+			run.finish(done, 0, failed)
 			return nil
 		}
-		run.start(count(outstanding) + " still to colour")
+		run.start(outstanding)
 		for _, r := range fresh {
 			if ctx.Err() != nil {
 				return nil
@@ -111,6 +117,8 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 					return nil
 				}
 				failed++
+				last = err
+				j.Logger.Warn("opening colour", "tconst", r.tconst, "err", err)
 				track.step(done + failed)
 				continue
 			}
@@ -188,9 +196,12 @@ func fillColours(ctx context.Context, job *ColourJob, logger *slog.Logger, wakes
 		wait := ColourRest
 		if err != nil || !ready {
 			wait = PosterWaitForCatalog
-		} else if err := job.Run(ctx, Live); err != nil {
-			logger.Warn("opening screen colours", "err", err)
-			report(job.Notify, notify.JobColours, notify.Failed, err.Error())
+		} else {
+			err := job.Run(ctx, Live)
+			if err != nil && ctx.Err() == nil {
+				logger.Warn("opening screen colours", "err", err)
+			}
+			reportRun(ctx, job.Notify, notify.JobColours, err, time.Now().Add(wait))
 		}
 		// A poster landing for a film on the opening screen is the
 		// only thing that makes new work here, and the wake carries at

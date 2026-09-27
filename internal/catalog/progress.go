@@ -29,10 +29,11 @@ type progress struct {
 	// bytes marks a download, whose total is a length rather than a
 	// number of rows. A long row count would otherwise look like one.
 	bytes bool
-	// hear, if set, is told the same line the log gets. It is how a
-	// notifier keeps a status board current without a message per tick.
-	// Nil changes nothing, and the log stays the record either way.
-	hear func(string)
+	// hear, if set, is told how far the step has got each time the log
+	// is. It is how a notifier keeps a status board current without a
+	// message per tick. Nil changes nothing, and the log stays the
+	// record either way.
+	hear func(done int64)
 }
 
 func newProgress(logger *slog.Logger, what string, total int64) *progress {
@@ -47,14 +48,15 @@ func newByteProgress(logger *slog.Logger, what string, total int64) *progress {
 	return p
 }
 
-// watch sends each logged line to sink as progress, not as a new
-// notification. A nil sink leaves the tracker as it was.
-func (p *progress) watch(sink notify.Sink, job string) {
+// watch sends each tick to sink as progress, not as a new
+// notification: base says whose progress it is, and the tick fills in
+// how far. A nil sink leaves the tracker as it was.
+func (p *progress) watch(sink notify.Sink, base notify.Event) {
 	if sink == nil {
 		return
 	}
-	p.hear = func(text string) {
-		sink.Note(notify.Event{Job: job, Kind: notify.Working, Text: text})
+	p.hear = func(done int64) {
+		report(sink, p.event(base, done))
 	}
 }
 
@@ -65,70 +67,46 @@ func (p *progress) step(done int64) {
 	}
 	p.last = time.Now()
 	p.logger.Info(p.what, p.fields(done)...)
-	p.heard(done)
+	if p.hear != nil {
+		p.hear(done)
+	}
 }
 
-// done reports the final figure, whenever it lands.
+// done reports the final figure, whenever it lands. Only to the log:
+// the end of a pass is its own event, with the result in it.
 func (p *progress) done(done int64) {
 	p.logger.Info(p.what+" done", p.fields(done)...)
-	p.heard(done)
 }
 
-func (p *progress) heard(done int64) {
-	if p.hear != nil {
-		p.hear(p.line(done))
-	}
-}
+// Enough behind an estimate to trust it: a share this far in, after
+// this long. An ETA from the first thirty seconds of a two-hour pass
+// swings by an hour a tick.
+const (
+	etaMinShare   = 0.05
+	etaMinElapsed = 2 * time.Minute
+)
 
-// line is the progress a chat shows. The log keeps the raw fields;
-// this leaves out the phase name, because the message already says
-// which job it is, and writes the time left as words.
-func (p *progress) line(done int64) string {
-	if p.total > 0 {
-		share := float64(done) / float64(p.total)
-		if share > 1 {
-			share = 1
+// event is base with the tick filled in. Share stops at 0.99, because a
+// running pass is not finished however close it is.
+func (p *progress) event(base notify.Event, done int64) notify.Event {
+	e := base
+	e.Kind = notify.Progress
+	e.Done = done
+	e.Total = p.total
+	if p.total <= 0 {
+		if p.bytes {
+			e.Bytes = done
 		}
-		if share >= 1 {
-			return "done"
-		}
-		pct := fmt.Sprintf("%.0f%% done", share*100)
-		if share > 0.02 {
-			elapsed := time.Since(p.start)
-			left := time.Duration(float64(elapsed) * (1 - share) / share)
-			return pct + ", " + rough(left) + " left"
-		}
-		return pct
+		return e
 	}
-	if p.bytes {
-		return mib(done) + " downloaded"
+	share := float64(done) / float64(p.total)
+	e.Share = min(share, 0.99)
+	elapsed := time.Since(p.start)
+	if share >= etaMinShare && share < 1 && elapsed >= etaMinElapsed {
+		left := time.Duration(float64(elapsed) * (1 - share) / share)
+		e.ETA = time.Now().Add(left)
 	}
-	return count(done) + " rows read"
-}
-
-// rough is a duration as a person says it. The log keeps the compact
-// form from clock; a chat should not say 1h52m10s.
-func rough(d time.Duration) string {
-	if d < time.Minute {
-		return "less than a minute"
-	}
-	d = d.Round(time.Minute)
-	h := int(d / time.Hour)
-	m := int((d % time.Hour) / time.Minute)
-	switch {
-	case h == 0 && m == 1:
-		return "1 minute"
-	case h == 0:
-		return fmt.Sprintf("%d minutes", m)
-	case m == 0 && h == 1:
-		return "1 hour"
-	case m == 0:
-		return fmt.Sprintf("%d hours", h)
-	case h == 1:
-		return fmt.Sprintf("1 hour %d minutes", m)
-	default:
-		return fmt.Sprintf("%d hours %d minutes", h, m)
-	}
+	return e
 }
 
 func (p *progress) fields(done int64) []any {

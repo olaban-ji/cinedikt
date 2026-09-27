@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -147,4 +148,47 @@ func (c *memCache) Set(key string, body []byte) error {
 	defer c.mu.Unlock()
 	c.m[key] = append([]byte(nil), body...)
 	return nil
+}
+
+// TestATransportErrorDoesNotCarryTheKey is the reason the *url.Error is
+// unwrapped: its text is the whole request URL, key included, and that
+// text goes to the log and, redacted or not, towards a chat.
+func TestATransportErrorDoesNotCarryTheKey(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("no hijacker")
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	})
+	_, err := c.Lookup(context.Background(), "tt0133093")
+	if err == nil {
+		t.Fatal("a closed connection was not an error")
+	}
+	for _, leak := range []string{"apikey", "k3y"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error %q contains %q", err, leak)
+		}
+	}
+	if !strings.Contains(err.Error(), "tt0133093") {
+		t.Errorf("error %q should still say which lookup failed", err)
+	}
+}
+
+func TestPausedUntilIsWhenTheQuotaLetsGo(t *testing.T) {
+	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"Response":"False","Error":"Request limit reached!"}`))
+	})
+	c.now = func() time.Time { return now }
+	if !c.PausedUntil().IsZero() {
+		t.Fatal("a fresh client is paused")
+	}
+	if _, err := c.Lookup(context.Background(), "tt0133093"); !errors.Is(err, ErrQuota) {
+		t.Fatalf("err = %v, want ErrQuota", err)
+	}
+	if got := c.PausedUntil(); !got.Equal(now.Add(QuotaPause)) {
+		t.Errorf("PausedUntil = %v, want %v", got, now.Add(QuotaPause))
+	}
 }

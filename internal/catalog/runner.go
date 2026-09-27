@@ -55,19 +55,14 @@ type Runner struct {
 	TMDbSweepMinVotes int
 	// Keep leaves the downloaded files on disk, for development.
 	Keep bool
-	// Notify is told when an import starts, finishes, fails, or the
-	// catalog goes stale, and how the other jobs are getting on. Nil
-	// leaves all of that in the log.
+	// Notify is told what every job is doing: when an import starts,
+	// publishes or fails, when the catalog goes stale, and how the other
+	// jobs are getting on. It decides for itself what is worth a sound;
+	// the jobs report every fact, and the stale check reports every hour
+	// it is stale. Nil leaves all of that in the log.
 	Notify notify.Sink
-	// alertedStale keeps a stale catalog from buzzing once an hour.
-	// The hourly check is what notices it; the alert is for the
-	// transition, and it clears when a generation is published.
-	alertedStale bool
 }
 
-// Start runs the whole cycle until ctx is done. It returns immediately;
-// everything happens behind it, so a caller that also serves requests
-// can answer "still being built" while the first import runs.
 // Start runs the whole cycle until ctx is done. It returns as soon as
 // the pool is open; everything else happens behind it, so a caller that
 // also serves requests can answer "still being built" while the first
@@ -94,7 +89,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		if own {
 			defer r.Store.Close()
 		}
-		HoldLease(ctx, r.leaseURL(), r.Logger, r.run)
+		HoldLease(ctx, r.leaseURL(), r.Logger, r.Notify, r.run)
 	}()
 	return nil
 }
@@ -108,7 +103,19 @@ func (r *Runner) leaseURL() string { return r.DatabaseURL }
 // returns when ctx is cancelled, which is either shutdown or the lease
 // being lost.
 func (r *Runner) run(ctx context.Context, wakes *Wakes) {
+	// The notifier owns the board from here, and reads back what it had
+	// already said, so this process does not say it again.
+	notify.Attach(r.Notify, r.Store)
 	im, posters := r.build()
+	client := r.tmdbClient()
+	enabled := []string{notify.JobImport, notify.JobColours}
+	if posters != nil {
+		enabled = append(enabled, notify.JobPosters)
+	}
+	if client != nil {
+		enabled = append(enabled, notify.JobTMDbPosters, notify.JobTMDbIDs)
+	}
+	report(r.Notify, notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: enabled})
 	var wg sync.WaitGroup
 	start := func(loop func()) {
 		wg.Add(1)
@@ -123,7 +130,7 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	}
 	// One client between the two TMDb jobs, so they share one rate
 	// limit. Each with its own would be twice TMDb's ceiling.
-	if client := r.tmdbClient(); client != nil {
+	if client != nil {
 		start(func() {
 			fillFromTMDb(ctx, &TMDbJob{
 				Store:    r.Store,
@@ -172,6 +179,7 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 		}
 	})
 	wg.Wait()
+	report(r.Notify, notify.Event{Job: notify.JobSystem, Kind: notify.Stopped})
 }
 
 // Once runs a single attempt and reports whether it ended well. A run
@@ -187,7 +195,23 @@ func (r *Runner) Posters(ctx context.Context) error {
 	if job == nil {
 		return nil
 	}
-	return job.Run(ctx, Live)
+	err := job.Run(ctx, Live)
+	reportRun(ctx, r.Notify, notify.JobPosters, err, time.Time{})
+	return err
+}
+
+// reportRun tells the notifier how one run of a background job ended:
+// a failure, or a check that clears one. next is when it will run
+// again. A run cut short by ctx says nothing; being stopped is not news.
+func reportRun(ctx context.Context, sink notify.Sink, job string, err error, next time.Time) {
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		report(sink, failure(job, err, next, time.Time{}))
+		return
+	}
+	report(sink, notify.Event{Job: job, Kind: notify.Checked})
 }
 
 func (r *Runner) build() (*Importer, *PosterJob) {
@@ -233,7 +257,9 @@ func (r *Runner) TMDbPosters(ctx context.Context) error {
 	if job == nil {
 		return nil
 	}
-	return job.Run(ctx)
+	err := job.Run(ctx)
+	reportRun(ctx, r.Notify, notify.JobTMDbPosters, err, time.Time{})
+	return err
 }
 
 // tmdbClient is the one TMDb client the runner's jobs share. Nil when
@@ -270,22 +296,43 @@ func (r *Runner) buildTMDb() *TMDbJob {
 }
 
 func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
+	began := time.Now()
+	next := began.Add(PollInterval)
 	out, err := im.RunOnce(ctx)
+	if err != nil && (ctx.Err() != nil || errors.Is(err, context.Canceled)) {
+		// Shutdown, or the lease going to another process. Nothing
+		// failed: the next holder starts the import again.
+		r.Logger.Info("import stopped", "err", err)
+		return false
+	}
 	if err != nil {
-		// Worth an alert: a skipped hour is not a crisis, but a run of
-		// them means the catalog is going stale.
+		// A failed hour is not a crisis, but a run of them means the
+		// catalog is going stale. The notifier decides when a run of
+		// them is worth a sound; this reports every one.
 		r.Logger.Error("import failed", "err", err)
-		report(r.Notify, notify.JobImport, notify.Failed, err.Error())
+		report(r.Notify, failure(notify.JobImport, err, next, out.LiveSince))
+		r.warnIfStale(ctx)
 		return false
 	}
 	if !out.Ran {
-		// Most hours are this one. Saying so every time would be
-		// twenty-three messages a day about nothing happening.
+		// Most hours are this one. It still reaches the notifier, which
+		// is how the board knows the hourly check is alive.
 		r.Logger.Info("no import this hour", "reason", out.Reason)
+		switch out.Skip {
+		case SkipMoved:
+			report(r.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Skipped,
+				Cause: notify.FileMoved, NextTry: next, LiveSince: out.LiveSince})
+		default:
+			e := notify.Event{Job: notify.JobImport, Kind: notify.Checked,
+				NextTry: next, LiveSince: out.LiveSince, Films: out.PrevFilms}
+			if out.Skip == SkipLocked {
+				e.Cause = notify.Locked
+			}
+			report(r.Notify, e)
+		}
 		r.warnIfStale(ctx)
 		return true
 	}
-	r.alertedStale = false
 	r.Logger.Info("import published",
 		"titles", out.Counts.Titles,
 		"names", out.Counts.Names,
@@ -294,40 +341,46 @@ func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
 		"ratings", out.Counts.Ratings,
 		"integrity", out.Integrity,
 		"took", out.Took.Round(time.Second))
-	report(r.Notify, notify.JobImport, notify.Published, fmt.Sprintf("%s titles and %s names, in %s",
-		count(out.Counts.Titles), count(out.Counts.Names), rough(out.Took)))
+	report(r.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Published,
+		Films: out.Counts.Titles, People: out.Counts.Names,
+		PrevFilms: out.PrevFilms, PrevAt: out.PrevAt, Took: out.Took,
+		LiveSince: time.Now(), NextTry: next})
 	if n, err := r.Store.ForgetUnknownPosters(ctx); err != nil {
 		r.Logger.Warn("forget withdrawn posters", "err", err)
 	} else if n > 0 {
 		r.Logger.Info("forgot posters for withdrawn titles", "rows", n)
 	}
+	r.warnIfStale(ctx)
 	return true
 }
 
 // warnIfStale says so when the published catalog is old. It is a log
-// line and an alert, never a health check: a stale catalog serves
+// line and an event, never a health check: a stale catalog serves
 // perfectly well, and failing a health check on it would turn a late
 // upstream publish into a failed deploy.
+//
+// It reports every hour the catalog is stale. Saying it once is the
+// notifier's job, and it remembers across restarts, which a field on
+// the runner could not.
 func (r *Runner) warnIfStale(ctx context.Context) {
-	stale, age, err := r.Store.Stale(ctx, time.Now())
+	now := time.Now()
+	stale, built, err := r.Store.Stale(ctx, now)
 	if err != nil {
 		r.Logger.Warn("read generation", "err", err)
 		return
 	}
 	if !stale {
-		r.alertedStale = false
 		return
+	}
+	var age time.Duration
+	if !built.IsZero() {
+		age = now.Sub(built)
 	}
 	r.Logger.Warn("catalog is stale", "age", age.Round(time.Minute), "after", StaleAfter)
-	if r.alertedStale {
-		return
-	}
-	r.alertedStale = true
-	text := "nothing has been published yet"
-	if age > 0 {
-		text = "last published " + rough(age) + " ago"
-	}
-	report(r.Notify, notify.JobImport, notify.Stale, text)
+	// The time as the database has it, not now less the age: that would
+	// carry this moment's monotonic clock reading, and no two hours would
+	// then name quite the same catalog.
+	report(r.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Stale, LiveSince: built})
 }
 
 // PosterRest is how long the backfill waits after catching up, or after
@@ -364,10 +417,11 @@ func fillPosters(ctx context.Context, job *PosterJob, logger *slog.Logger, wakes
 			wait = PosterWaitForCatalog
 		default:
 			waited = false
-			if err := job.Run(ctx, Live); err != nil {
+			err := job.Run(ctx, Live)
+			if err != nil && ctx.Err() == nil {
 				logger.Warn("poster backfill", "err", err)
-				report(job.Notify, notify.JobPosters, notify.Failed, err.Error())
 			}
+			reportRun(ctx, job.Notify, notify.JobPosters, err, time.Now().Add(wait))
 		}
 		if !waitFor(ctx, wakes.Published, wait) {
 			return

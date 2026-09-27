@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"cinedikt/internal/notify"
 )
 
 // LeaseKey is the advisory lock the runner holds for its whole life.
@@ -39,6 +41,23 @@ const LeaseKey int64 = 0x6369_6e6a // "cinj"
 // A var rather than a const so a test can watch a handover happen
 // without waiting out the real interval.
 var LeaseRetry = 30 * time.Second
+
+// DatabaseAlertAfter is how long the lease connection has to keep
+// failing before the notifier is told the database is unreachable. A
+// restart of Postgres, or a blip on the private network, is over well
+// inside it; an outage is not. A var so a test need not wait it out.
+var DatabaseAlertAfter = 2 * time.Minute
+
+// DatabaseRemindEvery is how often the notifier is told again while the
+// database stays out of reach. It has no clock of its own: a reminder a
+// day into an outage, and a board whose stamp shows it is still trying,
+// both need something to happen. A var so a test need not wait it out.
+var DatabaseRemindEvery = 30 * time.Minute
+
+// shutdownFlush is how long a process on its way out keeps the lease
+// while the notifier writes its last board and saves what it said, so
+// the next holder reads that state rather than the one before it.
+const shutdownFlush = 3 * time.Second
 
 // Signals the runner listens for. Work is discovered by being told
 // about it; the rest intervals are only a backstop for a notification
@@ -116,10 +135,15 @@ func poke(c chan struct{}) {
 // lost — a dropped connection releases the lock in Postgres, and a
 // runner that kept working after that would be the second runner this
 // lock exists to prevent.
-func HoldLease(ctx context.Context, url string, logger *slog.Logger, work func(context.Context, *Wakes)) {
-	told := false
+//
+// sink hears about the lease connection itself: once it has failed for
+// DatabaseAlertAfter, every DatabaseRemindEvery after that, and again
+// when it connects. It is detached when the lease is lost, so a process
+// that no longer runs the jobs stops writing the board.
+func HoldLease(ctx context.Context, url string, logger *slog.Logger, sink notify.Sink, work func(context.Context, *Wakes)) {
+	w := leaseWatch{logger: logger, sink: sink}
 	for ctx.Err() == nil {
-		held, conn := takeLease(ctx, url, logger, &told)
+		held, conn := w.take(ctx, url)
 		if !held {
 			select {
 			case <-ctx.Done():
@@ -127,7 +151,7 @@ func HoldLease(ctx context.Context, url string, logger *slog.Logger, work func(c
 			}
 			continue
 		}
-		told = false
+		w.told = false
 		logger.Info("running the catalog jobs")
 
 		inner, stop := context.WithCancel(ctx)
@@ -144,6 +168,17 @@ func HoldLease(ctx context.Context, url string, logger *slog.Logger, work func(c
 		err := listen(inner, conn, wakes)
 		stop()
 		<-done
+		if ctx.Err() != nil {
+			// Shutting down. The lock is still held, so no other
+			// process can read the notifier's state until it has
+			// written its last word.
+			notify.Close(sink, shutdownFlush)
+		} else {
+			// Lost, not shutting down. Another process may take the
+			// lease within seconds, and the board and what was said
+			// are its to write from then on.
+			notify.Detach(sink)
+		}
 		_ = conn.Close(context.WithoutCancel(ctx))
 		if ctx.Err() == nil {
 			logger.Warn("lost the catalog jobs lease", "err", err)
@@ -151,31 +186,80 @@ func HoldLease(ctx context.Context, url string, logger *slog.Logger, work func(c
 	}
 }
 
-// takeLease opens a connection of its own and tries to claim the lock
-// on it. The connection is deliberately outside the pool: a lock taken
-// on a pooled connection is released when the pool recycles it, and the
-// pool would then hand that session to unrelated queries.
-func takeLease(ctx context.Context, url string, logger *slog.Logger, told *bool) (bool, *pgx.Conn) {
+// leaseWatch is what the lease loop remembers between attempts: whether
+// it has said it is waiting, how long the database has been out of
+// reach, and when the sink was last told so.
+type leaseWatch struct {
+	logger *slog.Logger
+	sink   notify.Sink
+	told   bool
+	down   time.Time
+	said   time.Time
+}
+
+// take opens a connection of its own and tries to claim the lock on it.
+// The connection is deliberately outside the pool: a lock taken on a
+// pooled connection is released when the pool recycles it, and the pool
+// would then hand that session to unrelated queries.
+func (w *leaseWatch) take(ctx context.Context, url string) (bool, *pgx.Conn) {
 	conn, err := pgx.Connect(ctx, url)
-	if err != nil {
-		if !*told {
-			logger.Warn("catalog jobs: cannot connect for the lease", "err", err)
-			*told = true
+	if err == nil {
+		var got bool
+		if err = conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, LeaseKey).Scan(&got); err == nil {
+			w.reached(got)
+			if got {
+				return true, conn
+			}
+			_ = conn.Close(context.WithoutCancel(ctx))
+			if !w.told {
+				// Ordinary during a deploy: the container being replaced
+				// still holds it. Said once, not every thirty seconds.
+				w.logger.Info("the catalog jobs are running elsewhere; waiting", "retry", LeaseRetry)
+				w.told = true
+			}
+			return false, nil
 		}
-		return false, nil
-	}
-	var got bool
-	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, LeaseKey).Scan(&got); err != nil || !got {
 		_ = conn.Close(context.WithoutCancel(ctx))
-		if !*told {
-			// Ordinary during a deploy: the container being replaced
-			// still holds it. Said once, not every thirty seconds.
-			logger.Info("the catalog jobs are running elsewhere; waiting", "retry", LeaseRetry)
-			*told = true
-		}
+	}
+	if ctx.Err() != nil {
 		return false, nil
 	}
-	return true, conn
+	if !w.told {
+		w.logger.Warn("catalog jobs: cannot connect for the lease", "err", err)
+		w.told = true
+	}
+	w.unreachable(err)
+	return false, nil
+}
+
+// unreachable notes a failed attempt, and tells the sink once the
+// database has been out of reach for DatabaseAlertAfter, then again
+// every DatabaseRemindEvery. The sink says it once; the repeats are what
+// let it remind a day on, and keep the board's stamp moving.
+func (w *leaseWatch) unreachable(err error) {
+	now := time.Now()
+	if w.down.IsZero() {
+		w.down = now
+	}
+	if now.Sub(w.down) < DatabaseAlertAfter {
+		return
+	}
+	if !w.said.IsZero() && now.Sub(w.said) < DatabaseRemindEvery {
+		return
+	}
+	w.said = now
+	report(w.sink, notify.Event{Job: notify.JobDatabase, Kind: notify.Failed,
+		Cause: notify.DatabaseDown, Since: w.down, Detail: err.Error()})
+}
+
+// reached notes a connection that worked. When the lock was taken, the
+// runner's TookOver is what tells the sink the database is back; when
+// another process holds it, this is.
+func (w *leaseWatch) reached(got bool) {
+	if !w.said.IsZero() && !got {
+		report(w.sink, notify.Event{Job: notify.JobDatabase, Kind: notify.Checked})
+	}
+	w.down, w.said = time.Time{}, time.Time{}
 }
 
 // listen turns notifications into wakes until the connection fails or

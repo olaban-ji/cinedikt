@@ -1,0 +1,4 @@
+🔴 <b>Search matching failing: unexpected error</b>
+<b>To fix:</b> tap Details below or check the Railway logs. Next try by 15:00.
+It failed twice in a row with an error the app doesn't recognise, so it may need a code fix. Search still works for films already matched.
+<blockquote expandable>Details: tmdb: HTTP 400: Invalid id</blockquote>

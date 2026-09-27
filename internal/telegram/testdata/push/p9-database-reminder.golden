@@ -1,0 +1,4 @@
+🔴 <b>Still can&#39;t reach the database</b>
+<b>To fix:</b> check the Postgres service in Railway.
+Unreachable since yesterday 13:20 (1 day 1 hr), so the site is probably down and the catalog jobs are on hold. The app retries every 30 s and will post here when the database is back.
+<blockquote expandable>Details: dial error</blockquote>

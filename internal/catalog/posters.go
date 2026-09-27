@@ -40,9 +40,13 @@ type PosterJob struct {
 	// Batch is how many ids are claimed per round.
 	Batch int
 
-	// Notify hears when a pass starts, catches up, or the key is spent.
-	// Nil leaves that in the log.
+	// Notify hears when a pass starts, how far it has got, and how it
+	// ends. Nil leaves that in the log.
 	Notify notify.Sink
+
+	// RetryAfter is how long a failed lookup waits before it is asked
+	// again. Zero takes PosterRetryAfter.
+	RetryAfter time.Duration
 
 	// Workers is how many lookups are in flight at once.
 	//
@@ -58,6 +62,12 @@ type PosterJob struct {
 // the query to find them is not most of the work.
 const DefaultPosterBatch = 500
 
+// PosterRetryAfter is how long a lookup that failed waits before it is
+// tried again. A day: long enough that a title OMDb keeps failing on is
+// not asked about on every twenty-minute pass, short enough that a
+// passing fault is repaired by tomorrow.
+const PosterRetryAfter = 24 * time.Hour
+
 // DefaultPosterWorkers is how many lookups run at once. Enough that the
 // rate limiter is what decides the pace rather than the round trip, and
 // few enough that the answers do not outrun the writes behind them.
@@ -71,6 +81,12 @@ const DefaultPosterWorkers = 16
 // dates within minutes of the first run, and the long tail fills in over
 // following nights.
 func (j *PosterJob) Run(ctx context.Context, schema string) error {
+	// A spent daily quota means every lookup would be told no. Asking
+	// anyway would start a pass only to pause it again, every rest
+	// interval until the quota comes back.
+	if p, ok := j.Client.(interface{ PausedUntil() time.Time }); ok && time.Now().Before(p.PausedUntil()) {
+		return nil
+	}
 	batch := j.Batch
 	if batch <= 0 {
 		batch = DefaultPosterBatch
@@ -79,38 +95,63 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 	if workers <= 0 {
 		workers = DefaultPosterWorkers
 	}
-	// A lookup that failed is written as `missing` so tomorrow retries
-	// it — which means this run must not pick it straight back up, or it
-	// would ask the same dead id until the budget ran out. Only rows
-	// last touched before this run started are offered.
+	retryAfter := j.RetryAfter
+	if retryAfter <= 0 {
+		retryAfter = PosterRetryAfter
+	}
+	// A failed lookup is written as `missing` and retried once
+	// RetryAfter has passed, never twice in the same pass: a row that
+	// fails during this pass is stamped close to now, which is later
+	// than the cutoff, so neither query hands it back until tomorrow.
 	started := time.Now()
-	outstanding, err := j.Store.postersOutstanding(ctx, schema, started)
+	cutoff := started.Add(-retryAfter)
+	outstanding, err := j.Store.postersOutstanding(ctx, schema, cutoff)
 	if stopping(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	var done, failed atomic.Int64
-	// Set when the key is spent. There is no point spending the rest of
-	// the budget being told no.
-	var spent atomic.Bool
+	// found is posters saved; blank is titles OMDb answered for with no
+	// poster, which are answers and are never asked about again, but are
+	// not posters; failed is lookups that went wrong.
+	var found, blank, failed atomic.Int64
+	// Set when the key is spent, or refused. There is no point spending
+	// the rest of the budget being told no.
+	var spent, keyBad atomic.Bool
+	// The last lookup error, for the report when every lookup fails.
+	// Boxed, because atomic.Value refuses a second concrete type and
+	// errors come in many.
+	var lastErr atomic.Pointer[error]
+	last := func() error {
+		if p := lastErr.Load(); p != nil {
+			return *p
+		}
+		return nil
+	}
 	track := newProgress(j.Logger, "filling in posters", outstanding)
 	run := pass{sink: j.Notify, job: notify.JobPosters}
 	if outstanding > 0 {
-		track.watch(j.Notify, notify.JobPosters)
+		track.watch(j.Notify, notify.Event{Job: notify.JobPosters})
 	}
 
 	for {
+		if keyBad.Load() {
+			return &KeyError{Provider: "OMDb", Err: last()}
+		}
 		if ctx.Err() != nil || spent.Load() {
 			j.Logger.Info("poster backfill paused",
-				"filled", done.Load(), "failed", failed.Load(), "quota", spent.Load())
+				"filled", found.Load(), "none", blank.Load(), "failed", failed.Load(), "quota", spent.Load())
 			if spent.Load() {
-				run.finish(notify.Paused, result(done.Load(), failed.Load(), "saved")+", the OMDb quota is spent")
+				until := time.Now().Add(omdb.QuotaPause)
+				if p, ok := j.Client.(interface{ PausedUntil() time.Time }); ok && p.PausedUntil().After(time.Now()) {
+					until = p.PausedUntil()
+				}
+				run.pause(notify.DailyLimit, found.Load(), failed.Load(), until)
 			}
 			return nil
 		}
-		ids, err := j.Store.postersWanted(ctx, schema, batch, started)
+		ids, err := j.Store.postersWanted(ctx, schema, batch, cutoff)
 		if stopping(err) {
 			return nil
 		}
@@ -118,13 +159,22 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 			return err
 		}
 		if len(ids) == 0 {
-			track.done(done.Load() + failed.Load())
+			answered := found.Load() + blank.Load()
+			track.done(answered + failed.Load())
 			j.Logger.Info("poster backfill caught up",
-				"filled", done.Load(), "failed", failed.Load())
-			run.finish(notify.CaughtUp, result(done.Load(), failed.Load(), "saved"))
+				"filled", found.Load(), "none", blank.Load(), "failed", failed.Load())
+			// Every lookup failing, with not one answer among them, is
+			// not a bad batch of titles. It is OMDb, or the way there.
+			// Those titles are held back for retryAfter, so that is when
+			// the job next finds out whether OMDb is back.
+			if failed.Load() >= failedLookups && answered == 0 {
+				return &LookupsFailedError{Provider: "OMDb", Count: failed.Load(), Last: last(),
+					RetryAt: time.Now().Add(retryAfter)}
+			}
+			run.finish(found.Load(), blank.Load(), failed.Load())
 			return nil
 		}
-		run.start(count(outstanding) + " still to look up")
+		run.start(outstanding)
 
 		// Lookups fan out; their answers fan back in to one writer that
 		// puts them away in batches. A write per lookup would make the
@@ -137,13 +187,16 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 			go func() {
 				defer wg.Done()
 				for id := range queue {
-					if ctx.Err() != nil || spent.Load() {
+					if ctx.Err() != nil || spent.Load() || keyBad.Load() {
 						continue // drain, so the sender is never blocked
 					}
 					got, err := j.Client.Lookup(ctx, id)
 					switch {
 					case errors.Is(err, omdb.ErrQuota):
 						spent.Store(true)
+					case errors.Is(err, omdb.ErrKey):
+						lastErr.Store(&err)
+						keyBad.Store(true)
 					case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 					case errors.Is(err, omdb.ErrNotFound):
 						// OMDb answered and has nothing. That is an
@@ -153,6 +206,8 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 					case err != nil:
 						// The lookup failed rather than came back
 						// empty, so it is worth asking again tomorrow.
+						j.Logger.Warn("poster lookup failed", "tconst", id, "err", err)
+						lastErr.Store(&err)
 						answers <- Poster{TConst: id}
 					default:
 						answers <- Poster{TConst: id, URL: got.Poster, Released: got.Released, OK: true}
@@ -163,10 +218,11 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 
 		written := make(chan error, 1)
 		go func() {
-			written <- j.Store.savePosters(ctx, schema, answers, func(ok, bad int64) {
-				done.Add(ok)
+			written <- j.Store.savePosters(ctx, schema, answers, func(withPoster, without, bad int64) {
+				found.Add(withPoster)
+				blank.Add(without)
 				failed.Add(bad)
-				track.step(done.Load() + failed.Load())
+				track.step(found.Load() + blank.Load() + failed.Load())
 			})
 		}()
 
@@ -196,8 +252,9 @@ func stopping(err error) bool {
 }
 
 // postersWanted is the next titles to look up: the ones never asked
-// about, and the ones whose lookup failed, most voted first.
-func (s *Store) postersWanted(ctx context.Context, schema string, limit int, before time.Time) ([]string, error) {
+// about, and the ones whose lookup failed before cutoff, most voted
+// first.
+func (s *Store) postersWanted(ctx context.Context, schema string, limit int, cutoff time.Time) ([]string, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
 		SELECT t.tconst
 		FROM %s.titles t
@@ -206,7 +263,7 @@ func (s *Store) postersWanted(ctx context.Context, schema string, limit int, bef
 		WHERE NOT t.is_adult
 		  AND (p.tconst IS NULL OR (p.status = 'missing' AND p.fetched_at < $2))
 		ORDER BY coalesce(r.num_votes, 0) DESC, t.tconst
-		LIMIT $1`, schema, schema), limit, before)
+		LIMIT $1`, schema, schema), limit, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: find titles wanting a poster: %w", err)
 	}
@@ -225,14 +282,14 @@ func (s *Store) postersWanted(ctx context.Context, schema string, limit int, bef
 // postersOutstanding is how many titles this run still has to ask about.
 // It is the same set postersWanted hands out, counted once at the start
 // so the log can say how far through that set the run is.
-func (s *Store) postersOutstanding(ctx context.Context, schema string, before time.Time) (int64, error) {
+func (s *Store) postersOutstanding(ctx context.Context, schema string, cutoff time.Time) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT count(*)
 		FROM %s.titles t
 		LEFT JOIN meta.posters p USING (tconst)
 		WHERE NOT t.is_adult
-		  AND (p.tconst IS NULL OR (p.status = 'missing' AND p.fetched_at < $1))`, schema), before).Scan(&n)
+		  AND (p.tconst IS NULL OR (p.status = 'missing' AND p.fetched_at < $1))`, schema), cutoff).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("catalog: count titles wanting a poster: %w", err)
 	}
@@ -247,7 +304,10 @@ const PosterWriteBatch = 500
 // savePosters drains answers and writes them in batches. One statement
 // per few hundred titles rather than one per title: at three-quarters of
 // a million lookups the round trips would otherwise be most of the work.
-func (s *Store) savePosters(ctx context.Context, schema string, answers <-chan Poster, progress func(ok, bad int64)) error {
+//
+// progress hears each batch as it is written: answers that came with a
+// poster, answers that came without one, and lookups that failed.
+func (s *Store) savePosters(ctx context.Context, schema string, answers <-chan Poster, progress func(withPoster, without, bad int64)) error {
 	pending := make([]Poster, 0, PosterWriteBatch)
 	flush := func() error {
 		if len(pending) == 0 {
@@ -256,15 +316,18 @@ func (s *Store) savePosters(ctx context.Context, schema string, answers <-chan P
 		if err := s.writePosters(ctx, schema, pending); err != nil {
 			return err
 		}
-		var ok, bad int64
+		var withPoster, without, bad int64
 		for _, p := range pending {
-			if p.OK {
-				ok++
-			} else {
+			switch {
+			case !p.OK:
 				bad++
+			case p.URL != "":
+				withPoster++
+			default:
+				without++
 			}
 		}
-		progress(ok, bad)
+		progress(withPoster, without, bad)
 		pending = pending[:0]
 		return nil
 	}

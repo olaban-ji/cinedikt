@@ -220,15 +220,27 @@ type retryableError struct{ err error }
 func (e *retryableError) Error() string { return e.err.Error() }
 func (e *retryableError) Unwrap() error { return e.err }
 
+// StatusError is TMDb answering with a status that is not an answer.
+// It carries the status so a caller can tell a refused key (401, 403),
+// which only a person can fix, from a fault that will pass.
+type StatusError struct {
+	Status  int
+	Message string
+}
+
+func (e *StatusError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("tmdb: HTTP %d", e.Status)
+	}
+	return fmt.Sprintf("tmdb: HTTP %d: %s", e.Status, e.Message)
+}
+
 func apiError(status int, body []byte) error {
 	var msg struct {
 		StatusMessage string `json:"status_message"`
 	}
 	_ = json.Unmarshal(body, &msg)
-	if msg.StatusMessage == "" {
-		return fmt.Errorf("tmdb: HTTP %d", status)
-	}
-	return fmt.Errorf("tmdb: HTTP %d: %s", status, msg.StatusMessage)
+	return &StatusError{Status: status, Message: msg.StatusMessage}
 }
 
 func parseRetryAfter(v string) time.Duration {

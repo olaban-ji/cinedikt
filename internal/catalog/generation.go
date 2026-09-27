@@ -77,11 +77,11 @@ func headAt(ctx context.Context, client *http.Client, url string, f File) (Stamp
 	req.Header.Set("User-Agent", UserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return Stamp{}, fmt.Errorf("catalog: HEAD %s: %w", f, err)
+		return Stamp{}, &IMDbError{Method: "HEAD", File: f, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return Stamp{}, fmt.Errorf("catalog: HEAD %s: HTTP %d", f, resp.StatusCode)
+		return Stamp{}, &IMDbError{Method: "HEAD", File: f, Status: resp.StatusCode}
 	}
 	raw := resp.Header.Get("Last-Modified")
 	if raw == "" {

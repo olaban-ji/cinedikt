@@ -246,3 +246,18 @@ func TestOptionsDoNotDependOnTheirOrder(t *testing.T) {
 		})
 	}
 }
+
+// A refused key is its own answer: the backfill stops on it and says
+// so, instead of recording three-quarters of a million lookups as
+// failed ones worth retrying tomorrow.
+func TestARefusedKeyIsErrKey(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"Response":"False","Error":"Invalid API key!"}`))
+	})
+	if _, err := c.Lookup(context.Background(), "tt0000001"); !errors.Is(err, ErrKey) {
+		t.Errorf("Lookup gave %v, want ErrKey", err)
+	}
+	if _, err := c.IMDbRating(context.Background(), "tt0000001"); !errors.Is(err, ErrKey) {
+		t.Errorf("IMDbRating gave %v, want ErrKey", err)
+	}
+}

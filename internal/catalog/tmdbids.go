@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -39,8 +40,8 @@ type TMDbIDJob struct {
 	Logger *slog.Logger
 	// Batch is how many are claimed per round; zero takes TMDbBatch.
 	Batch int
-	// Notify hears when a pass starts, catches up, or fails. Nil leaves
-	// that in the log.
+	// Notify hears when a pass starts, how far it has got, and how it
+	// ends. Nil leaves that in the log.
 	Notify notify.Sink
 }
 
@@ -67,9 +68,10 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 		batch = TMDbBatch
 	}
 	track := newProgress(j.Logger, "matching tmdb ids", n)
-	track.watch(j.Notify, notify.JobTMDbIDs)
+	track.watch(j.Notify, notify.Event{Job: notify.JobTMDbIDs})
 	run := pass{sink: j.Notify, job: notify.JobTMDbIDs}
 	var matched, none, failed int64
+	var last error
 	// A fault leaves the title unstamped, so the next pass tries it
 	// again — which means this pass must not, or the head of the queue
 	// would be the same failure until the process ended.
@@ -97,10 +99,15 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 				track.done(matched + none + failed)
 				j.Logger.Info("tmdb ids caught up", "matched", matched, "none", none, "failed", failed)
 			}
-			run.finish(notify.CaughtUp, matchResult(matched, none, failed))
+			// Every lookup failing, with not one answer among them, is
+			// TMDb, or the way there, rather than a bad batch.
+			if failed >= failedLookups && matched+none == 0 {
+				return &LookupsFailedError{Provider: "TMDb", Count: failed, Last: last}
+			}
+			run.finish(matched, none, failed)
 			return nil
 		}
-		run.start(count(n) + " still to match")
+		run.start(n)
 		for _, id := range fresh {
 			if ctx.Err() != nil {
 				return nil
@@ -125,8 +132,11 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 				return nil
 			case errors.Is(err, tmdb.ErrNotFound):
 				got = tmdb.Found{}
+			case refused(err):
+				return &KeyError{Provider: "TMDb", Err: err}
 			case err != nil:
 				failed++
+				last = err
 				j.Logger.Warn("tmdb id", "tconst", id, "err", err)
 				track.step(matched + none + failed)
 				continue
@@ -275,10 +285,11 @@ func fillTMDbIDs(ctx context.Context, job *TMDbIDJob, logger *slog.Logger, wakes
 			wait = PosterWaitForCatalog
 		default:
 			waited = false
-			if err := job.Run(ctx); err != nil {
+			err := job.Run(ctx)
+			if err != nil && ctx.Err() == nil {
 				logger.Warn("tmdb ids", "err", err)
-				report(job.Notify, notify.JobTMDbIDs, notify.Failed, err.Error())
 			}
+			reportRun(ctx, job.Notify, notify.JobTMDbIDs, err, time.Now().Add(wait))
 		}
 		// A new generation is the only thing that brings new titles.
 		// Its own channel, not the poster backfill's: sharing one

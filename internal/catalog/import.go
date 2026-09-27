@@ -28,18 +28,40 @@ type Importer struct {
 	// lines into the load.
 	Keep bool
 
-	// Notify hears the start and each phase. Nil means the log is the
+	// Notify hears the start and each step. Nil means the log is the
 	// only record, which is every run that has no chat configured.
 	Notify notify.Sink
 }
+
+// SkipReason is why an attempt that did not fail did not import either.
+type SkipReason int
+
+const (
+	SkipNone SkipReason = iota
+	// SkipLocked is another importer holding the import lock.
+	SkipLocked
+	// SkipNotReady is IMDb not having published a whole new set yet.
+	SkipNotReady
+	// SkipMoved is a file changing while the set was being fetched.
+	SkipMoved
+)
 
 // Outcome says what an attempt did, for the log and for the alert.
 type Outcome struct {
 	Ran       bool
 	Reason    string
+	Skip      SkipReason
 	Counts    Counts
 	Integrity float64
 	Took      time.Duration
+	// LiveSince is when the catalog that was live as the attempt began
+	// was built, and PrevFilms how many films it held. PrevAt is the
+	// same moment as LiveSince, named for what it is once a new
+	// catalog has replaced it. All three are zero before a first
+	// publish.
+	LiveSince time.Time
+	PrevFilms int64
+	PrevAt    time.Time
 }
 
 // RunOnce is one hour's attempt. It reads the five stamps, and runs a
@@ -61,41 +83,50 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 		return Outcome{}, fmt.Errorf("catalog: take import lock: %w", err)
 	}
 	if !got {
-		return Outcome{Reason: "another importer is running"}, nil
+		return Outcome{Reason: "another importer is running", Skip: SkipLocked}, nil
 	}
 	defer func() {
 		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, importLockKey)
 	}()
 
-	published, _, err := im.Store.Published(ctx)
+	published, at, err := im.Store.Published(ctx)
 	if err != nil {
 		return Outcome{}, err
+	}
+	// What the live catalog is, for every outcome from here: an alert
+	// about a failed hour says which catalog the site is still serving.
+	live := Outcome{LiveSince: at, PrevAt: at}
+	if live.PrevFilms, err = im.Store.PublishedFilms(ctx); err != nil {
+		return live, err
 	}
 	opened, err := Head(ctx, im.Client, Files)
 	if err != nil {
 		// A HEAD that failed is not a reason to guess. The hour is
 		// skipped and the alert is the caller's to raise.
-		return Outcome{}, err
+		return live, err
 	}
 	if ready, why := Ready(published, opened, Files); !ready {
 		im.note(ctx, opened, why)
-		return Outcome{Reason: why}, nil
+		live.Reason, live.Skip = why, SkipNotReady
+		return live, nil
 	}
 
 	im.Logger.Info("import starting", "files", len(Files), "step", "1/4 download")
-	report(im.Notify, notify.JobImport, notify.Started, "downloading the IMDb files")
+	// With the catalog still live, so a board that knew nothing before
+	// this (a first deploy, or a state that could not be read) does not
+	// spend the next two hours saying the site has none.
+	report(im.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Started,
+		Step: 1, Steps: 4, Phase: notify.PhaseDownload, LiveSince: live.LiveSince, Films: live.PrevFilms})
 
 	// Last generation's schema goes now rather than at the end of the
 	// run that made it, so its readers had the whole gap to finish.
 	if err := im.Store.DropRetired(ctx); err != nil {
-		return Outcome{}, err
+		return live, err
 	}
 
-	paths, err := Download(ctx, im.Client, im.Dir, Files, im.Logger, func(text string) {
-		report(im.Notify, notify.JobImport, notify.Working, text)
-	})
+	paths, err := Download(ctx, im.Client, im.Dir, Files, im.Logger, im.Notify)
 	if err != nil {
-		return Outcome{}, err
+		return live, err
 	}
 	if !im.Keep {
 		defer Discard(paths)
@@ -105,29 +136,35 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 	// while it was being fetched, what we hold is a mixture.
 	after, err := Head(ctx, im.Client, Files)
 	if err != nil {
-		return Outcome{}, err
+		return live, err
 	}
 	if same, which := Same(opened, after, Files); !same {
 		why := fmt.Sprintf("%s moved while the set was being fetched", which)
 		im.note(ctx, opened, why)
-		return Outcome{Reason: why}, nil
+		live.Reason, live.Skip = why, SkipMoved
+		return live, nil
 	}
 
 	im.Logger.Info("download complete", "step", "2/4 load")
-	report(im.Notify, notify.JobImport, notify.Working, "loading the files")
 	counts, integrity, err := im.load(ctx, paths)
 	if err != nil {
-		return Outcome{}, err
+		return live, err
 	}
 
 	if err := im.Store.Publish(ctx, opened, counts); err != nil {
-		return Outcome{}, err
+		return live, err
 	}
 	im.note(ctx, opened, "published")
-	return Outcome{
-		Ran: true, Reason: "published", Counts: counts,
-		Integrity: integrity, Took: time.Since(started),
-	}, nil
+	out := live
+	out.Ran, out.Reason, out.Counts = true, "published", counts
+	out.Integrity, out.Took = integrity, time.Since(started)
+	return out, nil
+}
+
+// step tells the notifier which of the four steps the import is on.
+func (im *Importer) step(step int, phase, noun string) {
+	report(im.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Progress,
+		Step: step, Steps: 4, Phase: phase, Noun: noun})
 }
 
 // note records what this attempt saw. It never fails the attempt: the
@@ -146,7 +183,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return Counts{}, 0, err
 	}
 
-	report(im.Notify, notify.JobImport, notify.Working, "loading the titles")
+	im.step(2, notify.PhaseLoad, "films")
 	titles, err := OpenFile(paths[TitleBasics])
 	if err != nil {
 		return Counts{}, 0, err
@@ -157,11 +194,10 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return Counts{}, 0, err
 	}
 	im.Logger.Info("loaded titles", "movies", n)
-	report(im.Notify, notify.JobImport, notify.Working, "loaded "+count(n)+" titles")
 
 	credited := make(NConsts, 1<<20)
 
-	report(im.Notify, notify.JobImport, notify.Working, "loading the credits")
+	im.step(2, notify.PhaseLoad, "credits")
 	principals, err := OpenFile(paths[TitlePrincipals])
 	if err != nil {
 		return Counts{}, 0, err
@@ -172,9 +208,8 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return Counts{}, 0, err
 	}
 	im.Logger.Info("loaded principals", "credits", n)
-	report(im.Notify, notify.JobImport, notify.Working, "loaded "+count(n)+" credits")
 
-	report(im.Notify, notify.JobImport, notify.Working, "loading the directors")
+	im.step(2, notify.PhaseLoad, "directors")
 	crew, err := OpenFile(paths[TitleCrew])
 	if err != nil {
 		return Counts{}, 0, err
@@ -185,9 +220,8 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return Counts{}, 0, err
 	}
 	im.Logger.Info("loaded directors", "credits", n)
-	report(im.Notify, notify.JobImport, notify.Working, "loaded "+count(n)+" director credits")
 
-	report(im.Notify, notify.JobImport, notify.Working, "loading the ratings")
+	im.step(2, notify.PhaseLoad, "ratings")
 	ratings, err := OpenFile(paths[TitleRatings])
 	if err != nil {
 		return Counts{}, 0, err
@@ -198,9 +232,8 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return Counts{}, 0, err
 	}
 	im.Logger.Info("loaded ratings", "rated", n)
-	report(im.Notify, notify.JobImport, notify.Working, "loaded "+count(n)+" ratings")
 
-	report(im.Notify, notify.JobImport, notify.Working, "loading the names")
+	im.step(2, notify.PhaseLoad, "people")
 	names, err := OpenFile(paths[NameBasics])
 	if err != nil {
 		return Counts{}, 0, err
@@ -211,11 +244,10 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return Counts{}, 0, err
 	}
 	im.Logger.Info("loaded names", "people", n)
-	report(im.Notify, notify.JobImport, notify.Working, "loaded "+count(n)+" people")
 
 	im.Logger.Info("building indexes and making the tables durable",
 		"step", "3/4 finish", "note", "this takes a minute or two and logs nothing until it is done")
-	report(im.Notify, notify.JobImport, notify.Working, "building the indexes")
+	im.step(3, notify.PhaseIndexes, "")
 	if err := im.Store.Finish(ctx, im.Logger); err != nil {
 		return Counts{}, 0, err
 	}
@@ -228,7 +260,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return counts, integrity, err
 	}
 	im.Logger.Info("load checked", "step", "4/4 publish", "integrity", fmt.Sprintf("%.4f", integrity))
-	report(im.Notify, notify.JobImport, notify.Working, "publishing the catalog")
+	im.step(4, notify.PhaseLive, "")
 	return counts, integrity, nil
 }
 
@@ -245,15 +277,15 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 // late upstream publish into a failed deploy.
 const StaleAfter = 36 * time.Hour
 
-// Stale reports whether the published catalog is old enough to alert on.
-func (s *Store) Stale(ctx context.Context, now time.Time) (bool, time.Duration, error) {
+// Stale reports whether the published catalog is old enough to alert
+// on, and when it was built: zero when nothing has been published.
+func (s *Store) Stale(ctx context.Context, now time.Time) (bool, time.Time, error) {
 	_, at, err := s.Published(ctx)
 	if err != nil {
-		return false, 0, err
+		return false, time.Time{}, err
 	}
 	if at.IsZero() {
-		return true, 0, nil
+		return true, at, nil
 	}
-	age := now.Sub(at)
-	return age > StaleAfter, age, nil
+	return now.Sub(at) > StaleAfter, at, nil
 }

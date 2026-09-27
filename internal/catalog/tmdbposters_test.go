@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -275,5 +276,61 @@ func TestWantingAPosterIgnoresTitlesThatHaveOne(t *testing.T) {
 	}
 	if _, _, _, wanted, _ := posterRow(t, s, "tt0111161"); !wanted {
 		t.Error("a title with no poster was not marked")
+	}
+}
+
+// TestARefusedTMDbKeyEndsThePass: a 401 is the key, not the title, and
+// every title after it would be told the same.
+func TestARefusedTMDbKeyEndsThePass(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	blankPosters(t, s)
+	refused := &tmdb.StatusError{Status: 401, Message: "Invalid API key"}
+	find := &fakeFinder{errs: map[string]error{}}
+	for _, id := range []string{"tt0111161", "tt0133093", "tt0234215", "tt0000001", "tt0000002"} {
+		find.errs[id] = refused
+	}
+	job := &TMDbJob{Store: s, Client: find, Logger: quietLogger(), MinVotes: 0}
+	err := job.Run(ctx)
+	var key *KeyError
+	if !errors.As(err, &key) || key.Provider != "TMDb" {
+		t.Fatalf("err = %v, want a KeyError for TMDb", err)
+	}
+	if n := len(find.askedFor()); n != 1 {
+		t.Errorf("asked %d titles after the key was refused, want 1", n)
+	}
+}
+
+// TestEveryTMDbLookupFailingIsAFailure: fifty faults and not one answer
+// is TMDb, or the way there, and the pass says so instead of finishing.
+func TestEveryTMDbLookupFailingIsAFailure(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	// meta outlives every test, and a row another test left wanted is
+	// in the queue at any floor.
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.posters`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO meta.posters (tconst, status, fetched_at, votes)
+		SELECT 'tt99' || lpad(g::text, 5, '0'), 'ok', now(), 1000000 + g
+		FROM generate_series(1, 60) g`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = s.pool.Exec(context.Background(), `DELETE FROM meta.posters WHERE votes > 1000000`)
+	})
+	find := &fakeFinder{errs: map[string]error{}}
+	for g := 1; g <= 60; g++ {
+		find.errs[fmt.Sprintf("tt99%05d", g)] = errors.New("tmdb: HTTP 502")
+	}
+	job := &TMDbJob{Store: s, Client: find, Logger: quietLogger(), MinVotes: 1000001}
+	err := job.Run(ctx)
+	var all *LookupsFailedError
+	// The pass ends when a batch comes back all tried, so it sees the
+	// first page of the queue, not all of it; that is already enough.
+	if !errors.As(err, &all) || all.Provider != "TMDb" || all.Count < failedLookups {
+		t.Fatalf("err = %v, want a LookupsFailedError for at least %d", err, failedLookups)
 	}
 }

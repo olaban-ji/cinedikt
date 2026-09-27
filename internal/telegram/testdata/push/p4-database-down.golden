@@ -1,0 +1,4 @@
+🔴 <b>Can&#39;t reach the database</b>
+<b>To fix:</b> check the Postgres service in Railway.
+The app hasn't been able to connect to Postgres since 14:18, so the site is probably down and the catalog jobs are on hold. The app retries every 30 s and will post here when the database is back.
+<blockquote expandable>Details: failed to connect to: (postgres.railway.internal): dial error: dial tcp: connect: connection refused</blockquote>

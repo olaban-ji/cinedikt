@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // leaseURL is the test database, or a skip.
@@ -57,12 +59,12 @@ func TestOnlyOneRunnerHoldsTheLease(t *testing.T) {
 
 	first, stopFirst := context.WithCancel(context.Background())
 	defer stopFirst()
-	go HoldLease(first, url, quietLogger(), c.work)
+	go HoldLease(first, url, quietLogger(), nil, c.work)
 	until(t, "the first runner to start", func() bool { return c.now.Load() == 1 })
 
 	second, stopSecond := context.WithCancel(context.Background())
 	defer stopSecond()
-	go HoldLease(second, url, quietLogger(), c.work)
+	go HoldLease(second, url, quietLogger(), nil, c.work)
 
 	time.Sleep(300 * time.Millisecond)
 	if c.both.Load() {
@@ -87,12 +89,12 @@ func TestTheLeasePassesOnWhenAHolderStops(t *testing.T) {
 	var c counted
 
 	leaving, stopLeaving := context.WithCancel(context.Background())
-	go HoldLease(leaving, url, quietLogger(), c.work)
+	go HoldLease(leaving, url, quietLogger(), nil, c.work)
 	until(t, "the outgoing runner to start", func() bool { return c.now.Load() == 1 })
 
 	arriving, stopArriving := context.WithCancel(context.Background())
 	defer stopArriving()
-	go HoldLease(arriving, url, quietLogger(), c.work)
+	go HoldLease(arriving, url, quietLogger(), nil, c.work)
 	time.Sleep(200 * time.Millisecond)
 	if c.runs.Load() != 1 {
 		t.Fatalf("the arriving runner started while the lease was held")
@@ -103,6 +105,55 @@ func TestTheLeasePassesOnWhenAHolderStops(t *testing.T) {
 	until(t, "the arriving runner to take over", func() bool { return c.runs.Load() == 2 })
 	if c.both.Load() {
 		t.Error("the two overlapped")
+	}
+}
+
+// leaseSink is a sink that counts being detached and being closed.
+type leaseSink struct {
+	recordingSink
+	detached, closed atomic.Int32
+}
+
+func (s *leaseSink) Detach()               { s.detached.Add(1) }
+func (s *leaseSink) Close(context.Context) { s.closed.Add(1) }
+
+// TestALostLeaseDetachesTheSink: when the lease connection dies under a
+// running process, another may take the jobs at once, and with them the
+// board. The sink is told, so the old holder stops writing it; shutting
+// down is the other way to end, and is a Close.
+func TestALostLeaseDetachesTheSink(t *testing.T) {
+	url := leaseURL(t)
+	var c counted
+	var sink leaseSink
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		HoldLease(ctx, url, quietLogger(), &sink, c.work)
+	}()
+	until(t, "the runner to start", func() bool { return c.now.Load() == 1 })
+
+	admin, err := pgx.Connect(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.Background())
+	if _, err := admin.Exec(context.Background(), `
+		SELECT pg_terminate_backend(pid) FROM pg_locks
+		WHERE locktype = 'advisory' AND classid = 0 AND objid = $1 AND granted`, int64(LeaseKey)); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "the sink to be detached", func() bool { return sink.detached.Load() == 1 })
+	if sink.closed.Load() != 0 {
+		t.Error("a lost lease closed the sink; it is only detached")
+	}
+	until(t, "the runner to take the lease back", func() bool { return c.runs.Load() == 2 })
+
+	stop()
+	<-done
+	if sink.closed.Load() != 1 || sink.detached.Load() != 1 {
+		t.Errorf("after shutdown: %d closes, %d detaches; want the one close and no more detaches",
+			sink.closed.Load(), sink.detached.Load())
 	}
 }
 

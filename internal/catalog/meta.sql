@@ -179,3 +179,13 @@ CREATE TABLE IF NOT EXISTS meta.og_images (
     made_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (tconst, v)
 );
+
+-- What the Telegram notifier has already said: which alerts went out,
+-- how loudly the live catalog has been called old, and which message
+-- is the pinned board. One row, so a deploy picks up where the last
+-- process stopped instead of saying it all again.
+CREATE TABLE IF NOT EXISTS meta.notify (
+    id         int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    state      jsonb NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);

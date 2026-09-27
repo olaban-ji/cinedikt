@@ -1,0 +1,4 @@
+🔴 <b>Catalog update failing: unexpected error</b>
+<b>To fix:</b> tap Details below or check the Railway logs. Next try 15:00.
+It failed twice in a row with an error the app doesn't recognise, so it may need a code fix. The site is fine and still shows yesterday's catalog.
+<blockquote expandable>Details: catalog: title.basics has no Last-Modified</blockquote>

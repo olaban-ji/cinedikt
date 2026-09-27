@@ -158,6 +158,26 @@ func TestUnauthorizedIsNotRetried(t *testing.T) {
 	if want := "Invalid API key"; err != nil && !contains(err.Error(), want) {
 		t.Errorf("error %q does not mention %q", err, want)
 	}
+	// The status travels as a value, so the catalog can tell a refused
+	// key from a fault without reading the text.
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized {
+		t.Errorf("error %v is not a *StatusError with status 401", err)
+	}
+}
+
+func TestAServerFaultIsAStatusErrorToo(t *testing.T) {
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	_, err := c.Movie(context.Background(), 603)
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusBadRequest {
+		t.Fatalf("error %v is not a *StatusError with status 400", err)
+	}
+	if err.Error() != "tmdb: HTTP 400" {
+		t.Errorf("error text = %q, want the text it always had", err)
+	}
 }
 
 func TestSearchMovies(t *testing.T) {

@@ -95,6 +95,8 @@ func parseTitle(body []byte, asked string) (Title, error) {
 		switch {
 		case strings.Contains(strings.ToLower(payload.Error), "limit reached"):
 			return Title{}, ErrQuota
+		case badKey(payload.Error):
+			return Title{}, ErrKey
 		case settled(payload.Error, asked):
 			return Title{}, ErrNotFound
 		default:

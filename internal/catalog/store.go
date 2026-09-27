@@ -199,15 +199,15 @@ const MinIntegrity = 0.99
 func (s *Store) Check(ctx context.Context, counts Counts) (float64, error) {
 	switch {
 	case counts.Titles == 0:
-		return 0, fmt.Errorf("catalog: no titles loaded")
+		return 0, &IntegrityError{Want: MinIntegrity, Reason: "no titles loaded"}
 	case counts.Names == 0:
-		return 0, fmt.Errorf("catalog: no names loaded")
+		return 0, &IntegrityError{Want: MinIntegrity, Reason: "no names loaded"}
 	case counts.Principals == 0:
-		return 0, fmt.Errorf("catalog: no principals loaded")
+		return 0, &IntegrityError{Want: MinIntegrity, Reason: "no principals loaded"}
 	case counts.Directors == 0:
-		return 0, fmt.Errorf("catalog: no directors loaded")
+		return 0, &IntegrityError{Want: MinIntegrity, Reason: "no directors loaded"}
 	case counts.Ratings == 0:
-		return 0, fmt.Errorf("catalog: no ratings loaded")
+		return 0, &IntegrityError{Want: MinIntegrity, Reason: "no ratings loaded"}
 	}
 	var share float64
 	err := s.pool.QueryRow(ctx, fmt.Sprintf(`
@@ -222,8 +222,7 @@ func (s *Store) Check(ctx context.Context, counts Counts) (float64, error) {
 		return 0, fmt.Errorf("catalog: integrity check: %w", err)
 	}
 	if share < MinIntegrity {
-		return share, fmt.Errorf("catalog: only %.4f of credits name a stored title, want %.2f "+
-			"(the files are probably from different generations)", share, MinIntegrity)
+		return share, &IntegrityError{Share: share, Want: MinIntegrity}
 	}
 	return share, nil
 }
@@ -396,6 +395,51 @@ func (s *Store) Published(ctx context.Context) (Generation, time.Time, error) {
 		gen[File(name)] = Stamp{LastModified: s.LastModified, ETag: s.ETag, Length: s.Length}
 	}
 	return gen, at, nil
+}
+
+// PublishedFilms is how many films the live catalog holds, from the
+// counts recorded when it was published. Zero when nothing has been.
+func (s *Store) PublishedFilms(ctx context.Context) (int64, error) {
+	var n *int64
+	err := s.pool.QueryRow(ctx, `SELECT (row_counts->>'titles')::bigint FROM meta.generation WHERE id = 1`).Scan(&n)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("catalog: read published counts: %w", err)
+	}
+	if n == nil {
+		return 0, nil
+	}
+	return *n, nil
+}
+
+// LoadNotifyState is what the notifier last saved about what it had
+// said, or nothing on a database it has never written to. With
+// SaveNotifyState it makes the Store a notify.Memory.
+func (s *Store) LoadNotifyState(ctx context.Context) ([]byte, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT state FROM meta.notify WHERE id = 1`).Scan(&raw)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("catalog: read notify state: %w", err)
+	}
+	return raw, nil
+}
+
+// SaveNotifyState replaces the notifier's saved state.
+func (s *Store) SaveNotifyState(ctx context.Context, state []byte) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO meta.notify (id, state, updated_at)
+		VALUES (1, $1, now())
+		ON CONFLICT (id) DO UPDATE
+		SET state = EXCLUDED.state, updated_at = EXCLUDED.updated_at`, state)
+	if err != nil {
+		return fmt.Errorf("catalog: save notify state: %w", err)
+	}
+	return nil
 }
 
 // LiveReady reports whether a catalog has ever been published. Search

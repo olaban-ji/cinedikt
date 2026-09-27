@@ -78,6 +78,14 @@ type Config struct {
 	// BotFather; the chat id is the private chat or group it posts into.
 	TelegramBotToken string
 	TelegramChatID   string
+	// NotifyTimezone is the IANA zone the notifications write times in,
+	// such as Africa/Lagos. Empty writes them in UTC and says so.
+	NotifyTimezone string
+	// RailwayEnvironment and RailwayCommit are what Railway injects
+	// about the running deploy. The notifications name it with them, so
+	// a board can be matched to the deploy that wrote it.
+	RailwayEnvironment string
+	RailwayCommit      string
 
 	// Crawl scoring; zero values mean the crawler's defaults.
 	CrawlThresholdBase float64
@@ -202,29 +210,32 @@ func Load() (Config, error) {
 	}
 
 	c := Config{
-		Environment:       env,
-		DatabaseURL:       os.Getenv("DATABASE_URL"),
-		APIMaxConns:       int32(apiConns),
-		ImporterMaxConns:  int32(importerConns),
-		EmbeddedImporter:  embedded,
-		OMDbBackfillRate:  backfillRate,
-		PosterWorkers:     posterWorkers,
-		TMDbSweepMinVotes: sweepVotes,
-		TelegramBotToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramChatID:    os.Getenv("TELEGRAM_CHAT_ID"),
-		TMDBAPIKey:        os.Getenv("TMDB_API_KEY"),
-		TMDBAccessToken:   os.Getenv("TMDB_ACCESS_TOKEN"),
-		TMDBCacheTTL:      ttl,
-		TMDBRatePerSecond: tmdbRate,
-		OMDBAPIKey:        os.Getenv("OMDB_API_KEY"),
-		PostHogToken:      os.Getenv("POSTHOG_PROJECT_TOKEN"),
-		PostHogHost:       envOr("POSTHOG_HOST", "https://us.i.posthog.com"),
-		RedisURL:          os.Getenv("REDIS_URL"),
-		Neo4jURI:          envOr("NEO4J_URI", "bolt://localhost:7687"),
-		Neo4jUser:         envOr("NEO4J_USER", "neo4j"),
-		Neo4jPassword:     os.Getenv("NEO4J_PASSWORD"),
-		APIAddr:           listenAddr(),
-		WebDir:            os.Getenv("WEB_DIR"),
+		Environment:        env,
+		DatabaseURL:        os.Getenv("DATABASE_URL"),
+		APIMaxConns:        int32(apiConns),
+		ImporterMaxConns:   int32(importerConns),
+		EmbeddedImporter:   embedded,
+		OMDbBackfillRate:   backfillRate,
+		PosterWorkers:      posterWorkers,
+		TMDbSweepMinVotes:  sweepVotes,
+		TelegramBotToken:   os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:     os.Getenv("TELEGRAM_CHAT_ID"),
+		NotifyTimezone:     strings.TrimSpace(os.Getenv("NOTIFY_TIMEZONE")),
+		RailwayEnvironment: os.Getenv("RAILWAY_ENVIRONMENT_NAME"),
+		RailwayCommit:      os.Getenv("RAILWAY_GIT_COMMIT_SHA"),
+		TMDBAPIKey:         os.Getenv("TMDB_API_KEY"),
+		TMDBAccessToken:    os.Getenv("TMDB_ACCESS_TOKEN"),
+		TMDBCacheTTL:       ttl,
+		TMDBRatePerSecond:  tmdbRate,
+		OMDBAPIKey:         os.Getenv("OMDB_API_KEY"),
+		PostHogToken:       os.Getenv("POSTHOG_PROJECT_TOKEN"),
+		PostHogHost:        envOr("POSTHOG_HOST", "https://us.i.posthog.com"),
+		RedisURL:           os.Getenv("REDIS_URL"),
+		Neo4jURI:           envOr("NEO4J_URI", "bolt://localhost:7687"),
+		Neo4jUser:          envOr("NEO4J_USER", "neo4j"),
+		Neo4jPassword:      os.Getenv("NEO4J_PASSWORD"),
+		APIAddr:            listenAddr(),
+		WebDir:             os.Getenv("WEB_DIR"),
 
 		CrawlThresholdBase: base,
 		CrawlOrderPenalty:  penalty,

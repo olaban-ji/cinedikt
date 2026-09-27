@@ -161,9 +161,6 @@ func TestTheImporterRunsInTheAPIUnlessTurnedOff(t *testing.T) {
 	}
 }
 
-// TestSweepFloorKeepsAnExplicitZero is the difference between "fetch a
-// picture for the well-known ones" and "fetch one for everything TMDb
-// has". Zero is a real answer here, not a missing variable.
 func TestTelegramIsReadAndOptional(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/cinedikt")
 	t.Setenv("TELEGRAM_BOT_TOKEN", "")
@@ -187,6 +184,25 @@ func TestTelegramIsReadAndOptional(t *testing.T) {
 	}
 }
 
+// TestNotificationsKnowTheZoneAndTheDeploy is what the board's times
+// and footer are written from.
+func TestNotificationsKnowTheZoneAndTheDeploy(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("NOTIFY_TIMEZONE", " Africa/Lagos ")
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "dev")
+	t.Setenv("RAILWAY_GIT_COMMIT_SHA", "d0170089f00")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NotifyTimezone != "Africa/Lagos" || cfg.RailwayEnvironment != "dev" || cfg.RailwayCommit != "d0170089f00" {
+		t.Fatalf("got %q %q %q", cfg.NotifyTimezone, cfg.RailwayEnvironment, cfg.RailwayCommit)
+	}
+}
+
+// TestSweepFloorKeepsAnExplicitZero is the difference between "fetch a
+// picture for the well-known ones" and "fetch one for everything TMDb
+// has". Zero is a real answer here, not a missing variable.
 func TestSweepFloorKeepsAnExplicitZero(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x/y")
 

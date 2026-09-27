@@ -15,14 +15,24 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+	_ "time/tzdata"
 
 	"cinedikt/internal/catalog"
 	"cinedikt/internal/config"
+	"cinedikt/internal/notify"
 	"cinedikt/internal/telegram"
 	"cinedikt/internal/tmdb"
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run is the whole command, returning the exit code rather than calling
+// os.Exit itself, so the deferred close of the notifier gets to send
+// its last message before the process ends.
+func run() int {
 	once := flag.Bool("once", false, "run a single attempt and exit")
 	postersOnly := flag.Bool("posters-only", false, "fill in posters and release dates against the live catalog, and do not import")
 	dir := flag.String("dir", "", "where to keep the downloaded files (default: a temp directory)")
@@ -32,12 +42,12 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("config", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	logger := config.NewLogger(slog.LevelInfo).With("component", "importer")
 	if cfg.DatabaseURL == "" {
 		logger.Error("DATABASE_URL is not set")
-		os.Exit(1)
+		return 1
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -46,9 +56,23 @@ func main() {
 	store, err := catalog.Open(ctx, cfg.DatabaseURL, cfg.ImporterMaxConns)
 	if err != nil {
 		logger.Error("open catalog", "err", err)
-		os.Exit(1)
+		return 1
 	}
 	defer store.Close()
+
+	// Opened after the store, so it is closed before it: the notifier's
+	// last save goes through that store. A one-off run sends one quiet
+	// summary when it closes, and never touches the board the long
+	// running jobs keep.
+	sink := telegram.Start(ctx, telegram.Config{
+		Token:    cfg.TelegramBotToken,
+		ChatID:   cfg.TelegramChatID,
+		Location: telegram.Zone(cfg.NotifyTimezone, logger),
+		Env:      cfg.RailwayEnvironment,
+		Commit:   cfg.RailwayCommit,
+		Manual:   *once || *postersOnly,
+	}, logger)
+	defer notify.Close(sink, 5*time.Second)
 
 	runner := &catalog.Runner{
 		// Its own pool already, opened above at ImporterMaxConns. The
@@ -68,31 +92,32 @@ func main() {
 		TMDbRate:          cfg.TMDBRatePerSecond,
 		TMDbSweepMinVotes: cfg.TMDbSweepMinVotes,
 		Keep:              *keep,
-		Notify:            telegram.Start(ctx, cfg.TelegramBotToken, cfg.TelegramChatID, logger),
+		Notify:            sink,
 	}
 
 	switch {
 	case *postersOnly:
 		if err := runner.Posters(ctx); err != nil {
 			logger.Error("poster backfill", "err", err)
-			os.Exit(1)
+			return 1
 		}
 		// And the second chance for what OMDb had nothing for, so one
 		// command still leaves the pictures as complete as they get.
 		if err := runner.TMDbPosters(ctx); err != nil {
 			logger.Error("tmdb poster fallback", "err", err)
-			os.Exit(1)
+			return 1
 		}
 	case *once:
 		if !runner.Once(ctx) {
-			os.Exit(1)
+			return 1
 		}
 	default:
 		if err := runner.Start(ctx); err != nil {
 			logger.Error("start the catalog jobs", "err", err)
-			os.Exit(1)
+			return 1
 		}
 		<-ctx.Done()
 		logger.Info("importer stopping")
 	}
+	return 0
 }

@@ -240,7 +240,7 @@ Publish is one transaction: `catalog` becomes `catalog_old`, `catalog_next` beco
 
 `meta.last_check` records every HEAD, including the hours that did not import, so "checked an hour ago, nothing had moved" is distinguishable from "nothing has run for a day" without reading logs.
 
-A catalog older than 36 hours is logged, and said on Telegram if that is configured. It is deliberately not a health-check failure. A stale catalog still serves, and failing the check would turn a late upstream publish into a failed deploy.
+A catalog older than 36 hours is logged every hour. On Telegram, if that is configured, it is said once per catalog at 36 hours and once more at 72 hours, and a restart does not say it again. It is deliberately not a health-check failure. A stale catalog still serves, and failing the check would turn a late upstream publish into a failed deploy.
 
 ### Posters, dates, colours, ids
 
@@ -248,7 +248,7 @@ The dump has no pictures and no month or day. One OMDb lookup per title stores t
 
 That job is not part of an import. A full first pass is about 27 minutes at the default 500 requests a second across 256 workers, measured nearer 466 a second. Nothing waits on it. A poster appears the moment it lands, and the films anyone would actually search are done in the first minute, because the job takes the most voted first. It picks up where it left off. `meta` is never renamed by the daily swap, so what it learns survives every future generation.
 
-A lookup that came back empty is still an answer, and is not asked again. Only a lookup that failed is retried, and not within the same run. An address that has been seen to 404 is `dead`. Image edges replay a miss for about five minutes and then serve the picture again, so the first 404 only keeps a film off the draw that saw it. A second, after that window, is the picture actually being gone, and it is written down so the next cold screen does not ask and the TMDb job has something to repair. A host that does not answer at all is neither: Amazon being briefly unreachable never empties the opening screen and never queues a live poster for replacement.
+A lookup that came back empty is still an answer, and is not asked again. Only a lookup that failed is retried: after a day, and never twice in the same run. An address that has been seen to 404 is `dead`. Image edges replay a miss for about five minutes and then serve the picture again, so the first 404 only keeps a film off the draw that saw it. A second, after that window, is the picture actually being gone, and it is written down so the next cold screen does not ask and the TMDb job has something to repair. A host that does not answer at all is neither: Amazon being briefly unreachable never empties the opening screen and never queues a live poster for replacement.
 
 OMDb has a poster for about 59% of the catalog. TMDb has one for roughly three-quarters of what is left. Without TMDb credentials those movies simply have no picture. With them, two jobs share one rate-limited client, so they do not each spend TMDb's ceiling:
 
@@ -392,12 +392,21 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 | `TMDB_SWEEP_MIN_VOTES` | 100 | Vote floor for fetching a poster nobody has asked for yet. `0` sweeps every title with no picture. An explicit 0 is kept |
 | `TMDB_CACHE_TTL` | `168h` | Redis TTL for TMDb search responses, when `REDIS_URL` is set. Without it, those responses are not cached |
 | `REDIS_URL` | | Optional cache for that fallback only, prefix `cinedikt:tmdb` |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | Import started, published, or failed; how the poster, id, and colour jobs are getting on. Both empty, and nothing is sent. The token is from BotFather. The chat id is `message.chat.id` from `getUpdates` after Start — positive for a private chat, negative for a group |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | Job notifications, described below. Both empty, and nothing is sent. The token is from BotFather. The chat id is `message.chat.id` from `getUpdates` after Start — positive for a private chat, negative for a group. In a group the bot needs permission to pin messages |
+| `NOTIFY_TIMEZONE` | UTC | The zone notification times are written in, such as `Africa/Lagos`. Unset or unknown, they are UTC and the board says so |
 | `WEB_DIR` | | Built frontend. The image sets `/app/web/dist` |
 | `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | host `https://us.i.posthog.com` | Read only in production. The API serves them to the page; the token is a write-only key. The page may instead be built with `VITE_POSTHOG_PROJECT_TOKEN` and `VITE_POSTHOG_HOST` |
 | `NEO4J_*`, `CRAWL_THRESHOLD_BASE`, `CRAWL_ORDER_PENALTY`, `MAX_COLD_CRAWLS` | | The old map. Ignored while `DATABASE_URL` is set |
 
 If `DATABASE_URL` is empty, startup requires a TMDb credential and `NEO4J_PASSWORD`. A deployment with nothing but a database URL starts.
+
+### Telegram
+
+The process that runs the catalog jobs keeps one pinned message in the chat: a headline that says whether anything needs you, then one line for each of the five jobs (Catalog, Posters, Backup posters, Search matching, Opening colours), and a footer with the next catalog check and the deploy. It is edited in place, at most once a minute while something is running and at least once an hour, and an edit never makes a sound. A next check already in the past, or an "updated" time more than an hour old, means the process is stuck.
+
+A new message is sent only when there is news, and its second line says whether anything is needed of you, so a lock screen shows the answer before the explanation. Good news is quiet: a new catalog going live, a failure that is over, a pass that ran for half an hour or more. It lands in the notification list without a sound. A sound is kept for what has lasted or needs you: a failure that has repeated for about an hour (at once for a refused API key, at the second attempt for an error of no known kind), the database unreachable for two minutes, the catalog at 72 hours old (and at 36 while its updates are failing; late only because IMDb has published nothing, it is said at 36 without a sound), and a reminder for anything still failing a day later. The opening colours are cosmetic and never make a sound. Each is said once. What has been said lives in `meta.notify`, so a deploy does not repeat it. Only the process that holds the jobs writes the board: a container waiting for the lease never touches it, and one that loses the lease stops, except to say the database is unreachable while nobody can hold it.
+
+A one-off `cmd/importer -once` or `-posters-only` sends one quiet summary when it ends and leaves the board alone.
 
 ## Logs
 
@@ -425,7 +434,7 @@ The [Dockerfile](Dockerfile) builds the map with Node 22, the API with Go 1.26 (
 
 The restart policy is left at Railway's default, `ON_FAILURE`, and the service is not allowed to sleep. Declaring either would leave `config plan` permanently dirty, because the platform stores a default as null. Both matter: the importer runs between requests, and a sleeping machine would drop that work.
 
-Variables to set on the service: `DATABASE_URL`, and, for pictures and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should say when they publish. `WEB_DIR` only if it should differ from the path the image already sets.
+Variables to set on the service: `DATABASE_URL`, and, for pictures and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `WEB_DIR` only if it should differ from the path the image already sets.
 
 ## Tests
 

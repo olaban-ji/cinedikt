@@ -1,0 +1,4 @@
+🔴 <b>Catalog is 3 days 1 hr old</b>
+<b>To fix:</b> check whether datasets.imdbws.com loads in a browser. If it does, look at the Railway logs.
+Updates have failed 40 times since Fri 22:20. IMDb's download server isn't answering (error 503). The site works but is getting out of date.
+<blockquote expandable>Details: catalog: GET title.principals: HTTP 503</blockquote>

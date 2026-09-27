@@ -1,0 +1,4 @@
+⚠️ <b>Posters failing since 13:25</b>
+Nothing for you to do yet. Next try by 15:00.
+The database is too busy: a query timed out. No new posters are being saved; the site still works. If it lasts, check the database's load in Railway.
+<blockquote expandable>Details: catalog: find titles wanting a poster: ERROR: canceling statement due to statement timeout (SQLSTATE 57014)</blockquote>

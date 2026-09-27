@@ -1,0 +1,4 @@
+🔴 <b>OMDb turned down our key</b>
+<b>To fix:</b> check OMDB_API_KEY under Variables in Railway, then redeploy.
+Poster lookups have stopped. Posters already saved still show; new films will have none until this is fixed.
+<blockquote expandable>Details: catalog: OMDb refused the key: omdb: invalid API key</blockquote>

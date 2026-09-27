@@ -1,0 +1,4 @@
+⚠️ <b>Catalog update failing since 13:19</b>
+Nothing for you to do. Next try 15:00.
+IMDb's files don't match each other yet (97.3% match; 99% needed), which usually means IMDb is partway through publishing. The site is fine and still shows yesterday's catalog.
+<blockquote expandable>Details: catalog: only 0.9731 of credits name a stored title, want 0.99 (the files are probably from different generations)</blockquote>
