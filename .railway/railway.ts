@@ -67,6 +67,9 @@ export default defineRailway(() => {
       DATABASE_URL: preserve(),
       POSTHOG_PROJECT_TOKEN: preserve(),
       POSTHOG_HOST: preserve(),
+      // The Mixpanel project this environment reports to. The API hands
+      // it to the page in production; unset, the page never loads it.
+      MIXPANEL_PROJECT_TOKEN: preserve(),
       // A bot that keeps a pinned status board of the catalog jobs and
       // says when something needs attention. Both empty means silence. The token is from
       // BotFather; the chat id is the private chat or group it posts into.

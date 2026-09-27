@@ -87,10 +87,12 @@ type Server struct {
 // to Postgres, and nothing a reader does writes anything.
 func (s *Server) WithCatalog(c *CatalogServer) { s.catalog = c }
 
-// AnalyticsConfig is what the map needs to report to PostHog itself.
+// AnalyticsConfig is what the map needs to report to PostHog and to
+// Mixpanel itself. An empty token turns that service off in the page.
 type AnalyticsConfig struct {
-	Token string `json:"token"`
-	Host  string `json:"host"`
+	Token         string `json:"token"`
+	Host          string `json:"host"`
+	MixpanelToken string `json:"mixpanel_token,omitempty"`
 }
 
 // Limits on query parameters and on-demand crawling.
@@ -447,9 +449,11 @@ func nextHop(pw *graph.Pathways) []int {
 	return ids
 }
 
-// analyticsConfig is the public PostHog project token and host for the map.
-// The token is a write-only key, the same class of credential posthog-js
-// would otherwise bake in at build time.
+// analyticsConfig is the public PostHog project token and host for the
+// map, and the Mixpanel project token. Both tokens are write-only keys,
+// the same class of credential the SDKs would otherwise bake in at build
+// time. Serving them here is what lets each environment point at its own
+// projects through its variables, with one build for all of them.
 func (s *Server) analyticsConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.analytics)
 }

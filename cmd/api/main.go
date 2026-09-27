@@ -195,7 +195,11 @@ func run(logger *slog.Logger) error {
 	if cfg.Production() {
 		// The map reports only when this process does, so a development
 		// build served from a LAN address cannot quietly send events.
-		server.WithAnalytics(api.AnalyticsConfig{Token: cfg.PostHogToken, Host: cfg.PostHogHost})
+		server.WithAnalytics(api.AnalyticsConfig{
+			Token:         cfg.PostHogToken,
+			Host:          cfg.PostHogHost,
+			MixpanelToken: cfg.MixpanelToken,
+		})
 	}
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,

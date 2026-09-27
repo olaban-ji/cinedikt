@@ -40,6 +40,10 @@ type Config struct {
 	// PostHog reporting. Only read in production.
 	PostHogToken string
 	PostHogHost  string
+	// MixpanelToken is the Mixpanel project the map reports to. Like
+	// PostHog's, it is only served in production, and empty means the
+	// page never loads Mixpanel at all.
+	MixpanelToken string
 	// RedisURL, if set, holds the TMDb/OMDb response cache.
 	RedisURL string
 
@@ -230,6 +234,7 @@ func Load() (Config, error) {
 		OMDBAPIKey:         os.Getenv("OMDB_API_KEY"),
 		PostHogToken:       os.Getenv("POSTHOG_PROJECT_TOKEN"),
 		PostHogHost:        envOr("POSTHOG_HOST", "https://us.i.posthog.com"),
+		MixpanelToken:      strings.TrimSpace(os.Getenv("MIXPANEL_PROJECT_TOKEN")),
 		RedisURL:           os.Getenv("REDIS_URL"),
 		Neo4jURI:           envOr("NEO4J_URI", "bolt://localhost:7687"),
 		Neo4jUser:          envOr("NEO4J_USER", "neo4j"),
