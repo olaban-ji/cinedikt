@@ -67,6 +67,10 @@
   --t2: oklch(0.78 0.012 70);
   --t3: oklch(0.63 0.012 70);
 
+  /* TMDB's logo on the opening screen. Its own colours were hard to see
+     on the dark ground, and TMDB allows white. */
+  --tmdb: #ffffff;
+
   /* Lines, in three strengths, and the year bands behind the map. */
   --ln: oklch(0.95 0.01 80 / 0.05);
   --ln2: oklch(0.95 0.01 80 / 0.08);
@@ -121,6 +125,9 @@
   --t: oklch(0.22 0.01 60);
   --t2: oklch(0.42 0.012 60);
   --t3: oklch(0.52 0.012 60);
+
+  /* TMDB's own colours, as in its file. */
+  --tmdb: linear-gradient(90deg, #90cea1 0%, #3cbec9 56%, #00b3e5 100%);
 
   --ln: oklch(0.25 0.01 60 / 0.06);
   --ln2: oklch(0.25 0.01 60 / 0.1);
@@ -3159,6 +3166,104 @@ button {
   opacity: 1;
 }
 
+/* ---- opening screen footer ---- */
+
+/* Who to write to, and the credit TMDB asks for. It sits at the bottom
+   when the screen has room to spare; the space above it counts
+   .cd-cold's 12px gap: 24 + 12 = 36px under the theme choice. It fades
+   in with the theme choice, on the same class and the same delay. */
+.cd-cold-foot {
+  margin-top: auto;
+  padding-top: 24px;
+  width: min(640px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 600ms linear 240ms;
+}
+
+.cd-cold-in .cd-cold-foot {
+  opacity: 1;
+}
+
+.cd-cold-mail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--t2);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+@media (hover: hover) {
+  .cd-cold-mail:hover {
+    color: var(--t);
+    background: var(--s);
+  }
+}
+
+.cd-cold-mail:focus-visible,
+.cd-cold-tmdb:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+/* Logo and notice share a line when there is room. On a phone the
+   notice wraps below the logo. */
+.cd-cold-credit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 12px;
+}
+
+.cd-cold-tmdb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 4px;
+  border-radius: 8px;
+}
+
+/* TMDB's file, used as a mask so the theme sets its colour: white on
+   the dark ground, its own gradient on the light one. 13px tall keeps
+   it quieter than the Cinedikt mark, as TMDB asks. */
+.cd-cold-tmdb-logo {
+  display: block;
+  width: 100px;
+  height: 13px;
+  background: var(--tmdb);
+  -webkit-mask: url(/tmdb.svg) center / contain no-repeat;
+  mask: url(/tmdb.svg) center / contain no-repeat;
+}
+
+.cd-cold-credit p {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--t3);
+  text-wrap: balance;
+}
+
+/* Forced colours drop the gradient and force backgrounds, so the logo
+   is drawn in the system text colour. */
+@media (forced-colors: active) {
+  .cd-cold-tmdb-logo {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+}
+
 /* The crossfade, worn for the length of one switch and then taken off.
    Left on, it would put a 250ms transition on every hover in the app. */
 .cd-theming,
@@ -3182,7 +3287,8 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .cd-cold .cd-seg,
-  .cd-cold .cd-seg-thumb {
+  .cd-cold .cd-seg-thumb,
+  .cd-cold-foot {
     transition: none;
   }
 
@@ -3210,6 +3316,17 @@ button {
     content: '';
     position: absolute;
     inset: -7px 0;
+  }
+
+  /* The footer's links at a finger's size, with a tighter gap to make
+     up for them. */
+  .cd-cold-foot {
+    gap: 4px;
+  }
+
+  .cd-cold-mail,
+  .cd-cold-tmdb {
+    min-height: 44px;
   }
 }
 
@@ -3247,11 +3364,22 @@ button {
   .cd-cold-year {
     font-size: 11px;
   }
+
+  /* 8 + 12 = 20px under the theme choice, as wide as the row of films. */
+  .cd-cold-foot {
+    padding-top: 8px;
+    width: min(820px, 100%);
+  }
 }
 
 @media (max-width: 639.98px) {
   .cd-cold {
     padding-top: 36px;
+  }
+
+  /* 16 + 12 = 28px under the theme choice. */
+  .cd-cold-foot {
+    padding-top: 16px;
   }
 
   .cd-cold-head {

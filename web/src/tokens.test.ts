@@ -11,6 +11,8 @@ const DARK: Record<string, string> = {
   '--t': 'oklch(0.965 0.008 80)',
   '--t2': 'oklch(0.78 0.012 70)',
   '--t3': 'oklch(0.63 0.012 70)',
+  // The opening screen's footer: TMDB's logo, in white here.
+  '--tmdb': '#ffffff',
   '--ln': 'oklch(0.95 0.01 80 / 0.05)',
   '--ln2': 'oklch(0.95 0.01 80 / 0.08)',
   '--ln3': 'oklch(0.95 0.01 80 / 0.16)',
@@ -42,6 +44,8 @@ const LIGHT: Record<string, string> = {
   '--t': 'oklch(0.22 0.01 60)',
   '--t2': 'oklch(0.42 0.012 60)',
   '--t3': 'oklch(0.52 0.012 60)',
+  // And in TMDB's own colours here.
+  '--tmdb': 'linear-gradient(90deg, #90cea1 0%, #3cbec9 56%, #00b3e5 100%)',
   '--ln': 'oklch(0.25 0.01 60 / 0.06)',
   '--ln2': 'oklch(0.25 0.01 60 / 0.1)',
   '--ln3': 'oklch(0.25 0.01 60 / 0.2)',

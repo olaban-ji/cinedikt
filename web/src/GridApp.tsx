@@ -2273,6 +2273,39 @@ function ColdStart({
           lives here. It fades in after the sub-line rather than with the
           tiles: it is not one of the eight movies. */}
       <ThemePicker value={theme} onChange={onTheme} />
+      {/* Who to write to, and the credit TMDB asks for: its logo and its
+          notice, word for word. It fades in with the theme choice. */}
+      <footer className="cd-cold-foot">
+        <a className="cd-cold-mail" href="mailto:hello@cinedikt.com">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="5" width="18" height="14" rx="2.5" />
+            <path d="m4 7.5 8 5.5 8-5.5" />
+          </svg>
+          hello@cinedikt.com
+        </a>
+        <div className="cd-cold-credit">
+          <a
+            className="cd-cold-tmdb"
+            href="https://www.themoviedb.org"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="TMDB"
+          >
+            <span className="cd-cold-tmdb-logo" aria-hidden="true" />
+          </a>
+          <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+        </div>
+      </footer>
     </div>
   );
 }
