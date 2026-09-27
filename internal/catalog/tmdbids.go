@@ -112,14 +112,14 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			asked, err := j.Store.tmdbAsked(ctx, id)
+			wanted, err := j.Store.tmdbIDWanted(ctx, id)
 			if stopping(err) {
 				return nil
 			}
 			if err != nil {
 				return err
 			}
-			if asked {
+			if !wanted {
 				if err := j.Store.dropTMDBQueue(ctx, id); err != nil && !stopping(err) {
 					j.Logger.Warn("tmdb id: queue", "tconst", id, "err", err)
 				}
@@ -236,18 +236,33 @@ func (s *Store) tmdbIDBatch(ctx context.Context, limit int) ([]string, error) {
 	return ids, rows.Err()
 }
 
-// tmdbAsked reports whether this title has already been put to TMDb.
-func (s *Store) tmdbAsked(ctx context.Context, tconst string) (bool, error) {
-	var asked bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM meta.tmdb WHERE tconst = $1)`, tconst).Scan(&asked)
+// tmdbIDWanted reports whether this title is still worth a request: a
+// film search could offer that TMDb has not been asked about yet.
+//
+// The refill only ever adds to the queue, so a title a publish took
+// out of the catalog, or made a documentary, stays queued. Judging each
+// one here, as it comes up, costs a few index lookups per request;
+// clearing them from the whole queue on every pass would mean checking
+// the credits of every title in it, for the handful a publish retires.
+func (s *Store) tmdbIDWanted(ctx context.Context, tconst string) (bool, error) {
+	var wanted bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1
+		    FROM `+Live+`.titles t
+		    WHERE t.tconst = $1
+		      AND `+tmdbIDFilm+`
+		      AND NOT EXISTS (SELECT 1 FROM meta.tmdb m WHERE m.tconst = t.tconst))`, tconst).Scan(&wanted)
 	if err != nil {
-		return false, fmt.Errorf("catalog: tmdb asked %s: %w", tconst, err)
+		return false, fmt.Errorf("catalog: tmdb id wanted %s: %w", tconst, err)
 	}
-	return asked, nil
+	return wanted, nil
 }
 
 // dropTMDBQueue takes a title out of the queue without recording an
-// answer. The poster job may already have recorded one.
+// answer. The poster job may already have recorded one, or the title
+// is no longer one a search could offer — and recording nothing for
+// that one leaves it free to be queued again should it come back.
 func (s *Store) dropTMDBQueue(ctx context.Context, tconst string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM meta.tmdb_queue WHERE tconst = $1`, tconst)
 	return err

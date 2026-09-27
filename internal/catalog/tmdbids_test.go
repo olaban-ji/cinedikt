@@ -132,6 +132,73 @@ func TestRefillingTheTMDbQueueWritesOnlyWhatChanged(t *testing.T) {
 	}
 }
 
+func TestTMDbIDsAreNotAskedForTitlesSearchCanNoLongerOffer(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.tmdb`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.tmdb_queue`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.refillTMDBQueue(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Since the queue was filled, a publish has dropped a title from the
+	// catalog and made Reloaded a documentary. Both are still queued,
+	// the dropped one at the head.
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO meta.tmdb_queue (tconst, votes) VALUES ('tt7777777', 5000000)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE `+Live+`.titles SET genres = array_append(genres, 'Documentary')
+		WHERE tconst = 'tt0234215'`); err != nil {
+		t.Fatal(err)
+	}
+
+	find := &fakeFinder{answers: map[string]tmdb.Found{
+		"tt0111161": {ID: 278},
+		"tt0133093": {ID: 603},
+		"tt0234215": {ID: 604},
+	}}
+	job := &TMDbIDJob{Store: s, Client: find, Logger: quietLogger(), Batch: 10}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	asked := find.askedFor()
+	if len(asked) != 3 || asked[0] != "tt0111161" || asked[1] != "tt0133093" || asked[2] != "tt0000001" {
+		t.Fatalf("asked %v, want only the films a search can still offer", asked)
+	}
+	if left := queueRows(t, s); len(left) != 0 {
+		t.Errorf("queue still holds %v", left)
+	}
+	// Dropped, not answered: an answer would keep Reloaded from being
+	// asked about when it is a film again.
+	for _, id := range []string{"tt7777777", "tt0234215"} {
+		if _, asked := tmdbRow(t, s, id); asked {
+			t.Errorf("%s was recorded as asked", id)
+		}
+	}
+
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE `+Live+`.titles SET genres = array_remove(genres, 'Documentary')
+		WHERE tconst = 'tt0234215'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if again := find.askedFor(); len(again) != 4 || again[3] != "tt0234215" {
+		t.Fatalf("second pass asked %v, want Reloaded back", again)
+	}
+	if id := tmdbID(t, s, "tt0234215"); id != 604 {
+		t.Errorf("reloaded tmdb id = %d", id)
+	}
+}
+
 // queueRow is one row of the TMDb queue with the system columns that
 // say whether a statement has written to it since it was last read.
 type queueRow struct {
