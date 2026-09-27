@@ -240,7 +240,8 @@ export function ViewPanel({
               onClick={() => {
                 const on = !sw.on(settings);
                 onChange(sw.set(settings, on));
-                if (sw.key === 'hideEmptyYears') capture('hide_empty_years', { on });
+                // Said apart from the same switch beside View (from: 'quick').
+                if (sw.key === 'hideEmptyYears') capture('hide_empty_years', { on, from: 'view' });
                 if (movesTheMap(sw.key)) onRelaid();
               }}
             >

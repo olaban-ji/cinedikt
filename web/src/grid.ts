@@ -521,6 +521,23 @@ export function aloneAfterHiding(
   return others.length > 0 && !others.some((f) => isLit(f, selected, settings.minRating));
 }
 
+/** How many years on the plot hold nothing lit: what hiding the empty
+ *  years takes away. The searched film's year always counts as lit. */
+export function emptyYearCount(
+  payload: GridPayload,
+  settings: GridSettings,
+  selected: Set<number>,
+): number {
+  const lit = new Map<number, boolean>();
+  for (const f of spineOf(payload)) {
+    if (!onPlot(f, settings)) continue;
+    lit.set(f.year, (lit.get(f.year) ?? false) || isLit(f, selected, settings.minRating));
+  }
+  let n = 0;
+  for (const on of lit.values()) if (!on) n += 1;
+  return n;
+}
+
 /** Whether a film is lit by what the reader has asked for.
  *
  *  The searched film always is: it is the centre of its own map. An

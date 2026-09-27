@@ -1,8 +1,12 @@
+import { createElement, type ComponentProps, type ReactElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import matrix from './fixtures/matrix-grid.json';
 import {
+  Card,
   RING_MS,
   centredScroll,
+  filteredOut,
   isFlown,
   opacityOf,
   openingBox,
@@ -52,6 +56,109 @@ describe('opacityOf', () => {
     expect(opacityOf(card([1]), new Set([0]), null)).toBeLessThan(1);
     expect(opacityOf(card([1]), new Set([1]), null)).toBe(1);
     expect(opacityOf(card([1]), new Set(), 0)).toBeLessThan(1);
+  });
+});
+
+describe('a filtered-out card', () => {
+  const layout = layoutGrid(matrix as unknown as GridPayload, 390, DEFAULT_SETTINGS, undefined, true);
+  const said: GridFilm = {
+    id: 'tt0000001',
+    year: 2000,
+    rating: 7,
+    md: 0,
+    people: ['nm0000001'],
+    isAnchor: false,
+    title: 'Bound',
+  };
+
+  interface Drawn {
+    disabled?: boolean;
+    className: string;
+    'aria-label': string;
+    onClick: () => void;
+    onMouseEnter: () => void;
+  }
+
+  /** The card's button as it would be drawn, with its handlers live.
+   *  The card is called inside a render of its own, so its hooks have a
+   *  component to belong to, and that render draws nothing: no DOM is
+   *  needed to press it. */
+  function drawn(over: Partial<ComponentProps<typeof Card>>): Drawn {
+    const props: ComponentProps<typeof Card> = {
+      card: card([1]),
+      said,
+      layout,
+      people: new Map(),
+      codes: new Map(),
+      opacity: 1,
+      eager: false,
+      enter: null,
+      ringed: false,
+      theme: 'dark',
+      onOpen: () => {},
+      onHover: () => {},
+      ...over,
+    };
+    type Tree = ReactElement<{ children: ReactElement<Drawn>[] }>;
+    // memo keeps the function it wraps as `type`, which its typings do
+    // not say for a plain function component.
+    const render = (Card as unknown as { type: (p: typeof props) => Tree }).type;
+    let tree = null as Tree | null;
+    function Probe() {
+      tree = render(props);
+      return null;
+    }
+    renderToStaticMarkup(createElement(Probe));
+    // A fragment: the button, then the searched tag beside it, if any.
+    return tree!.props.children[0].props;
+  }
+
+  it('is one the selection or the floor dims, never the searched film', () => {
+    expect(filteredOut(card([1]).film, new Set([0]), null)).toBe(true);
+    expect(filteredOut(card([1]).film, new Set([1]), 8)).toBe(true);
+    expect(filteredOut(card([1]).film, new Set([1]), null)).toBe(false);
+    expect(filteredOut(card([1], 'tt9', true).film, new Set([0]), 9)).toBe(false);
+  });
+
+  it('is disabled, says so, and never opens or lights chips', () => {
+    const c = card([1]);
+    const selected = new Set([0]);
+    const opened: string[] = [];
+    const lit: string[][] = [];
+    const b = drawn({
+      card: c,
+      opacity: opacityOf(c, selected, null),
+      off: filteredOut(c.film, selected, null),
+      onOpen: (id) => opened.push(id),
+      onHover: (people) => lit.push(people),
+    });
+    expect(b.disabled).toBe(true);
+    expect(b.className).toContain('cd-card-off');
+    expect(b['aria-label']).toBe('Bound, 2000, rated 7.0, filtered out');
+    b.onClick();
+    b.onMouseEnter();
+    expect(opened).toEqual([]);
+    expect(lit).toEqual([]);
+  });
+
+  it('stays enabled when only a chip preview dims it', () => {
+    // Their person is chosen, so the selection lights it; the pointer
+    // resting on someone else's chip dims it only while it rests there.
+    const c = card([1]);
+    const selected = new Set([1]);
+    expect(opacityOf(c, selected, 2)).toBeLessThan(1);
+    const opened: string[] = [];
+    const b = drawn({
+      card: c,
+      opacity: opacityOf(c, selected, 2),
+      off: filteredOut(c.film, selected, null),
+      onOpen: (id) => opened.push(id),
+    });
+    expect(b.disabled).toBeUndefined();
+    expect(b.className).not.toContain('cd-card-off');
+    expect(b['aria-label']).toBe('Bound, 2000, rated 7.0');
+    b.onClick();
+    expect(opened).toEqual([c.film.id]);
   });
 });
 

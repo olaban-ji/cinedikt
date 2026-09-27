@@ -68,8 +68,9 @@ export function useToast(): Toaster {
 /** The toast's classes. `onMap` lets the stylesheet raise it clear of
  *  the floating buttons, which it does on phones, landscape phones
  *  (including any window under 500 tall) and tablets (.cd-toast-map);
- *  on desktop it stays low. On the opening screen there are no buttons,
- *  so it sits low at every width. */
+ *  on desktop it stays low, unless the quick "Hide empty years" switch
+ *  has widened View's pill under it ([data-quick]). On the opening
+ *  screen there are no buttons, so it sits low at every width. */
 export function toastClass(visible: boolean, onMap: boolean): string {
   return `cd-toast${visible ? ' cd-toast-in' : ''}${onMap ? ' cd-toast-map' : ''}`;
 }

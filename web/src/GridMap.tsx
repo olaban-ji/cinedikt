@@ -150,9 +150,11 @@ const WARM_STEP = 64;
 
 /** The grid: one card per film, year down, rating across.
  *
- *  Selecting people changes opacity and nothing else — the layout is
- *  computed from the payload and the width alone, so a card never moves
- *  because of who is selected. */
+ *  Selecting people dims the cards they are not on and puts those out
+ *  of reach (filteredOut). Unless the empty years are hidden, that is
+ *  all it does: the layout is computed from the payload, the width and
+ *  the settings, so a card never moves because of who is selected. With
+ *  them hidden, the years left with nothing lit close up. */
 export function GridMap({
   payload,
   settings,
@@ -685,6 +687,7 @@ export function GridMap({
                       ? 0
                       : opacityOf(c, selectedIdx, hoveredIdx, settings.minRating)
                   }
+                  off={filteredOut(c.film, selectedIdx, settings.minRating)}
                   eager={inWarmSpan(c.top, layout.metrics.cardH, screen)}
                   enter={
                     reveal.entering
@@ -754,7 +757,9 @@ export function GridMap({
             <circle cx="12" cy="12" r="2" />
             <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
           </svg>
-          Recenter
+          {/* Its own element so a phone can drop it and keep the icon
+              while the quick switch beside View needs the room. */}
+          <span className="cd-recentre-label">Recenter</span>
         </span>
       </button>
     </>
@@ -1038,13 +1043,14 @@ function useReflow(
   return { ghosts, ghostsOut, arriving, fadingIn, handled };
 }
 
-const Card = memo(function Card({
+export const Card = memo(function Card({
   card,
   layout,
   people,
   codes,
   said,
   opacity,
+  off = false,
   eager,
   enter,
   ringed,
@@ -1065,6 +1071,10 @@ const Card = memo(function Card({
   people: Map<string, GridPerson>;
   codes: Map<string, string>;
   opacity: number;
+  /** Filtered out by the chosen people or the rating floor (see
+   *  filteredOut): dimmed, and with nothing to open. It cannot be
+   *  clicked, tapped, hovered or focused. */
+  off?: boolean;
   /** On the glass, so its poster loads ahead of the ones waiting above and below. */
   eager: boolean;
   /** Set while the map is opening: whether this card is still waiting to
@@ -1106,8 +1116,26 @@ const Card = memo(function Card({
   const shownAt = waiting || arriving ? 0 : opacity;
   // The searched card says so in its label, so the tag beside it is
   // drawn and not read.
-  const label = `${said?.title ?? 'Loading'}, ${film.year}, rated ${film.rating == null ? 'not yet' : film.rating.toFixed(1)}${film.isAnchor ? ', the searched movie' : ''}`;
+  const label = `${said?.title ?? 'Loading'}, ${film.year}, rated ${film.rating == null ? 'not yet' : film.rating.toFixed(1)}${film.isAnchor ? ', the searched movie' : ''}${off ? ', filtered out' : ''}`;
   const tag = film.isAnchor && !ghost ? searchedTagAt(card) : null;
+  // Whether the pointer is resting on this card. A card the filters turn
+  // off under the pointer lets go of the chips it lit itself: a disabled
+  // button may never hear the pointer leave.
+  const under = useRef(false);
+  useEffect(() => {
+    if (!off || !under.current) return;
+    under.current = false;
+    onHover([]);
+  }, [off, onHover]);
+  // Taken off the map with the pointer still on it, as when hiding the
+  // empty years closes up its row: nothing says the pointer left then
+  // either. onHover is stable, so this runs only as the card goes.
+  useEffect(
+    () => () => {
+      if (under.current) onHover([]);
+    },
+    [onHover],
+  );
   return (
     <>
       <button
@@ -1115,10 +1143,11 @@ const Card = memo(function Card({
         data-card={ghost ? undefined : film.id}
         aria-hidden={ghost || undefined}
         inert={ghost || undefined}
+        disabled={off || undefined}
         // A card waiting to spread is put in its hidden state at once
         // (.cd-card-held has no transitions), and let go into it from
         // there with its own delay.
-        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${flown ? ' cd-card-flown' : ''}${snap ? ' cd-card-snap' : ''}${fadingIn ? ' cd-card-arrive' : ''}${ghost ? ' cd-card-ghost' : ''}`}
+        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${flown ? ' cd-card-flown' : ''}${snap ? ' cd-card-snap' : ''}${fadingIn ? ' cd-card-arrive' : ''}${ghost ? ' cd-card-ghost' : ''}${off ? ' cd-card-off' : ''}`}
         style={{
           left: card.left,
           top: card.top,
@@ -1133,9 +1162,21 @@ const Card = memo(function Card({
         }}
         tabIndex={waiting ? -1 : undefined}
         aria-label={label}
-        onClick={() => onOpen(film.id)}
-        onMouseEnter={() => onHover(on)}
-        onMouseLeave={() => onHover([])}
+        // Guarded as well as disabled: browsers differ over which mouse
+        // events a disabled button still gets, and a filtered-out card
+        // must neither open nor light chips from whichever do arrive.
+        onClick={() => {
+          if (!off) onOpen(film.id);
+        }}
+        onMouseEnter={() => {
+          if (off) return;
+          under.current = true;
+          onHover(on);
+        }}
+        onMouseLeave={() => {
+          under.current = false;
+          onHover([]);
+        }}
       >
         <PosterImage
           id={film.id}
@@ -1220,8 +1261,10 @@ export function isFlown(card: Placed, flown: string | null): boolean {
  *  scrolled into view under a selection and then dim it when its words
  *  arrived.
  *
- *  Narrowing only ever changes opacity. The searched film is the one
- *  exception: it is the centre of its own map and stays lit. */
+ *  Narrowing changes opacity, and whether a card opens (see
+ *  filteredOut); which rows are drawn is Hide empty years' business, in
+ *  layoutGrid. The searched film is the one exception: it is the centre
+ *  of its own map and stays lit. */
 export function opacityOf(
   card: Placed,
   /** The selection, as places in the chip row. */
@@ -1239,4 +1282,19 @@ export function opacityOf(
       : DIM_PREVIEW;
   }
   return isLit(card.film, selected, minRating) ? 1 : DIM_SELECTED;
+}
+
+/** Whether a card is filtered out: dimmed by the chosen people or the
+ *  rating floor, the same test that gives it DIM_SELECTED above, and so
+ *  a card with nothing to open.
+ *
+ *  A chip preview is not part of it. It dims cards only while the
+ *  pointer is on the chip, and a card the selection lights stays one
+ *  the reader can open. The searched film is never filtered out. */
+export function filteredOut(
+  film: SpineFilm,
+  selected: Set<number>,
+  minRating: number | null,
+): boolean {
+  return !film.isAnchor && !isLit(film, selected, minRating);
 }

@@ -23,6 +23,7 @@ import {
   withoutPill,
   changedCount,
   aloneAfterHiding,
+  emptyYearCount,
   litOthers,
   nothingLit,
   onPlot,
@@ -725,6 +726,32 @@ export function GridApp() {
     [payload, lighting],
   );
 
+  // The quick "Hide empty years" switch beside View. It is offered while
+  // the chosen people or the rating floor are dimming cards, which is
+  // when a year can be empty, and only if turning it on would hide a
+  // year, or it is already on and so can be turned off from here.
+  // Clearing the filters folds it away and leaves the setting as it was.
+  const filtering = selectedIdx.size > 0 || settings.minRating != null;
+  const hidesSome = useMemo(
+    () => payload != null && filtering && emptyYearCount(payload, settings, selectedIdx) > 0,
+    [payload, filtering, settings, selectedIdx],
+  );
+  const quick = payload != null && !loading && filtering && (settings.hideEmptyYears || hidesSome);
+  // The same setting as the View panel's switch, through the same path,
+  // so the map closes up the same way. It never recentres: see
+  // movesTheMap.
+  const viewOpenRef = useRef<HTMLButtonElement>(null);
+  const flipHideEmpty = () => {
+    const on = !settings.hideEmptyYears;
+    setSettings((was) => ({ ...was, hideEmptyYears: on }));
+    capture('hide_empty_years', { on, from: 'quick' });
+    // Turned off with no year left for it to hide, the switch folds away
+    // and goes inert under the press, which would drop the focus on the
+    // document. hidesSome does not depend on the setting, so this is
+    // exactly when it folds, and the focus goes to View beside it.
+    if (!on && !hidesSome) viewOpenRef.current?.focus();
+  };
+
   const wasAlone = useRef(false);
   useEffect(() => {
     if (!aloneOnTheMap || !payload) {
@@ -984,7 +1011,9 @@ export function GridApp() {
   const frozen = mapPayload && (stale || leaving) ? liveDraw.current : null;
 
   return (
-    <div className="cd-app">
+    // data-quick marks the quick switch as out, so that on a phone
+    // Recenter drops its word to make room for it (grid.css).
+    <div className="cd-app" data-quick={quick || undefined}>
       <header
         ref={headerRef}
         className={`cd-header${holdsChips ? ' cd-header-map' : ''}${overlay ? ' cd-header-over' : ''}${headerAway ? ' cd-header-away' : ''}`}
@@ -1157,33 +1186,60 @@ export function GridApp() {
       )}
 
       {payload && (
-        <button
-          type="button"
+        // One pill holding two buttons: View, and the quick "Hide empty
+        // years" switch that grows out of its right side while it is
+        // useful (see `quick`). Folded away, the switch is inert as well
+        // as hidden, so a keyboard never lands on it.
+        <div
           className={`cd-float cd-view-button${covered ? '' : ' cd-float-up'}`}
-          aria-label={`How the map is drawn, ${changed} changed`}
           aria-hidden={covered || undefined}
           inert={covered || undefined}
-          onClick={() => setViewOpen(true)}
         >
           <span className="cd-float-pill">
-            {/* Sliders: two rails, each with its knob set somewhere along
-                it. The knobs are filled with the card colour so each one
-                cuts its rail rather than sitting on it. */}
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-              <path d="M4 7h16M4 17h16" />
-              <circle className="cd-view-knob" cx="9" cy="7" r="2.2" />
-              <circle className="cd-view-knob" cx="15" cy="17" r="2.2" />
-            </svg>
-            View
-            {/* How many settings differ from the defaults. The label says
-                it for a screen reader, the badge for the eye. */}
-            {changed > 0 && (
-              <span className="cd-view-badge" aria-hidden="true">
-                {changed}
-              </span>
-            )}
+            <button
+              ref={viewOpenRef}
+              type="button"
+              className="cd-view-open"
+              aria-label={`How the map is drawn, ${changed} changed`}
+              onClick={() => setViewOpen(true)}
+            >
+              {/* Sliders: two rails, each with its knob set somewhere
+                  along it. The knobs are filled with the card colour so
+                  each one cuts its rail rather than sitting on it. */}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M4 7h16M4 17h16" />
+                <circle className="cd-view-knob" cx="9" cy="7" r="2.2" />
+                <circle className="cd-view-knob" cx="15" cy="17" r="2.2" />
+              </svg>
+              View
+              {/* How many settings differ from the defaults. The label
+                  says it for a screen reader, the badge for the eye. */}
+              {changed > 0 && (
+                <span className="cd-view-badge" aria-hidden="true">
+                  {changed}
+                </span>
+              )}
+            </button>
+            <span
+              className={`cd-view-quick${quick ? ' cd-view-quick-on' : ''}`}
+              inert={!quick || undefined}
+            >
+              <span className="cd-view-rule" aria-hidden="true" />
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.hideEmptyYears}
+                className="cd-view-quick-switch"
+                onClick={flipHideEmpty}
+              >
+                <span className="cd-quick-track" aria-hidden="true">
+                  <span className="cd-quick-knob" />
+                </span>
+                Hide empty years
+              </button>
+            </span>
           </span>
-        </button>
+        </div>
       )}
 
       {viewOpen && (
@@ -1345,7 +1401,9 @@ function takeOff(rect: Box, aim: Box | null, scroller: Box | undefined, over: nu
  *  searched card's classes and drops the marks that card does not show. */
 function flyerFace(card: HTMLElement, dressed: boolean): HTMLElement {
   const face = card.cloneNode(true) as HTMLElement;
-  for (const a of ['data-card', 'aria-label', 'tabindex', 'type']) face.removeAttribute(a);
+  // A card filtered out after its sheet opened is disabled, and the copy
+  // lands as the next map's searched card, which never is.
+  for (const a of ['data-card', 'aria-label', 'tabindex', 'type', 'disabled']) face.removeAttribute(a);
   face.className = `cd-card cd-flyer-face${dressed ? ' cd-card-anchor' : ''}`;
   const s = face.style;
   s.left = '0px';

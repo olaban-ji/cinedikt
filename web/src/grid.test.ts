@@ -25,6 +25,7 @@ import {
   dateOrd,
   metricsFor,
   aloneAfterHiding,
+  emptyYearCount,
   litOthers,
   nothingLit,
   onPlot,
@@ -970,6 +971,75 @@ describe('litOthers', () => {
         expect({ over, sel: [...sel], years }).toEqual({ over, sel: [...sel], years: rows });
       }
     }
+  });
+});
+
+describe('emptyYearCount', () => {
+  /** Two people across five years: a film of the second person's in the
+   *  searched film's year, two in 2008, an unrated film in 1990 and a
+   *  film in 1971 that the ranges below crop. */
+  const career = () =>
+    payloadOf({ id: 'tt0000001', year: 2005, rating: 7 }, [
+      { id: 'tt0000001', year: 2005, rating: 7, people: [0, 1] },
+      { id: 'tt0000002', year: 2005, rating: 6, people: [1] },
+      { id: 'tt0000003', year: 1990, rating: null, people: [0] },
+      { id: 'tt0000004', year: 2008, rating: 8.2, people: [1] },
+      { id: 'tt0000005', year: 2008, rating: 6.1, people: [0] },
+      { id: 'tt0000006', year: 2010, rating: 7.5, people: [1] },
+      { id: 'tt0000007', year: 1971, rating: 8.8, people: [0] },
+    ], castOf(2));
+
+  it('is 0 with no filter', () => {
+    expect(emptyYearCount(career(), settings(), new Set())).toBe(0);
+  });
+
+  it('counts only the years where nothing is lit', () => {
+    // Person 1 has nothing in 1971 or 1990.
+    expect(emptyYearCount(career(), settings(), new Set([1]))).toBe(2);
+    // Person 0 has nothing in 2010; 2008 holds one of theirs beside one
+    // of person 1's, and one lit film is enough to keep a year.
+    expect(emptyYearCount(career(), settings(), new Set([0]))).toBe(1);
+    // At 8.0 and up: the unrated 1990 film and 2010's 7.5.
+    expect(emptyYearCount(career(), settings({ minRating: 8 }), new Set())).toBe(2);
+    expect(emptyYearCount(career(), settings({ minRating: 8 }), new Set([1]))).toBe(3);
+  });
+
+  it('never counts the searched film’s year', () => {
+    // Nobody on the map chosen, and a floor nothing clears: every year
+    // is empty but 2005, whose other film is dark too.
+    expect(emptyYearCount(career(), settings({ minRating: 9 }), new Set([9]))).toBe(4);
+    // An unrated searched film clears no floor, and still counts as lit.
+    const unrated = payloadOf({ id: 'tt0000001', year: 2005, rating: null }, [
+      { id: 'tt0000001', year: 2005, rating: null, people: [0] },
+      { id: 'tt0000002', year: 2006, rating: 6, people: [0] },
+    ], castOf(1));
+    expect(emptyYearCount(unrated, settings({ minRating: 7 }), new Set())).toBe(1);
+  });
+
+  it('ignores films the year range or the unrated column has taken off the plot', () => {
+    // 1971 and 1990 are before the range, so there is nothing of theirs
+    // for person 1 to be missing from.
+    expect(emptyYearCount(career(), settings({ yearFrom: 2000 }), new Set([1]))).toBe(0);
+    // The unrated 1990 film goes with its column; 1971 is still there.
+    expect(emptyYearCount(career(), settings({ showUnrated: false }), new Set([1]))).toBe(1);
+    // A range that leaves out the searched film's year: it stays on the
+    // plot, lit, and 2008 and 2010 are empty for person 0 at 7.0 and up.
+    expect(emptyYearCount(career(), settings({ yearFrom: 2006, minRating: 7 }), new Set([0]))).toBe(2);
+  });
+
+  it('is how many rows hiding the empty years takes off the layout', () => {
+    const selections = [new Set<number>(), new Set([0]), new Set([1]), new Set([0, 1]), new Set([9])];
+    for (const showUnrated of [true, false])
+      for (const [yearFrom, yearTo] of [[null, null], [2000, null], [null, 2006], [2006, 2009]] as const)
+        for (const minRating of [null, 7, 8.5])
+          for (const sel of selections) {
+            const s = settings({ showUnrated, yearFrom, yearTo, minRating });
+            const lit = (f: SpineFilm) => isLit(f, sel, minRating);
+            const rows = (hideEmptyYears: boolean) =>
+              layoutGrid(career(), 1280, { ...s, hideEmptyYears }, lit).rows.filter((r) => !r.isBreak).length;
+            const over = { showUnrated, yearFrom, yearTo, minRating, sel: [...sel] };
+            expect({ over, n: emptyYearCount(career(), s, sel) }).toEqual({ over, n: rows(false) - rows(true) });
+          }
   });
 });
 

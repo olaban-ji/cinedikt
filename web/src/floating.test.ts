@@ -4,7 +4,8 @@ import css from './grid.css?raw';
 /** The floating buttons and the toast are placed by the stylesheet
  *  alone, so this reads it. What is pinned is the arithmetic a later
  *  edit could quietly break: the pill sits inside a larger transparent
- *  button, so the offset the eye sees is the button's plus its slop. */
+ *  float (Recenter's button; View's holds two, and its slop is on View
+ *  itself), so the offset the eye sees is the float's plus its slop. */
 
 const TOUCH = '(max-width: 1023.98px), (max-height: 499.98px), (pointer: coarse)';
 const NARROW = '(max-width: 1023.98px)';
@@ -40,7 +41,9 @@ function rules(sheet: string): Rule[] {
         const at = d.indexOf(':');
         if (at > 0) decls.set(d.slice(0, at).trim(), d.slice(at + 1).trim().replace(/\s+/g, ' '));
       }
-      out.push({ media: media ? media.prelude.replace(/^@media\s+/, '') : null, selector: block.prelude, decls });
+      // A selector list is read on one line, so a test can name it.
+      const selector = block.prelude.replace(/\s+/g, ' ');
+      out.push({ media: media ? media.prelude.replace(/^@media\s+/, '') : null, selector, decls });
     }
   }
   return out;
@@ -92,8 +95,22 @@ describe('the floating buttons', () => {
   it('have no hover state, only a press', () => {
     // The handoff gives them none: a press and the focus ring are the
     // only states either button has.
-    expect(all.filter((r) => r.selector.includes('.cd-float') && r.selector.includes(':hover'))).toEqual([]);
-    expect(get('.cd-float:active .cd-float-pill', 'transform')).toBe('scale(0.97)');
+    const floating = ['.cd-float', '.cd-view-open', '.cd-view-quick'];
+    expect(all.filter((r) => floating.some((f) => r.selector.includes(f)) && r.selector.includes(':hover'))).toEqual([]);
+    // Recenter's pill presses whole. View's pill now holds two buttons,
+    // View and the quick "Hide empty years" switch, and each presses on
+    // its own: a press on either makes their container :active too, so
+    // the rule every float used to share would shrink the pill around
+    // the button already shrinking inside it.
+    expect(get('.cd-recentre:active .cd-float-pill', 'transform')).toBe('scale(0.97)');
+    expect(get('.cd-view-open:active, .cd-view-quick-switch:active', 'transform')).toBe('scale(0.97)');
+    expect(get('.cd-float:active .cd-float-pill', 'transform')).toBeUndefined();
+  });
+
+  it('keep View’s slop on View itself, now that its float is not a button', () => {
+    // Above, below and to the left of the pill, where the float's own
+    // padding is; to the right is the quick switch.
+    expect(get('.cd-view-open::before', 'inset')).toBe(`-${slop}px 0 -${slop}px -${slop}px`);
   });
 
   it('hide by sinking and fading, without shrinking', () => {
@@ -109,13 +126,16 @@ describe('the toast', () => {
     expect(elsewhere).toEqual([]);
   });
 
-  it('rises to 76px on a map on phones, landscape phones and tablets, and nowhere else', () => {
+  it('rises to 76px on a map on phones, landscape phones and tablets, and on desktop only while the quick switch is out', () => {
     // Narrow is phones and tablets; short is landscape phones, which
     // includes a wide window under 500 tall such as 1280x480.
     expect(get('.cd-toast-map', 'bottom', NARROW)).toBe('calc(76px + env(safe-area-inset-bottom))');
     expect(get('.cd-toast-map', 'bottom', SHORT)).toBe('calc(76px + env(safe-area-inset-bottom))');
     const others = all.filter((r) => r.selector === '.cd-toast-map' && r.media !== NARROW && r.media !== SHORT);
     expect(others).toEqual([]);
+    // The quick switch widens View's pill to where a long toast would
+    // lie over it on a desktop window near 1024 wide.
+    expect(get('[data-quick] .cd-toast-map', 'bottom')).toBe('calc(76px + env(safe-area-inset-bottom))');
   });
 
   it('keeps its action 36 to the eye and 44 to a finger', () => {

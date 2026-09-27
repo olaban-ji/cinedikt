@@ -636,6 +636,13 @@ button {
   scale: 0.98;
 }
 
+/* Filtered out: dimmed, with nothing to open. Taps and drags pass
+   through to the map, so it still scrolls from here. */
+.cd-card-off {
+  pointer-events: none;
+  cursor: default;
+}
+
 /* The card tapped in the sheet, once a copy of it has taken off for the
    next map: gone in the frame the copy appears over it, with no fade, or
    the two would be seen apart as the copy leaves. */
@@ -882,11 +889,13 @@ button {
 
 /* ---- floating buttons ---- */
 
-/* The button itself is transparent and 6px larger on every side than the
+/* The float itself is transparent and 6px larger on every side than the
    pill it holds, so a near-miss lands on it rather than on the card
    behind it. Its offsets are the pill's less that 6px: the pill, which
    is the button as the eye sees it, sits 16px in from the bottom
-   corners (12px from the left on a phone). */
+   corners (12px from the left on a phone). Recenter's float is its
+   button; View's holds two, and hands the slop to View's
+   (.cd-view-open::before). */
 .cd-float {
   position: fixed;
   bottom: calc(10px + env(safe-area-inset-bottom));
@@ -949,8 +958,13 @@ button {
   left: 10px;
 }
 
+/* The pill is View and the quick switch side by side, so it has no
+   padding or gap of its own: each button carries its own sides, and the
+   pair fill its height. */
 .cd-view-button .cd-float-pill {
-  padding: 0 14px 0 13px;
+  padding: 0;
+  align-items: stretch;
+  gap: 0;
   background: color-mix(in oklch, var(--c) 94%, transparent);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
@@ -982,7 +996,128 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.cd-float:active .cd-float-pill {
+.cd-view-open,
+.cd-view-quick-switch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  transition:
+    transform 0.1s ease,
+    color 0.2s ease;
+}
+
+.cd-view-open {
+  gap: 8px;
+  padding: 0 14px 0 13px;
+  border-radius: 13px;
+}
+
+/* View's 6px of slop, above, below and to its left: the float around
+   the pill is not a button now, so this is what catches a near-miss.
+   To its right is the switch. */
+.cd-view-open::before {
+  content: '';
+  position: absolute;
+  inset: -6px 0 -6px -6px;
+}
+
+/* Folded away until it is useful, then grows out of View to the right.
+   It folds on the exit curve and faster than it grows: nothing the map
+   has stopped offering should linger. */
+.cd-view-quick {
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  max-width: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    max-width 0.26s var(--ease-exit),
+    opacity 0.12s ease,
+    visibility 0s linear 0.26s;
+}
+
+.cd-view-quick-on {
+  max-width: 240px;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    max-width 0.34s var(--ease-glide),
+    opacity 0.2s ease 0.08s,
+    visibility 0s;
+}
+
+.cd-view-rule {
+  flex-shrink: 0;
+  width: 1px;
+  margin: 10px 0;
+  background: var(--ln3);
+}
+
+.cd-view-quick-switch {
+  gap: 9px;
+  padding: 0 14px 0 12px;
+  border-radius: 0 13px 13px 0;
+  color: var(--t2);
+}
+
+.cd-view-quick-switch[aria-checked='true'] {
+  color: var(--t);
+}
+
+/* The View panel's switch, a size down: 32×20 with a 14px knob. */
+.cd-quick-track {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 32px;
+  height: 20px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--track);
+  transition: background-color 0.2s ease;
+}
+
+.cd-quick-knob {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--knob);
+  box-shadow: var(--shKnob);
+  transition: transform 0.22s var(--ease-glide);
+}
+
+.cd-view-quick-switch[aria-checked='true'] .cd-quick-track {
+  background: var(--acc);
+}
+
+.cd-view-quick-switch[aria-checked='true'] .cd-quick-knob {
+  transform: translateX(12px);
+}
+
+/* View's container is not a button, so it neither takes the focus nor
+   presses: each button inside does, on its own. */
+.cd-view-open:focus-visible,
+.cd-view-quick-switch:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+
+.cd-view-open:active,
+.cd-view-quick-switch:active {
+  transform: scale(0.97);
+}
+
+/* Only Recenter's pill presses whole. A press on either of View's
+   buttons makes its container :active too, and the pill would shrink
+   around the button already shrinking inside it. */
+.cd-recentre:active .cd-float-pill {
   transform: scale(0.97);
 }
 
@@ -1002,15 +1137,71 @@ button {
   .cd-view-button {
     left: 6px;
   }
+
+  .cd-view-open {
+    gap: 7px;
+    padding: 0 12px;
+  }
+
+  .cd-view-quick-switch {
+    gap: 8px;
+    padding: 0 12px 0 10px;
+    font-size: 13px;
+  }
+
+  /* A labelled Recenter does not fit beside the switch, so it keeps its
+     icon alone, 46 square. */
+  [data-quick] .cd-recentre-label {
+    display: none;
+  }
+
+  [data-quick] .cd-recentre .cd-float-pill {
+    width: 46px;
+    padding: 0;
+  }
 }
 
 /* Forced colours drop box-shadow and the fills, which is every edge
    either pill has. It comes back as a system-colour outline, drawn just
-   inside so that nothing changes size. */
+   inside so that nothing changes size. The quick switch's track is
+   given the View panel's switch treatment (.cd-switch-track), and the
+   rule between View and the switch is drawn in the same colour. */
 @media (forced-colors: active) {
   .cd-float-pill {
     outline: 1px solid ButtonText;
     outline-offset: -1px;
+  }
+
+  .cd-quick-track {
+    outline: 1px solid ButtonText;
+    outline-offset: -1px;
+  }
+
+  .cd-view-quick-switch[aria-checked='true'] .cd-quick-track {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .cd-view-rule {
+    background: ButtonText;
+  }
+}
+
+/* A reader who has asked for nothing to move gets the switch simply
+   there or gone, and a switch that is simply on or off. */
+@media (prefers-reduced-motion: reduce) {
+  .cd-view-quick,
+  .cd-view-quick-on,
+  .cd-view-open,
+  .cd-view-quick-switch,
+  .cd-quick-track,
+  .cd-quick-knob {
+    transition: none;
+  }
+
+  .cd-view-open:active,
+  .cd-view-quick-switch:active {
+    transform: none;
   }
 }
 
@@ -1075,7 +1266,7 @@ button {
 
   .cd-chip:active,
   .cd-rung:active,
-  .cd-float:active .cd-float-pill {
+  .cd-recentre:active .cd-float-pill {
     transform: none;
   }
 }
@@ -2889,8 +3080,9 @@ button {
    landscape phones (which is any window under 500 tall, however wide)
    and tablets, where it would otherwise cover them. On desktop (width
    >= 1024 and height >= 500, whatever the pointer) it stays at 24, with
-   room to pass between them. The two queries are the vocabulary's
-   narrow and short classes, which together cover those three. */
+   room to pass between them, except while the quick switch is out (see
+   below). The two queries are the vocabulary's narrow and short
+   classes, which together cover those three. */
 @media (max-width: 1023.98px) {
   .cd-toast-map {
     bottom: calc(76px + env(safe-area-inset-bottom));
@@ -2901,6 +3093,14 @@ button {
   .cd-toast-map {
     bottom: calc(76px + env(safe-area-inset-bottom));
   }
+}
+
+/* On desktop the quick switch carries View's pill some 300px in. A long
+   toast centred on a window near 1024 wide would lie over its end, and
+   the toasts the filters raise while it is out are long ones, so while
+   the switch is out the toast rises there too. */
+[data-quick] .cd-toast-map {
+  bottom: calc(76px + env(safe-area-inset-bottom));
 }
 
 /* Forced colours drop the shadow that is the toast's edge. */
