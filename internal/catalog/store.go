@@ -383,13 +383,27 @@ func (s *Store) RecordCheck(ctx context.Context, gen Generation, outcome string)
 // DropRetired removes the previous generation. Called at the start of a
 // run rather than at the end of the last one, so readers had the whole
 // gap between imports to finish with it.
+//
+// The timeout and the drop share one transaction. As two statements on
+// the pool they could land on different connections, leaving the drop
+// to wait forever and the timeout behind on a connection the import's
+// long statements would later borrow. SET LOCAL ends with the
+// transaction, so nothing outlives the drop.
 func (s *Store) DropRetired(ctx context.Context) error {
-	if _, err := s.pool.Exec(ctx, `SET lock_timeout = '`+
-		fmt.Sprint(PublishLockTimeout.Milliseconds())+`ms'`); err != nil {
-		return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("catalog: begin drop %s: %w", retired, err)
 	}
-	if _, err := s.pool.Exec(ctx, `DROP SCHEMA IF EXISTS `+retired+` CASCADE`); err != nil {
+	defer tx.Rollback(context.WithoutCancel(ctx))
+
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, PublishLockTimeout.Milliseconds())); err != nil {
+		return fmt.Errorf("catalog: set lock_timeout: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DROP SCHEMA IF EXISTS `+retired+` CASCADE`); err != nil {
 		return fmt.Errorf("catalog: drop %s: %w", retired, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("catalog: commit drop %s: %w", retired, err)
 	}
 	return nil
 }

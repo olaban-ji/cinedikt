@@ -5,6 +5,9 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // testStore opens the database named by CATALOG_TEST_URL, or skips.
@@ -316,6 +319,68 @@ func TestPublishSwapsAndKeepsTheOldOneUntilNextRun(t *testing.T) {
 	}
 	if old {
 		t.Error("the previous generation was not dropped on the next run")
+	}
+}
+
+// TestDropRetiredKeepsItsLockTimeoutToItself is the timeout doing its
+// job on the drop and nowhere else: a reader still on the old
+// generation makes the drop give up rather than wait, and afterwards no
+// connection in the pool carries the timeout into the import's own long
+// statements.
+func TestDropRetiredKeepsItsLockTimeoutToItself(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`DROP SCHEMA IF EXISTS ` + retired + ` CASCADE`,
+		`CREATE SCHEMA ` + retired,
+		`CREATE TABLE ` + retired + `.titles (tconst text)`,
+	} {
+		if _, err := s.pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reader, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Exec(ctx, `LOCK TABLE `+retired+`.titles IN ACCESS SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	// Bounded, so a drop that waits forever fails the test rather than
+	// hanging it.
+	waitCtx, cancel := context.WithTimeout(ctx, 6*PublishLockTimeout)
+	err = s.DropRetired(waitCtx)
+	cancel()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Errorf("err = %v, want the drop to give up on a lock timeout", err)
+	}
+	if err := reader.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DropRetired(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Holding every connection the pool can have at once is the only
+	// way to be sure each one is looked at, whichever ran the drop.
+	conns := make([]*pgxpool.Conn, s.pool.Config().MaxConns)
+	for i := range conns {
+		if conns[i], err = s.pool.Acquire(ctx); err != nil {
+			t.Fatal(err)
+		}
+		defer conns[i].Release()
+	}
+	for i, c := range conns {
+		var setting, reset string
+		if err := c.QueryRow(ctx,
+			`SELECT setting, reset_val FROM pg_settings WHERE name = 'lock_timeout'`).Scan(&setting, &reset); err != nil {
+			t.Fatal(err)
+		}
+		if setting != reset {
+			t.Errorf("connection %d kept lock_timeout = %sms, want its default %sms", i, setting, reset)
+		}
 	}
 }
 
