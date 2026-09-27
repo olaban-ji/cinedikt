@@ -53,7 +53,7 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	store, err := catalog.Open(ctx, cfg.DatabaseURL, cfg.ImporterMaxConns)
+	store, err := catalog.OpenForJobs(ctx, cfg.DatabaseURL, cfg.ImporterMaxConns)
 	if err != nil {
 		logger.Error("open catalog", "err", err)
 		return 1

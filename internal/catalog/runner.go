@@ -77,7 +77,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		if r.DatabaseURL == "" {
 			return errors.New("catalog: the runner needs a Store or a DatabaseURL")
 		}
-		store, err := Open(ctx, r.DatabaseURL, r.MaxConns)
+		store, err := OpenForJobs(ctx, r.DatabaseURL, r.MaxConns)
 		if err != nil {
 			return fmt.Errorf("catalog: open the runner's pool: %w", err)
 		}

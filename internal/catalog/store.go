@@ -51,6 +51,35 @@ type Store struct {
 // start because it is the one schema that is never dropped and never
 // renamed, and an empty database has to be able to take a first import.
 func Open(ctx context.Context, url string, maxConns int32) (*Store, error) {
+	cfg, err := poolConfig(url, maxConns, false)
+	if err != nil {
+		return nil, err
+	}
+	return open(ctx, cfg)
+}
+
+// OpenForJobs is Open for the pool the catalog jobs run on: the import
+// and the poster, id and colour passes. Its queries each run on one
+// backend, without parallel workers.
+//
+// Postgres splits a large scan or join across parallel workers, and
+// they share their working state through /dev/shm. Railway's Postgres
+// container gives /dev/shm 64 MB. The count of titles wanting a poster,
+// which joins every title to its poster row on every pass, asked for
+// more and failed with "could not resize shared memory segment ... No
+// space left on device". A background pass loses nothing by taking a
+// little longer, and it leaves that memory to the queries readers are
+// waiting on.
+func OpenForJobs(ctx context.Context, url string, maxConns int32) (*Store, error) {
+	cfg, err := poolConfig(url, maxConns, true)
+	if err != nil {
+		return nil, err
+	}
+	return open(ctx, cfg)
+}
+
+// poolConfig is the pool Open and OpenForJobs build, before it connects.
+func poolConfig(url string, maxConns int32, jobs bool) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: parse database url: %w", err)
@@ -68,7 +97,13 @@ func Open(ctx context.Context, url string, maxConns int32) (*Store, error) {
 		cfg.ConnConfig.RuntimeParams = map[string]string{}
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = "meta, public"
+	if jobs {
+		cfg.ConnConfig.RuntimeParams["max_parallel_workers_per_gather"] = "0"
+	}
+	return cfg, nil
+}
 
+func open(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: connect: %w", err)
