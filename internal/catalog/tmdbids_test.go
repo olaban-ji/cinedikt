@@ -76,6 +76,92 @@ func TestTMDbIDsAreMatchedBestKnownFirstAndOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestRefillingTheTMDbQueueWritesOnlyWhatChanged(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.tmdb`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.tmdb_queue`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.refillTMDBQueue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := queueRows(t, s)
+	if len(first) != 4 {
+		t.Fatalf("queued %v, want the four films a search can offer", first)
+	}
+
+	// Nothing has changed, so nothing may be written: no new version of
+	// any row, and no lock on one either, which dirties the page all the
+	// same.
+	if err := s.refillTMDBQueue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for id, row := range queueRows(t, s) {
+		if row != first[id] || row.xmax != "0" {
+			t.Errorf("%s was written with nothing to change: %+v, was %+v", id, row, first[id])
+		}
+	}
+
+	// A publish moves Reloaded's votes and brings Shawshank, which the
+	// queue has not seen. Those two are written, and only those.
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE `+Live+`.ratings SET num_votes = 700000 WHERE tconst = 'tt0234215'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.tmdb_queue WHERE tconst = 'tt0111161'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.refillTMDBQueue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after := queueRows(t, s)
+	if got := after["tt0234215"]; got.votes != 700000 || got.xmin == first["tt0234215"].xmin {
+		t.Errorf("reloaded = %+v, want its new votes", got)
+	}
+	if got, ok := after["tt0111161"]; !ok || got.votes != 2900000 {
+		t.Errorf("shawshank = %+v (queued %v), want it back with its votes", got, ok)
+	}
+	for _, id := range []string{"tt0133093", "tt0000001"} {
+		if row := after[id]; row != first[id] || row.xmax != "0" {
+			t.Errorf("%s was written with nothing to change: %+v, was %+v", id, row, first[id])
+		}
+	}
+}
+
+// queueRow is one row of the TMDb queue with the system columns that
+// say whether a statement has written to it since it was last read.
+type queueRow struct {
+	votes      int
+	xmin, xmax string
+}
+
+func queueRows(t *testing.T, s *Store) map[string]queueRow {
+	t.Helper()
+	rows, err := s.pool.Query(context.Background(), `
+		SELECT tconst, votes, xmin::text, xmax::text FROM meta.tmdb_queue`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]queueRow{}
+	for rows.Next() {
+		var id string
+		var row queueRow
+		if err := rows.Scan(&id, &row.votes, &row.xmin, &row.xmax); err != nil {
+			t.Fatal(err)
+		}
+		out[id] = row
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 func tmdbID(t *testing.T, s *Store, tconst string) int {
 	t.Helper()
 	id, _ := tmdbRow(t, s, tconst)

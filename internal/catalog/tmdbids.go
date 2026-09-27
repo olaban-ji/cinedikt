@@ -178,12 +178,25 @@ func (s *Store) tmdbIDsOutstanding(ctx context.Context) (int64, error) {
 // walks, best known first. Votes are copied onto the row: ordering the
 // live catalog on every page is the query the poster queue exists to
 // avoid, and this one would be larger.
+//
+// It runs at the start of every pass, not only after a publish, though
+// a publish is the one thing that brings new titles or moves votes.
+// The wake that says a publish happened is kept nowhere: one sent
+// while nobody was listening is lost, and the backstop pass is what
+// catches its titles. A pass with nothing new only reads.
 func (s *Store) refillTMDBQueue(ctx context.Context) error {
 	if _, err := s.pool.Exec(ctx, `
 		DELETE FROM meta.tmdb_queue q
 		WHERE EXISTS (SELECT 1 FROM meta.tmdb m WHERE m.tconst = q.tconst)`); err != nil {
 		return fmt.Errorf("catalog: clear matched tmdb queue: %w", err)
 	}
+	// Only a title new to the queue, or one whose votes have moved since
+	// it was queued, gets past the last NOT EXISTS. Letting every waiting
+	// title reach ON CONFLICT would rewrite all of them each pass — the
+	// better part of half a million dead rows every ten minutes, for the
+	// same numbers. A WHERE on the DO UPDATE is not enough on its own:
+	// Postgres still locks every row it declines to update, and a lock
+	// is a write to the row's page like any other.
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO meta.tmdb_queue (tconst, votes)
 		SELECT t.tconst, coalesce(r.num_votes, 0)
@@ -191,6 +204,9 @@ func (s *Store) refillTMDBQueue(ctx context.Context) error {
 		LEFT JOIN `+Live+`.ratings r USING (tconst)
 		WHERE `+tmdbIDFilm+`
 		  AND NOT EXISTS (SELECT 1 FROM meta.tmdb m WHERE m.tconst = t.tconst)
+		  AND NOT EXISTS (
+		      SELECT 1 FROM meta.tmdb_queue q
+		      WHERE q.tconst = t.tconst AND q.votes = coalesce(r.num_votes, 0))
 		ON CONFLICT (tconst) DO UPDATE SET votes = EXCLUDED.votes`)
 	if err != nil {
 		return fmt.Errorf("catalog: fill tmdb queue: %w", err)
