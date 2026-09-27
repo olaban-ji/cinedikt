@@ -842,6 +842,37 @@ button {
   font-weight: 400;
 }
 
+/* A year's own stretch of the rail, as tall as its row. Its label is
+   pinned inside it: while any of the row is on screen the label stays
+   at the top of the rail, just under the rating strip, and when the
+   row's bottom edge reaches it, it is pushed up and the next year's
+   label takes over. The break row's "· · ·" keeps its absolute place. */
+.cd-rail-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+/* Where it rests is railLabelTop's inset down the row (11px, or 8px for
+   a decade's larger face). Where it pins is the rating strip (AXIS_H,
+   26px) plus the same inset, lowered by --pin-lift while the header
+   lies over the map, and moved on the header's own timing when the
+   header goes up or comes back. */
+.cd-rail-slot .cd-rail-year {
+  position: sticky;
+  left: auto;
+  top: calc(var(--pin-lift, 0px) + 37px);
+  display: block;
+  width: max-content;
+  margin: 11px 0 6px 14px;
+  transition: top 0.32s var(--ease-glide);
+}
+
+.cd-rail-slot .cd-rail-decade {
+  top: calc(var(--pin-lift, 0px) + 34px);
+  margin-top: 8px;
+}
+
 /* ---- floating buttons ---- */
 
 /* The button itself is transparent and 6px larger on every side than the
@@ -1015,6 +1046,12 @@ button {
   .cd-rung,
   .cd-float,
   .cd-float-pill {
+    transition: none;
+  }
+
+  /* A pinned year label goes up and comes back with the header at once.
+     The selector matches the pinning rule's, so that this one wins. */
+  .cd-rail-slot .cd-rail-year {
     transition: none;
   }
 

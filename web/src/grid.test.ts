@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import css from './grid.css?raw';
 import matrix from './fixtures/matrix-grid.json';
 import { opacityOf } from './GridMap';
 import { keyYear } from './YearRange';
@@ -213,6 +214,27 @@ describe('the year rail', () => {
 
   it('puts the break row’s marker where a decade’s would be', () => {
     expect(railLabelTop(row({ isBreak: true, year: 0, height: 28 }))).toBe(108);
+  });
+
+  it('pins each year’s label as far under the rating strip as it rests down its row', () => {
+    // The stylesheet cannot read railLabelTop or AXIS_H, so its numbers
+    // are held to them here.
+    const rule = (sel: string) => css.match(new RegExp(`${sel} \\{([^}]*)\\}`))?.[1] ?? '';
+    const inset = railLabelTop(row({ top: 0 }));
+    const decadeInset = railLabelTop(row({ top: 0, decade: true, year: 2000 }));
+    const year = rule('\\.cd-rail-slot \\.cd-rail-year');
+    expect(year).toContain('position: sticky');
+    expect(year).toContain(`top: calc(var(--pin-lift, 0px) + ${AXIS_H + inset}px)`);
+    expect(year).toContain(`margin: ${inset}px 0 6px 14px`);
+    const decade = rule('\\.cd-rail-slot \\.cd-rail-decade');
+    expect(decade).toContain(`top: calc(var(--pin-lift, 0px) + ${AXIS_H + decadeInset}px)`);
+    expect(decade).toContain(`margin-top: ${decadeInset}px`);
+  });
+
+  it('moves a pinned label with the header, on the header’s own timing', () => {
+    const rule = (sel: string) => css.match(new RegExp(`${sel} \\{([^}]*)\\}`))?.[1] ?? '';
+    expect(rule('\\.cd-rail-slot \\.cd-rail-year')).toContain('transition: top 0.32s var(--ease-glide)');
+    expect(rule('\\.cd-header-over')).toContain('transition: transform 0.32s var(--ease-glide)');
   });
 });
 

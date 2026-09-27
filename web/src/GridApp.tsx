@@ -1101,6 +1101,7 @@ export function GridApp() {
           recentreKey={relaid}
           scroller={scrollerRef}
           overlayH={overlayH}
+          headerAway={headerAway}
           compact={screen.overlay}
           appScroll={appScroll}
           flown={flown}

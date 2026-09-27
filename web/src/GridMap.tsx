@@ -98,6 +98,9 @@ interface Props {
    *  plot starts that far down, and centring only ever uses what is
    *  below it. Zero when the header sits above the map instead. */
   overlayH?: number;
+  /** The header lying over the map has gone up out of the way, so the
+   *  pinned year labels go up with it. */
+  headerAway?: boolean;
   /** The small card, for a phone or a landscape phone. A screen-class
    *  call rather than a width: a landscape phone is as wide as a small
    *  tablet and still has a phone's height to fit rows into. */
@@ -164,6 +167,7 @@ export function GridMap({
   recentreKey = 0,
   scroller,
   overlayH = 0,
+  headerAway = false,
   compact,
   appScroll,
   flown = null,
@@ -595,7 +599,13 @@ export function GridMap({
         {layout && (
           <div
             className="cd-plot-wrap"
-            style={{ width: layout.plotW, ['--rail-w' as string]: `${layout.metrics.railW}px` }}
+            style={{
+              width: layout.plotW,
+              ['--rail-w' as string]: `${layout.metrics.railW}px`,
+              // How far down the pinned year labels sit: below the header
+              // while it lies over the map, and up with it when it hides.
+              ['--pin-lift' as string]: `${headerAway ? 0 : overlayH}px`,
+            }}
           >
             {overlayH > 0 && <div style={{ height: overlayH }} aria-hidden="true" />}
             {/* The rating scale, said in words. It is inside the plot, so
@@ -707,13 +717,21 @@ export function GridMap({
                         · · ·
                       </span>
                     ) : (
-                      <span
+                      // The row's own stretch of the rail. Its label is
+                      // pinned inside it (grid.css), so a year taller than
+                      // the screen still says which year it is until its
+                      // last card has gone by.
+                      <div
                         key={r.year}
-                        className={`cd-rail-year${r.decade ? ' cd-rail-decade' : ''}${r.anchorYear ? ' cd-rail-anchor' : ''}`}
-                        style={{ top: railLabelTop(r) }}
+                        className="cd-rail-slot"
+                        style={{ top: r.top, height: r.height }}
                       >
-                        {r.year}
-                      </span>
+                        <span
+                          className={`cd-rail-year${r.decade ? ' cd-rail-decade' : ''}${r.anchorYear ? ' cd-rail-anchor' : ''}`}
+                        >
+                          {r.year}
+                        </span>
+                      </div>
                     ),
                   )}
                 </div>
