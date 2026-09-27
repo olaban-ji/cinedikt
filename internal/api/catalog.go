@@ -88,6 +88,9 @@ func (s *CatalogServer) movieGrid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		if gone(r) {
+			return
+		}
 		s.Logger.Error("grid", "id", id, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not build that map")
 		return
@@ -124,6 +127,9 @@ func (s *CatalogServer) movieGridFilms(w http.ResponseWriter, r *http.Request) {
 	}
 	films, err := s.Catalog.Films(r.Context(), anchor, ids)
 	if err != nil {
+		if gone(r) {
+			return
+		}
 		s.Logger.Error("grid films", "anchor", anchor, "err", err)
 		writeError(w, http.StatusInternalServerError, "could not read those films")
 		return
@@ -139,6 +145,9 @@ func (s *CatalogServer) firstRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hits, err := s.Catalog.FirstRun(r.Context(), 0)
+	if err != nil && gone(r) {
+		return
+	}
 	if err != nil {
 		s.Logger.Error("first run", "err", err)
 		// An empty screen is better than an error on the way in.
@@ -164,6 +173,9 @@ func (s *CatalogServer) searchMovies(w http.ResponseWriter, r *http.Request) {
 	}
 	hits, err := s.Catalog.Search(r.Context(), q, SearchHits)
 	if err != nil {
+		if gone(r) {
+			return
+		}
 		s.Logger.Error("search", "err", err)
 		writeError(w, http.StatusInternalServerError, "could not search")
 		return
@@ -185,6 +197,9 @@ func (s *CatalogServer) searchMovies(w http.ResponseWriter, r *http.Request) {
 func (s *CatalogServer) ready(w http.ResponseWriter, r *http.Request) bool {
 	ok, err := s.Catalog.LiveReady(r.Context())
 	if err != nil {
+		if gone(r) {
+			return false
+		}
 		s.Logger.Error("readiness", "err", err)
 		writeError(w, http.StatusServiceUnavailable, "the catalog is unavailable")
 		return false
@@ -194,6 +209,18 @@ func (s *CatalogServer) ready(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// gone reports whether the reader stopped waiting before the answer was
+// ready. The page cancels a request it no longer needs: every keystroke
+// in the search field replaces the last search, and leaving the opening
+// screen early drops its films. A closed tab does the same. The query
+// then fails with context.Canceled, which says nothing about the
+// catalog, so it is not logged as an error and nothing is written back,
+// because nobody is there to read it. A request that ran out of time
+// ends with DeadlineExceeded instead, and that is still an error.
+func gone(r *http.Request) bool {
+	return errors.Is(r.Context().Err(), context.Canceled)
 }
 
 // validTConst is IMDb's title id: "tt" and at least seven digits, though
