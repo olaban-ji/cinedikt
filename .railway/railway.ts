@@ -24,6 +24,21 @@ export default defineRailway(() => {
       // the notifier uses the first three of them to write its last
       // board and save what it said before the next container reads it.
       drainingSeconds: 10,
+      // How long the old container keeps serving after the new one is
+      // healthy, before it is told to stop, so a request still on its
+      // way to the old one is answered rather than dropped. Only one of
+      // the two runs the catalog jobs and edits the Telegram board; the
+      // other waits for the lease, so the overlap never doubles them.
+      overlapSeconds: 10,
+      // The size the service runs at, set in the dashboard before this
+      // file declared it. Named here because an apply resets anything
+      // left out, and a null limit is not the same machine.
+      limitOverride: {
+        containers: {
+          cpu: 2,
+          memoryBytes: 4_000_000_000,
+        },
+      },
       // restartPolicyType (ON_FAILURE) and sleepApplication (false) are
       // Railway's defaults and are deliberately not declared: the API
       // stores a default as null, so declaring one leaves `config plan`
