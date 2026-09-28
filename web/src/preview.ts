@@ -5,6 +5,8 @@
 // place here is in plot coordinates: the ones the cards are placed in,
 // which start at the top of the plot inside the map's scroller.
 
+import { FOLD_SETTLE_MS } from './trailer';
+
 /** How wide the preview is. */
 export const PREVIEW_W = 360;
 /** The gap between the preview and its card. */
@@ -28,8 +30,10 @@ export const SYN_LINES = 6;
 /** The box's gap, which a synopsis folded away entirely takes back. */
 export const SYN_GAP = 12;
 /** How long the synopsis takes to fold, and a little over: its line
- *  clamp, with the ellipsis, moves only after this, so nothing snaps. */
-export const SYN_SETTLE_MS = 540;
+ *  clamp, with the ellipsis, moves only after this, so nothing snaps.
+ *  The fold moves with the player opening, so this is the player's own
+ *  settle, the same one the panel's synopsis waits for. */
+export const SYN_SETTLE_MS = FOLD_SETTLE_MS;
 
 /** A pointer resting this long on a card opens its preview. */
 export const PREVIEW_REST_MS = 480;

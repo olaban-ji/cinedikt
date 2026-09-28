@@ -14,6 +14,7 @@ import { stillNow } from './motion';
 import { ENTER_MS } from './sheet';
 import { canRest } from './tap';
 import {
+  FOLD_SETTLE_MS,
   TRAILER_GONE_MS,
   TRAILER_REST_MS,
   YT_LISTENING,
@@ -37,7 +38,8 @@ export interface Player {
   play: Play | null;
   /** What is open right now, for a handler that runs between renders. */
   now: () => Play | null;
-  /** Open a player at this width, closing any other. */
+  /** Open a player at this width, closing any other, with the synopsis
+   *  beside it folded to `synLines` (see Play). */
   start: (where: PlayWhere, id: string, muted: boolean, W: number, synLines?: number | null) => void;
   /** Close whatever is open, or only a player open in `where`. */
   stop: (where?: PlayWhere) => void;
@@ -59,11 +61,28 @@ export function usePlayer(): Player {
   const current = useRef<Play | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const timer = useRef(0);
+  const settle = useRef(0);
 
   const put = useCallback((next: Play | null) => {
     current.current = next;
     setPlay(next);
   }, []);
+
+  // A synopsis folding to make room for the player finishes as the
+  // player's opening does, and only then is its line clamp moved, so the
+  // ellipsis does not snap to its new line mid-fold.
+  const settleFold = useCallback(
+    (opened: Play) => {
+      window.clearTimeout(settle.current);
+      if (opened.synLines == null || opened.synSettled) return;
+      const { where, id } = opened;
+      settle.current = window.setTimeout(() => {
+        const p = current.current;
+        if (isFor(p, where, id) && p.open && !p.synSettled) put({ ...p, synSettled: true });
+      }, FOLD_SETTLE_MS);
+    },
+    [put],
+  );
 
   // Holds the commands until the player says it is ready, then sends it
   // the state as it stands (see playerLink).
@@ -72,7 +91,13 @@ export function usePlayer(): Player {
   );
   const { send } = link;
 
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(timer.current);
+      window.clearTimeout(settle.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     const heard = (e: MessageEvent) => {
@@ -101,16 +126,23 @@ export function usePlayer(): Player {
       }
       put(next);
       capture('trailer_play', { from: where, muted });
-      if (next.open) return;
+      if (next.open) {
+        settleFold(next);
+        return;
+      }
+      window.clearTimeout(settle.current);
       // A moment after it mounts, so the transitions have its closed
       // state to run from. A timer, as the sheets use, rather than a
       // frame.
       timer.current = window.setTimeout(() => {
         const p = current.current;
-        if (isFor(p, where, id) && !p.open && !p.closing) put({ ...p, open: true });
+        if (!isFor(p, where, id) || p.open || p.closing) return;
+        const opened = { ...p, open: true };
+        put(opened);
+        settleFold(opened);
       }, ENTER_MS);
     },
-    [link, put, send],
+    [link, put, send, settleFold],
   );
 
   const stop = useCallback(
@@ -123,6 +155,7 @@ export function usePlayer(): Player {
       // the frame is finally taken away.
       send('pauseVideo');
       window.clearTimeout(timer.current);
+      window.clearTimeout(settle.current);
       if (stillNow()) {
         put(null);
         return;
@@ -141,6 +174,7 @@ export function usePlayer(): Player {
       if (was?.where !== where) return;
       if (!was.closing) send('pauseVideo');
       window.clearTimeout(timer.current);
+      window.clearTimeout(settle.current);
       put(null);
     },
     [put, send],
@@ -207,8 +241,7 @@ interface RowProps {
   trailer: string | null | undefined;
   player: Player;
   /** Start this row's player, the video drawn at width `W`. The panel
-   *  starts it as it stands; the preview first works out how to make
-   *  room for it. */
+   *  and the preview each first work out how to make room for it. */
   onPlay: (muted: boolean, W: number) => void;
 }
 

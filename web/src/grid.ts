@@ -413,9 +413,52 @@ export function searchedTagAt(anchor: { left: number; top: number }): {
   return { left: anchor.left + 10, top: anchor.top - 10 };
 }
 
+/** A row's identity from one layout to the next: its year, or the break,
+ *  which carries no year. A film gives the key of the row it is in. */
+export function rowKey(row: Pick<Row, 'year' | 'isBreak'>): string {
+  return row.isBreak ? 'break' : String(row.year);
+}
 
+/** Where a year that is leaving closes to, when hiding or showing the
+ *  empty years moves the rows: the new top of the next row below it that
+ *  stays or, with none staying below it, the new bottom of the last row
+ *  above it that stays. In the new layout's coordinates. A card leaving
+ *  a year that stays goes by the same rule, which takes it to the foot
+ *  of its own row while a row below it stays. `was` and `now` are the
+ *  two layouts' rows, top to bottom. */
+export function seamLeaving(key: string, was: Row[], now: Row[]): number {
+  const kept = new Map(now.map((r) => [rowKey(r), r]));
+  const i = was.findIndex((r) => rowKey(r) === key);
+  for (let j = i + 1; i >= 0 && j < was.length; j++) {
+    const k = kept.get(rowKey(was[j]));
+    if (k) return k.top;
+  }
+  for (let j = i - 1; j >= 0; j--) {
+    const k = kept.get(rowKey(was[j]));
+    if (k) return k.top + k.height;
+  }
+  return 0;
+}
 
-
+/** Where a year that is coming back opens out of: the old top of the
+ *  next row below it that was already showing or, with none below it,
+ *  the old bottom of the row above it. Each is moved on by `shift`, what
+ *  the scroll moved by, so it is the spot on screen where the two rows
+ *  met, in the new layout's coordinates. A card arriving in a year that
+ *  was already showing goes by the same rule. */
+export function seamArriving(key: string, was: Row[], now: Row[], shift: number): number {
+  const showing = new Map(was.map((r) => [rowKey(r), r]));
+  const i = now.findIndex((r) => rowKey(r) === key);
+  for (let j = i + 1; i >= 0 && j < now.length; j++) {
+    const k = showing.get(rowKey(now[j]));
+    if (k) return k.top + shift;
+  }
+  for (let j = i - 1; j >= 0; j--) {
+    const k = showing.get(rowKey(now[j]));
+    if (k) return k.top + k.height + shift;
+  }
+  return shift;
+}
 
 /** The band of cards to have ready: the screen the reader is on, plus
  *  the same amount above it and below it. `viewH` is that screen, so a

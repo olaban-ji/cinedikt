@@ -4,10 +4,10 @@
 // and chip waits its turn. Kept apart from the components so each number
 // is written once and can be checked without a DOM.
 
-/** The five curves, as grid.css names them. Script-driven animations
- *  cannot read a custom property, so they take the same values from
- *  here; the stylesheet's tokens and these must agree (motion.test.ts
- *  checks that they do). */
+/** The curves played from script, as grid.css names them. Script-driven
+ *  animations cannot read a custom property, so they take the same
+ *  values from here; the stylesheet's tokens and these must agree
+ *  (motion.test.ts checks that they do). */
 export const EASE = {
   /** Most movement: flights, FLIP, the mark gliding home. */
   glide: 'cubic-bezier(0.22, 0.9, 0.24, 1)',
@@ -19,6 +19,9 @@ export const EASE = {
   spread: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
   /** The opening mark coming into focus. */
   focus: 'cubic-bezier(0.25, 0.7, 0.2, 1)',
+  /** Rows closing up or opening out as the empty years hide or show: a
+   *  gentle start and a long, soft settle. */
+  row: 'cubic-bezier(0.32, 0.72, 0, 1)',
 } as const;
 
 /** A box in viewport pixels: what getBoundingClientRect gives, and all
@@ -521,14 +524,83 @@ export function chipShift(was: Box, now: Box): { dx: number; dy: number } {
 }
 
 // ---- narrowing the map ----
+//
+// Hiding or showing the empty years closes the rows up, or opens them
+// out, as one motion. The searched card stays still: the scroller moves
+// by its shift. Every card, year label and year band that stays glides
+// to its new place; a year that leaves closes into the seam it leaves
+// between its neighbours, shrinking and fading as it goes; a year that
+// comes back opens out of that seam. Undoing plays the same motion the
+// other way. Every keyframe offset below is in eased progress, on
+// EASE.row.
 
-/** Hiding or showing the empty years. Cards that stay glide to their
- *  new rows; cards that arrive fade in a moment behind them, to their
- *  own opacity; cards that leave fade where they were. */
-export const REFLOW_MS = 260;
-export const ARRIVE_MS = 220;
-export const ARRIVE_DELAY_MS = 60;
-export const GHOST_MS = 140;
-/** One painted frame: long enough for a mounted "from" state to be on
- *  screen, which is what a transition needs to travel out of. */
-export const FLIP_MS = 30;
+export const REFLOW_MS = 600;
+
+/** How small a card or a year label is at the seam. A band closes into
+ *  it from its top instead, to almost nothing. */
+export const SEAM_SCALE = 0.94;
+export const SEAM_BAND_SCALE = 0.02;
+
+/** Something leaving has faded out by halfway. Something arriving stays
+ *  out of sight until 0.3, and is at its own opacity by 0.85. */
+export const LEAVE_FADED_AT = 0.5;
+export const ARRIVE_FADE_FROM = 0.3;
+export const ARRIVE_FADE_TO = 0.85;
+
+/** Only what is this close to the part of the map on screen is drawn
+ *  leaving. Anything further out simply goes: nobody would see it. */
+export const LEAVE_REACH_PX = 240;
+
+/** Where the scroller goes to keep the searched card still: on by that
+ *  card's shift, `want`, from `from`, and no further than either end of
+ *  the new plot allows (`most` is its last scroll position). Near an
+ *  end of the map it cannot take the whole shift. */
+export function reflowScroll(from: number, want: number, most: number): number {
+  return Math.min(Math.max(0, from + want), Math.max(0, most));
+}
+
+/** How far back to put something that stays, so it starts where it was
+ *  on screen: its move in the layout, less the part the scroller has
+ *  already taken (`applied`, what the scroll actually moved by). For the
+ *  searched card that is nothing, except where the scroll was clamped,
+ *  and then it glides what the scroll could not take. A year's band and
+ *  label have no `left`: they only ever move down or up. */
+export function stayShift(
+  was: { left?: number; top: number },
+  now: { left?: number; top: number },
+  applied: number,
+): { dx: number; dy: number } {
+  return { dx: (was.left ?? 0) - (now.left ?? 0), dy: was.top - now.top + applied };
+}
+
+/** Something that stays, from where it was on screen to its new place. */
+export function stayKeyframes(dx: number, dy: number): Keyframe[] {
+  return [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }];
+}
+
+/** A copy of something leaving, drawn where it was in the old layout:
+ *  from there, which the scroll has moved by `from`, into the seam, `to`
+ *  away from where it is drawn, fading out from `opacity` by halfway. A
+ *  band closes from its top. */
+export function leaveKeyframes(from: number, to: number, opacity: number, band: boolean): Keyframe[] {
+  return [
+    { transform: `translateY(${from}px)`, opacity },
+    { opacity: 0, offset: LEAVE_FADED_AT },
+    { transform: `translateY(${to}px) ${seamScale(band)}`, opacity: 0 },
+  ];
+}
+
+/** Something arriving, out of the seam, `from` away from its new place,
+ *  and up to `opacity`, its own: a card the filters dim arrives dim. */
+export function arriveKeyframes(from: number, opacity: number, band: boolean): Keyframe[] {
+  return [
+    { transform: `translateY(${from}px) ${seamScale(band)}`, opacity: 0 },
+    { opacity: 0, offset: ARRIVE_FADE_FROM },
+    { opacity, offset: ARRIVE_FADE_TO },
+    { transform: 'none', opacity },
+  ];
+}
+
+function seamScale(band: boolean): string {
+  return band ? `scaleY(${SEAM_BAND_SCALE})` : `scale(${SEAM_SCALE})`;
+}

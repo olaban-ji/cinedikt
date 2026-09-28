@@ -1,10 +1,33 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { GridSheet, roleLine, scalePct, sheetEscape, versus, versusText } from './GridSheet';
+import css from './grid.css?raw';
+import {
+  GridSheet,
+  SheetSynopsis,
+  collapsedSyn,
+  foldingSyn,
+  holdsFold,
+  measureSynopsis,
+  measuredSyn,
+  restingSyn,
+  roleLine,
+  roomInPanel,
+  scalePct,
+  sheetEscape,
+  synFor,
+  synopsisView,
+  toggledSyn,
+  versus,
+  versusText,
+  type SynState,
+} from './GridSheet';
 import type { GridFilm, GridPayload, GridPerson } from './grid';
+import { sheetPosterPx } from './poster';
+import { screenOf, type ScreenClass } from './screen';
+import { ABOUT_GAP, MORE_ROW_H, SYN_LH, restingLines } from './synopsis';
 import type { Player } from './TrailerRow';
-import { startPlay, stopPlay, type Play } from './trailer';
+import { PLAYER, startPlay, stopPlay, videoHeight, videoWidth, type Play } from './trailer';
 
 // What the trailer lookup has already answered for the film on show.
 // The panel's first render shows it straight away, which is what a
@@ -128,9 +151,13 @@ const KEY = 'vKQi3bBA1y8';
 const SYNOPSIS = 'Neo and the rebel leaders estimate that they have 72 hours until Zion falls.';
 
 describe('the panel’s synopsis', () => {
-  it('is shown whole, between the title and the comparison', () => {
+  it('rests clamped to its lines, between the title and the comparison', () => {
     const html = panel(KEY, { synopsis: SYNOPSIS });
-    expect(html).toContain(`<p class="cd-sheet-synopsis">${SYNOPSIS}</p>`);
+    // Four lines until the panel has been measured, which happens before
+    // it is first painted.
+    expect(html).toContain(
+      `<div class="cd-sheet-syn" style="--syn-tr:0s"><p class="cd-sheet-syn-text" style="max-height:93px;-webkit-line-clamp:4">${SYNOPSIS}</p></div>`,
+    );
     const head = html.indexOf('cd-sheet-head');
     const about = html.indexOf('cd-sheet-about');
     const versusAt = html.indexOf('cd-sheet-versus');
@@ -142,7 +169,7 @@ describe('the panel’s synopsis', () => {
   it('is left out when there is none, with the trailer row still there', () => {
     for (const synopsis of [undefined, '', '   ']) {
       const html = panel(KEY, { synopsis });
-      expect(html).not.toContain('cd-sheet-synopsis');
+      expect(html).not.toContain('cd-sheet-syn');
       expect(html).toContain('cd-sheet-about');
       expect(html).toContain('Watch trailer');
     }
@@ -246,3 +273,431 @@ describe('Escape in the panel', () => {
     expect(did).toEqual(['leave']);
   });
 });
+
+/** The declarations of every rule with exactly this selector, @media
+ *  ones included, later ones winning. Enough of a parser for a sheet
+ *  with no nesting beyond @media. */
+function decls(selector: string): Map<string, string> {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const out = new Map<string, string>();
+  for (const m of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!m[1].split(',').map((x) => x.trim()).includes(selector)) continue;
+    for (const d of m[2].split(';')) {
+      const at = d.indexOf(':');
+      if (at > 0) out.set(d.slice(0, at).trim(), d.slice(at + 1).trim());
+    }
+  }
+  return out;
+}
+
+const px = (v: string | undefined) => Number(v?.match(/^(-?[\d.]+)px$/)?.[1] ?? NaN);
+
+/** What the panel's synopsis is measured against at a window size. */
+interface Panel {
+  cls: ScreenClass;
+  /** The body's visible height. */
+  bodyH: number;
+  /** Where the synopsis starts in it. */
+  synTop: number;
+  /** The video's height. */
+  VH: number;
+}
+
+/** The panel at a window size, as the stylesheet lays it out with enough
+ *  in it to fill its room (a long synopsis and a cast list). The head is
+ *  as tall as its poster, as it is for any title of a line or two. */
+function panelAt(w: number, h: number, searched = false): Panel {
+  const screen = screenOf(w, h);
+  const cls = screen.cls;
+  const sheet = decls(cls === 'desktop' ? '.cd-sheet' : `.cd-sheet-${cls}`);
+  const base = decls('.cd-sheet');
+  // Its own rule for this class, or the one every class shares.
+  const own = (sel: string, prop: string) =>
+    px(decls(`.cd-sheet-${cls} ${sel}`).get(prop) ?? decls(sel).get(prop));
+  let sheetH: number;
+  let sheetW: number;
+  if (cls === 'phone') {
+    // Up from the bottom, as tall as its contents up to its cap, and
+    // held in from both sides.
+    sheetH = h - Number(sheet.get('max-height')!.match(/^calc\(100% - (\d+)px\)$/)![1]);
+    sheetW = w - px(sheet.get('left')) - px(sheet.get('right'));
+  } else {
+    sheetH = h - px(sheet.get('top') ?? base.get('top')) - px(sheet.get('bottom') ?? base.get('bottom'));
+    const width = sheet.get('width') ?? base.get('width')!;
+    const min = width.match(/^min\((\d+)px, (\d+)vw\)$/);
+    sheetW = min ? Math.min(Number(min[1]), (w * Number(min[2])) / 100) : px(width);
+  }
+  // The phone's pinned Map foot, for any film but the searched one:
+  // its padding, its top border and the button.
+  const foot = decls('.cd-sheet-foot');
+  const [padTop, , padBottom] = foot.get('padding')!.split(' ').map(px);
+  const footH =
+    cls === 'phone' && !searched
+      ? padTop + padBottom + px(foot.get('border-top')!.split(' ')[0]) + px(decls('.cd-sheet-primary').get('height'))
+      : 0;
+  // The body is pulled up over the wash by its negative margin.
+  const bodyH = sheetH - own('.cd-sheet-wash', 'height') - own('.cd-sheet-body', 'margin-top') - footH;
+  const poster = own('.cd-sheet-poster', 'width');
+  expect(poster).toBe(sheetPosterPx(screen));
+  expect(decls('.cd-sheet-poster').get('aspect-ratio')).toBe('2 / 3');
+  const synTop = poster * 1.5 + px(decls('.cd-sheet-body').get('gap'));
+  return { cls, bodyH, synTop, VH: videoHeight(videoWidth('panel', sheetW - 2 * PLAYER.panel.pad)) };
+}
+
+/** A body and a synopsis `textLines` long, laid out as `at` says, the
+ *  synopsis drawn at `style` (its clamp and max-height) as React left it.
+ *  Only what the panel reads is here. */
+function laidOut(at: Panel, textLines: number, style = { webkitLineClamp: '4', maxHeight: '93px' }) {
+  const full = textLines * SYN_LH;
+  const body = { clientHeight: at.bodyH, scrollTop: 0, querySelector: () => row };
+  const p = {
+    offsetTop: at.synTop,
+    offsetParent: body,
+    style: { ...style },
+    getBoundingClientRect: () => ({
+      height: p.style.maxHeight === 'none' ? full : Math.min(full, parseFloat(p.style.maxHeight)),
+    }),
+  };
+  const row = { offsetTop: 0, offsetParent: body };
+  return {
+    body: body as unknown as HTMLElement,
+    p: p as unknown as HTMLElement,
+    style: p.style,
+    /** Puts the trailer row under the synopsis as it now shows. */
+    rowUnder(over: boolean) {
+      row.offsetTop = at.synTop + p.getBoundingClientRect().height + (over ? MORE_ROW_H : 0) + ABOUT_GAP;
+    },
+  };
+}
+
+/** A long overview, of the kind that used to push Watch trailer below
+ *  the fold, in lines at the panel's width. */
+const LONG = 9;
+
+describe('the panel’s synopsis at every screen class', () => {
+  const lines = (w: number, h: number, searched = false) => {
+    const { body, p } = laidOut(panelAt(w, h, searched), LONG);
+    return measureSynopsis(body, p).lines;
+  };
+
+  it('rests at four lines on a desktop, a tablet and a portrait phone', () => {
+    expect(panelAt(1440, 900)).toMatchObject({ cls: 'desktop', bodyH: 800, synTop: 188 });
+    expect(lines(1440, 900)).toBe(4);
+    expect(lines(1366, 768)).toBe(4);
+    expect(lines(820, 1180)).toBe(4);
+    // A film other than the searched one, so the Map foot is pinned.
+    expect(panelAt(390, 844)).toMatchObject({ cls: 'phone', bodyH: 659, synTop: 158 });
+    expect(lines(390, 844)).toBe(4);
+    expect(lines(390, 844, true)).toBe(4);
+  });
+
+  it('rests at fewer in a short window, so Watch trailer shows without a scroll', () => {
+    expect(panelAt(667, 375)).toMatchObject({ cls: 'short', bodyH: 313, synTop: 134 });
+    expect(lines(667, 375)).toBe(3);
+    expect(lines(640, 360)).toBe(2);
+    for (const [w, h] of [
+      [1440, 900],
+      [1366, 768],
+      [390, 844],
+      [667, 375],
+      [640, 360],
+    ]) {
+      const at = panelAt(w, h);
+      const n = lines(w, h);
+      // The trailer row's foot, More's row counted, and 16 to spare.
+      expect(at.synTop + n * SYN_LH + MORE_ROW_H + ABOUT_GAP + 44 + 16, `${w}x${h}`).toBeLessThanOrEqual(at.bodyH);
+    }
+  });
+
+  it('never rests at fewer than two, however little room there is', () => {
+    expect(lines(640, 320)).toBe(2);
+    expect(panelAt(568, 320).cls).toBe('phone');
+    expect(lines(568, 320)).toBe(2);
+  });
+
+  it('is measured whole with its clamp and max-height off for the one read, then put back', () => {
+    const { body, p, style } = laidOut(panelAt(1440, 900), LONG);
+    expect(measureSynopsis(body, p)).toEqual({ lines: 4, over: true, full: LONG * SYN_LH });
+    expect(style).toEqual({ webkitLineClamp: '4', maxHeight: '93px' });
+  });
+
+  it('is measured where it rests while a trailer holds it folded away, or partway there', () => {
+    // The screen class changing under an open trailer: the block is
+    // pulled up by its margin, and the paragraph with it.
+    const pulledUp = (at: Panel, margin: number) => {
+      const { body, p } = laidOut({ ...at, synTop: at.synTop + margin }, LONG, {
+        webkitLineClamp: 'unset',
+        maxHeight: '0px',
+      });
+      Object.assign(p, { parentElement: { margin } });
+      return measureSynopsis(body, p);
+    };
+    vi.stubGlobal('getComputedStyle', (el: { margin: number }) => ({ marginTop: `${el.margin}px` }));
+    try {
+      // 380 tall, three lines, where the 14px the block is pulled up by
+      // would look like room for a fourth.
+      const at = panelAt(667, 380);
+      expect(at.cls).toBe('short');
+      expect(restingLines(at.bodyH, at.synTop - ABOUT_GAP)).toBe(4);
+      for (const [w, h] of [
+        [1440, 900],
+        [390, 844],
+        [667, 375],
+        [667, 380],
+        [640, 360],
+      ]) {
+        const rest = laidOut(panelAt(w, h), LONG);
+        const want = measureSynopsis(rest.body, rest.p);
+        for (const margin of [-ABOUT_GAP, -5, 0]) {
+          expect(pulledUp(panelAt(w, h), margin), `${w}x${h} pulled up ${-margin}`).toEqual(want);
+        }
+      }
+      expect(pulledUp(at, -ABOUT_GAP).lines).toBe(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('More / Less', () => {
+  const ID2 = 'tt0145487';
+  const measured = (textLines: number, id = ID) => {
+    const { body, p } = laidOut(panelAt(1440, 900), textLines);
+    return measuredSyn(restingSyn(id), id, measureSynopsis(body, p));
+  };
+  const drawn = (s: SynState, play: Play | null = null) =>
+    renderToStaticMarkup(
+      createElement(SheetSynopsis, { text: SYNOPSIS, view: synopsisView(s, play, false), onToggle: () => {} }),
+    );
+
+  it('shows only when the text runs past its resting lines', () => {
+    expect(measured(LONG).over).toBe(true);
+    expect(drawn(measured(LONG))).toContain(
+      '<div class="cd-sheet-syn-more"><button type="button" aria-expanded="false">More</button></div>',
+    );
+    for (const n of [1, 3, 4]) {
+      expect(measured(n).over).toBe(false);
+      expect(drawn(measured(n))).not.toContain('cd-sheet-syn-more');
+    }
+    // Where it rests at three, a fourth line is one too many.
+    const { body, p } = laidOut(panelAt(667, 375), 4);
+    expect(measureSynopsis(body, p)).toMatchObject({ lines: 3, over: true });
+  });
+
+  it('opens to the whole text with the clamp off, and says so', () => {
+    const open = toggledSyn(measured(LONG), true, LONG * SYN_LH, false);
+    const v = synopsisView(open, null, false);
+    expect(v).toMatchObject({ expanded: true, maxHeight: LONG * SYN_LH, clamp: 'unset', tr: '360ms var(--ease-glide)' });
+    expect(drawn(open)).toContain('<button type="button" aria-expanded="true">Less</button>');
+  });
+
+  it('folds back with the clamp off until the fold is done, then clamps again', () => {
+    const open = toggledSyn(measured(LONG), true, LONG * SYN_LH, false);
+    const folding = toggledSyn(open, false, LONG * SYN_LH, false);
+    expect(synopsisView(folding, null, false)).toMatchObject({
+      expanded: false,
+      maxHeight: 93,
+      clamp: 'unset',
+      tr: '300ms var(--ease-close)',
+    });
+    expect(drawn(folding)).toContain('aria-expanded="false">More</button>');
+    expect(synopsisView({ ...folding, easing: false }, null, false).clamp).toBe(4);
+    // Nothing waits for a reader who has asked for nothing to move.
+    const still = toggledSyn(open, false, LONG * SYN_LH, true);
+    expect(synopsisView(still, null, true)).toMatchObject({ clamp: 4, tr: '0s' });
+  });
+
+  it('starts collapsed again when the panel opens another film', () => {
+    const open = toggledSyn(measured(LONG), true, LONG * SYN_LH, false);
+    expect(synFor(open, ID)).toBe(open);
+    expect(synFor(open, ID2)).toEqual(restingSyn(ID2));
+    const { body, p } = laidOut(panelAt(1440, 900), LONG);
+    const next = measuredSyn(open, ID2, measureSynopsis(body, p));
+    expect(next).toMatchObject({ id: ID2, expanded: false, over: true, lines: 4 });
+    // The same film measured again, when the screen class changes, keeps
+    // it open.
+    expect(measuredSyn(open, ID, { lines: 3, over: true, full: LONG * SYN_LH }).expanded).toBe(true);
+  });
+});
+
+describe('the panel’s synopsis as a trailer opens', () => {
+  /** How the panel makes room at a size, the synopsis resting as
+   *  measured there and `expanded` if More has opened it. */
+  function room(w: number, h: number, expanded = false) {
+    const at = panelAt(w, h);
+    const probe = laidOut(at, LONG);
+    const m = measureSynopsis(probe.body, probe.p);
+    const shownStyle = { webkitLineClamp: 'unset', maxHeight: expanded ? 'none' : `${m.lines * SYN_LH}px` };
+    const { body, p, rowUnder } = laidOut(at, LONG, shownStyle);
+    rowUnder(m.over);
+    return { ...roomInPanel(body, p, at.VH, m), lines: m.lines, at };
+  }
+
+  it('changes nothing where the whole video already fits, even with More open', () => {
+    for (const [w, h] of [
+      [1440, 900],
+      [1366, 768],
+      [390, 844],
+    ]) {
+      expect(room(w, h), `${w}x${h}`).toMatchObject({ synLines: null, to: null });
+    }
+    expect(room(1440, 900, true)).toMatchObject({ synLines: null, to: null });
+  });
+
+  it('folds to as many lines as leave room, with no scroll', () => {
+    expect(room(820, 700)).toMatchObject({ lines: 4, synLines: 3, to: null });
+    expect(room(820, 660)).toMatchObject({ lines: 4, synLines: 1, to: null });
+    // With More open the row sits lower, so it needs more room; the
+    // synopsis collapses as part of the fold, back to its resting lines
+    // when that alone is enough, and further when not.
+    expect(room(820, 760)).toMatchObject({ synLines: null, to: null });
+    expect(room(820, 760, true)).toMatchObject({ synLines: 4, to: null });
+    expect(room(820, 700, true)).toMatchObject({ synLines: 3, to: null });
+  });
+
+  it('folds away when one line is too many, still with no scroll when that is enough', () => {
+    expect(room(820, 620)).toMatchObject({ synLines: 0, to: null });
+  });
+
+  it('scrolls only for what folding away could not find', () => {
+    const r = room(667, 375);
+    expect(r).toMatchObject({ lines: 3, synLines: 0 });
+    expect(r.to).toBeCloseTo(81);
+    // Folded away, the row is where the synopsis started; scrolled, the
+    // video ends 12 above the body's visible bottom.
+    const rowTop = r.at.synTop;
+    expect(rowTop + 44 + 4 + r.at.VH - (r.to! + r.at.bodyH - 12)).toBeCloseTo(0);
+  });
+
+  it('never scrolls the controls row nearer the top than 8', () => {
+    const r = room(640, 320);
+    expect(r.synLines).toBe(0);
+    // The row is where the synopsis started once it has folded away.
+    expect(r.to).toBe(r.at.synTop - 8);
+    // So some of the video is left below the fold, rather than the
+    // controls above it.
+    expect(r.at.synTop + 48 + r.at.VH).toBeGreaterThan(r.to! + r.at.bodyH - 12);
+  });
+
+  it('folds with the player, its clamp following once the fold is done', () => {
+    const s = foldingSyn(measured4());
+    const opening = startPlay(null, 'panel', ID, false, 400, false, 3)!;
+    // Before the player opens nothing has moved; the clamp is already off.
+    expect(synopsisView(s, opening, false)).toMatchObject({ maxHeight: 93, clamp: 'unset' });
+    const open = { ...opening, open: true };
+    expect(synopsisView(s, open, false)).toMatchObject({
+      maxHeight: 3 * SYN_LH,
+      clamp: 'unset',
+      tr: '520ms var(--ease-glide)',
+    });
+    expect(synopsisView(s, { ...open, synSettled: true }, false).clamp).toBe(3);
+  });
+
+  it('folds away with More’s row, which takes no press while it is gone', () => {
+    const s = foldingSyn(measured4());
+    const gone = { ...startPlay(null, 'panel', ID, false, 400, false, 0)!, open: true };
+    expect(synopsisView(s, gone, false)).toMatchObject({ gone: true, maxHeight: 0 });
+    const html = renderToStaticMarkup(
+      createElement(SheetSynopsis, { text: SYNOPSIS, view: synopsisView(s, gone, false), onToggle: () => {} }),
+    );
+    expect(html).toContain('<div class="cd-sheet-syn cd-sheet-syn-gone"');
+    expect(html).toContain('<button type="button" aria-expanded="false" disabled="">More</button>');
+  });
+
+  it('keeps its fold while the trailer holds it, More opening nothing', () => {
+    const s = foldingSyn(measured4());
+    const opening = startPlay(null, 'panel', ID, false, 400, false, 1)!;
+    const open = { ...opening, open: true, synSettled: true };
+    // From the moment the trailer is asked for until its close starts,
+    // More takes no press.
+    expect(holdsFold(opening)).toBe(true);
+    expect(holdsFold(open)).toBe(true);
+    const folded = { maxHeight: SYN_LH, clamp: 1, expanded: false, more: true };
+    expect(synopsisView(s, open, false)).toMatchObject(folded);
+    // And the fold is the view's to keep: the whole text, were it open,
+    // would push the video past the body's bottom edge.
+    expect(synopsisView({ ...s, expanded: true }, open, false)).toMatchObject(folded);
+    const html = renderToStaticMarkup(
+      createElement(SheetSynopsis, { text: SYNOPSIS, view: synopsisView(s, open, false), onToggle: () => {} }),
+    );
+    expect(html).toContain('<button type="button" aria-expanded="false">More</button>');
+    // A trailer that needed none of its room, or one on its way out,
+    // holds nothing.
+    expect(holdsFold({ ...open, synLines: null })).toBe(false);
+    expect(holdsFold(stopPlay(open))).toBe(false);
+    expect(holdsFold(null)).toBe(false);
+  });
+
+  it('unfolds to its resting lines as the player closes, collapsed, its clamp back once the player has gone', () => {
+    const s = foldingSyn(measured4());
+    const open = { ...startPlay(null, 'panel', ID, false, 400, false, 1)!, open: true, synSettled: true };
+    const closing = stopPlay(open)!;
+    expect(synopsisView(collapsedSyn(s), closing, false)).toMatchObject({
+      expanded: false,
+      maxHeight: 93,
+      clamp: 'unset',
+      tr: '400ms var(--ease-close)',
+    });
+    expect(synopsisView(collapsedSyn(s), null, false)).toMatchObject({ expanded: false, maxHeight: 93, clamp: 4 });
+  });
+
+  it('comes back collapsed however the play ends, with no close to play too', () => {
+    // For a reader who has asked for nothing to move the player opens
+    // settled and goes at once, never closing. Open, even: whatever left
+    // it so, what the panel gives back as the fold ends is collapsed.
+    const open = startPlay(null, 'panel', ID, false, 400, true, 1)!;
+    expect(open).toMatchObject({ open: true, synSettled: true });
+    const s = { ...foldingSyn(measured4()), expanded: true, full: LONG * SYN_LH };
+    expect(holdsFold(open)).toBe(true);
+    expect(synopsisView(s, open, true)).toMatchObject({ expanded: false, maxHeight: SYN_LH, clamp: 1 });
+    expect(holdsFold(null)).toBe(false);
+    expect(synopsisView(collapsedSyn(s), null, true)).toMatchObject({
+      expanded: false,
+      maxHeight: 93,
+      clamp: 4,
+      tr: '0s',
+    });
+  });
+
+  it('opens at once to More pressed as the player closes', () => {
+    const open = { ...startPlay(null, 'panel', ID, false, 400, false, 1)!, open: true, synSettled: true };
+    const closing = stopPlay(open)!;
+    const s = toggledSyn(foldingSyn(measured4()), true, LONG * SYN_LH, false);
+    expect(synopsisView(s, closing, false)).toMatchObject({
+      expanded: true,
+      maxHeight: LONG * SYN_LH,
+      clamp: 'unset',
+      tr: '400ms var(--ease-close)',
+    });
+    const html = renderToStaticMarkup(
+      createElement(SheetSynopsis, { text: SYNOPSIS, view: synopsisView(s, closing, false), onToggle: () => {} }),
+    );
+    expect(html).toContain('<button type="button" aria-expanded="true">Less</button>');
+  });
+
+  it('leaves More open through a trailer that did not need its room', () => {
+    const s = toggledSyn(measured4(), true, LONG * SYN_LH, false);
+    const open = { ...startPlay(null, 'panel', ID, false, 430, false, null)!, open: true };
+    expect(synopsisView(s, open, false)).toMatchObject({ expanded: true, maxHeight: LONG * SYN_LH });
+    expect(synopsisView(s, stopPlay(open), false)).toMatchObject({ expanded: true, maxHeight: LONG * SYN_LH });
+  });
+
+  it('is drawn from the player’s state in the panel itself', () => {
+    const folded = { ...startPlay(null, 'panel', ID, false, 430, false, 1)!, open: true, synSettled: true };
+    expect(panel(KEY, { synopsis: SYNOPSIS }, folded)).toContain(
+      '<p class="cd-sheet-syn-text" style="max-height:23.25px;-webkit-line-clamp:1">',
+    );
+    const gone = panel(KEY, { synopsis: SYNOPSIS }, { ...folded, synLines: 0 });
+    expect(gone).toContain('<div class="cd-sheet-syn cd-sheet-syn-gone"');
+    expect(gone).toContain('<p class="cd-sheet-syn-text" style="max-height:0;');
+    const closing = panel(KEY, { synopsis: SYNOPSIS }, stopPlay(folded));
+    expect(closing).toContain('<div class="cd-sheet-syn" style="--syn-tr:400ms var(--ease-close)">');
+    expect(closing).toContain('style="max-height:93px;-webkit-line-clamp:unset"');
+  });
+});
+
+/** A long synopsis measured where it rests at four lines. */
+function measured4(): SynState {
+  const { body, p } = laidOut(panelAt(1440, 900), LONG);
+  return measuredSyn(restingSyn(ID), ID, measureSynopsis(body, p));
+}

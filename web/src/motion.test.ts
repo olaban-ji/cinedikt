@@ -23,8 +23,12 @@ import {
   LOADER_W,
   MAP_FADE_MS,
   REFLOW_MS,
-  ARRIVE_MS,
-  ARRIVE_DELAY_MS,
+  ARRIVE_FADE_FROM,
+  ARRIVE_FADE_TO,
+  LEAVE_FADED_AT,
+  LEAVE_REACH_PX,
+  SEAM_BAND_SCALE,
+  SEAM_SCALE,
   REST,
   REVEAL_WINDOW_MS,
   SET_AT_MS,
@@ -34,19 +38,24 @@ import {
   VEIL_IN_MS,
   VEIL_OPACITY,
   VEIL_OUT_MS,
+  arriveKeyframes,
   chipInDelay,
   chipShift,
   flightTo,
   landingTransform,
+  leaveKeyframes,
   legAt,
   legFrames,
   loaderSpot,
   markFlight,
   openingPlan,
   poseTransform,
+  reflowScroll,
   returnTileDelay,
   revealWindow,
   springAxis,
+  stayKeyframes,
+  stayShift,
   tileCaptionDelay,
   tileFillDelay,
 } from './motion';
@@ -62,13 +71,14 @@ const box = (left: number, top: number, width: number, height: number) => ({
 describe('the curves', () => {
   it('are the stylesheet’s own, for the animations played from script', () => {
     // The stylesheet names them; element.animate cannot read var(), so
-    // the same five are written again here and must not drift.
+    // the same curves are written again here and must not drift.
     const tokens: Record<string, string> = {
       glide: '--ease-glide',
       settle: '--ease-settle',
       exit: '--ease-exit',
       spread: '--ease-spread',
       focus: '--ease-focus',
+      row: '--ease-row',
     };
     for (const [name, prop] of Object.entries(tokens)) {
       const m = css.match(new RegExp(`${prop}:\\s*([^;]+);`));
@@ -369,10 +379,96 @@ describe('a leg of the flight', () => {
 });
 
 describe('the reflow', () => {
-  it('moves cards over 260 ms and fades new ones in over 220 ms after 60 ms', () => {
-    expect(REFLOW_MS).toBe(260);
-    expect([ARRIVE_MS, ARRIVE_DELAY_MS]).toEqual([220, 60]);
-    // The stylesheet's arrival transition says the same.
-    expect(css).toMatch(/\.cd-card-arrive \{\s*transition:\s*opacity 0\.22s linear 0\.06s/);
+  it('closes the rows up over 600 ms, with a gentle start and a long, soft settle', () => {
+    expect(REFLOW_MS).toBe(600);
+    expect(EASE.row).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
+    expect(css).toMatch(/--ease-row:\s*cubic-bezier\(0\.32, 0\.72, 0, 1\);/);
+    // All of it is played from script, so no transition in the
+    // stylesheet times any part of it.
+    expect(css).not.toContain('.cd-card-arrive');
+    expect(css).not.toContain('.cd-card-ghost');
+  });
+
+  it('draws copies only for what is within 240 px of the screen', () => {
+    expect(LEAVE_REACH_PX).toBe(240);
+  });
+
+  it('glides what stays from where it was on screen to its new place', () => {
+    expect(stayKeyframes(-12, 340)).toEqual([
+      { transform: 'translate(-12px, 340px)' },
+      { transform: 'none' },
+    ]);
+  });
+
+  it('closes what leaves into its seam, faded out by halfway', () => {
+    expect([SEAM_SCALE, LEAVE_FADED_AT]).toEqual([0.94, 0.5]);
+    expect(leaveKeyframes(-80, 200, 0.12, false)).toEqual([
+      { transform: 'translateY(-80px)', opacity: 0.12 },
+      { opacity: 0, offset: 0.5 },
+      { transform: 'translateY(200px) scale(0.94)', opacity: 0 },
+    ]);
+  });
+
+  it('closes a band from its top, to almost nothing', () => {
+    expect(SEAM_BAND_SCALE).toBe(0.02);
+    expect(leaveKeyframes(0, -60, 1, true).at(-1)).toEqual({
+      transform: 'translateY(-60px) scaleY(0.02)',
+      opacity: 0,
+    });
+    // Which only reads as closing into the seam if it shrinks towards
+    // its top edge, where the seam is.
+    expect(css).toMatch(/\.cd-band \{[^}]*transform-origin: top;/);
+  });
+
+  it('opens what arrives out of its seam, unseen until 0.3 and at its own opacity by 0.85', () => {
+    expect([ARRIVE_FADE_FROM, ARRIVE_FADE_TO]).toEqual([0.3, 0.85]);
+    // A dimmed card arrives dimmed.
+    expect(arriveKeyframes(-150, 0.12, false)).toEqual([
+      { transform: 'translateY(-150px) scale(0.94)', opacity: 0 },
+      { opacity: 0, offset: 0.3 },
+      { opacity: 0.12, offset: 0.85 },
+      { transform: 'none', opacity: 0.12 },
+    ]);
+    expect(arriveKeyframes(40, 1, true)[0]).toEqual({
+      transform: 'translateY(40px) scaleY(0.02)',
+      opacity: 0,
+    });
+  });
+
+  it('keeps the searched card still by moving the scroll by its shift', () => {
+    // As at 924 × 540 on The Matrix, where hiding the empty years takes
+    // 2450 px of rows from above the searched film.
+    const was = { left: 480, top: 3478 };
+    const now = { left: 480, top: 1028 };
+    const to = reflowScroll(3208, now.top - was.top, 1400);
+    expect(to).toBe(758);
+    expect(stayShift(was, now, to - 3208)).toEqual({ dx: 0, dy: 0 });
+  });
+
+  it('glides the searched card by what is left when the top of the map clamps the scroll', () => {
+    // The reader was 300 px down; the rows above close up by 2450 px, and
+    // the scroll can only give 300 of it.
+    const was = { left: 480, top: 2620 };
+    const now = { left: 480, top: 170 };
+    const to = reflowScroll(300, now.top - was.top, 900);
+    expect(to).toBe(0);
+    expect(stayShift(was, now, to - 300)).toEqual({ dx: 0, dy: 2150 });
+  });
+
+  it('glides it by what is left when the new plot ends before the scroll can follow', () => {
+    // Hiding near the bottom of the map: the rows above the searched film
+    // close up by 300 px, but those below it close up by more, so the new
+    // plot's last scroll position is 500 px above where the reader was.
+    const was = { left: 480, top: 2000 };
+    const now = { left: 480, top: 1700 };
+    const to = reflowScroll(1900, now.top - was.top, 1400);
+    expect(to).toBe(1400);
+    expect(stayShift(was, now, to - 1900)).toEqual({ dx: 0, dy: -200 });
+    // A plot shorter than the screen has nowhere to scroll at all.
+    expect(reflowScroll(40, -500, -120)).toBe(0);
+  });
+
+  it('moves a year’s band and label up or down only', () => {
+    expect(stayShift({ top: 400 }, { top: 250 }, -100)).toEqual({ dx: 0, dy: 50 });
   });
 });

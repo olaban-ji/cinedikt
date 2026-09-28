@@ -188,6 +188,11 @@
      where a sheet's exit only speeds up, because the player plays its
      opening path backwards and comes to rest where the button was. */
   --ease-close: cubic-bezier(0.55, 0, 0.3, 1);
+  /* Nor this: the rows closing up or opening out as the empty years
+     hide or show, a gentle start and a long, soft settle. The motion is
+     played from script, which takes it from motion.ts (EASE.row); it is
+     named here with the rest so the two can be held to each other. */
+  --ease-row: cubic-bezier(0.32, 0.72, 0, 1);
 
   /* Shadows that are the same in both themes. A thing lifted off the
      page casts the same dark shadow on paper as on charcoal, so only
@@ -496,11 +501,14 @@ button {
   left: calc(var(--rail-w) + 10px);
 }
 
+/* A year that leaves as the empty years hide closes up into its top
+   edge, and one that comes back opens down from it (useReflow). */
 .cd-band {
   position: absolute;
   left: 0;
   right: 0;
   border-top: 1px solid var(--ln);
+  transform-origin: top;
   transition: background-color 0.25s ease;
 }
 
@@ -539,8 +547,8 @@ button {
    change the other. It has no border; the shadow is its edge.
 
    Hover and press use the individual `translate` and `scale`
-   properties, so they add to a `transform` the opening or a reflow has
-   set inline rather than replacing it. */
+   properties, so they add to a `transform` the opening sets inline or
+   a reflow animates rather than replacing it. */
 .cd-card {
   position: absolute;
   z-index: 2;
@@ -892,6 +900,16 @@ button {
 .cd-rail-slot .cd-rail-decade {
   top: calc(var(--pin-lift, 0px) + 34px);
   margin-top: 8px;
+}
+
+/* The copy of a year's label leaving as the empty years hide. It is
+   held where the label was drawn, pinned or not, and goes with its row
+   into the seam (useReflow sets its top). */
+.cd-rail-slot.cd-rail-slot-leaving .cd-rail-year {
+  position: absolute;
+  left: 14px;
+  margin: 0;
+  transition: none;
 }
 
 /* ---- floating buttons ---- */
@@ -2008,13 +2026,92 @@ button {
   flex-shrink: 0;
 }
 
-/* Whole, however long: the panel is where a reader goes to read it. */
-.cd-sheet-synopsis {
+/* The synopsis rests at up to four lines, fewer when that is what it
+   takes for Watch trailer to show without a scroll, and folds further,
+   or away, to make room for the trailer as it opens. GridSheet sets its
+   lengths inline, one film's measurements (max-height, and the line
+   clamp that gives the ellipsis), and --syn-tr, the duration and curve
+   of whatever is changing them: More, Less, or the player opening or
+   closing, whose own timing the fold moves on. */
+.cd-sheet-syn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  transition: margin-top var(--syn-tr);
+}
+
+.cd-sheet-syn-text {
   margin: 0;
   font-size: 15px;
   line-height: 1.55;
   color: var(--t2);
   text-wrap: pretty;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  transition:
+    max-height var(--syn-tr),
+    opacity 0.2s ease;
+}
+
+/* More / Less: a 24px line with 4px above it. The button is 24 tall to
+   the eye and 44 to a finger, through a hit area that changes nothing
+   around it. */
+.cd-sheet-syn-more {
+  height: 28px;
+  transition:
+    height var(--syn-tr),
+    opacity 0.2s ease;
+}
+
+.cd-sheet-syn-more button {
+  position: relative;
+  display: block;
+  height: 24px;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accText);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.cd-sheet-syn-more button::before {
+  content: '';
+  position: absolute;
+  inset: -10px -14px;
+}
+
+.cd-sheet-syn-more button:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+@media (hover: hover) {
+  .cd-sheet-syn-more button:hover {
+    color: var(--acc);
+  }
+}
+
+/* Folded away for a trailer: the block also takes back the gap above
+   the trailer row. The toggle takes no pointer either, since faded out
+   and positioned it would sit over the player's controls and catch
+   every press meant for them. */
+.cd-sheet-syn-gone {
+  margin-top: -14px;
+}
+
+.cd-sheet-syn-gone .cd-sheet-syn-text {
+  opacity: 0;
+}
+
+.cd-sheet-syn-gone .cd-sheet-syn-more {
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* How the film sits against the searched one: a sentence and the two
@@ -2280,6 +2377,7 @@ button {
 
 /* For a reader who has asked for nothing to move, the sheet is simply
    there, and simply gone: sheet.ts does not wait for an exit either.
+   Its synopsis takes each new length at once, as GridSheet's timers do.
    After the rules it undoes, including the exit's own transition, so
    that it wins. */
 @media (prefers-reduced-motion: reduce) {
@@ -2287,6 +2385,9 @@ button {
   .cd-sheet,
   .cd-sheet.cd-sheet-out,
   .cd-sheet-close,
+  .cd-sheet-syn,
+  .cd-sheet-syn-text,
+  .cd-sheet-syn-more,
   .cd-sheet-primary,
   .cd-sheet-person {
     transition: none;
@@ -4595,25 +4696,10 @@ button {
   }
 }
 
-/* A card on its way out of a reflow: held where it was, long enough to
-   fade rather than vanish. */
-.cd-card-ghost {
-  transition: opacity 0.14s ease;
-}
-
-/* A card a reflow has just placed: it fades in over .22s, 60ms behind
-   the cards that only moved, to whatever opacity the filters give it. */
-.cd-card-arrive {
-  transition:
-    opacity 0.22s linear 0.06s,
-    translate 0.2s var(--ease-glide),
-    box-shadow 0.2s ease,
-    background-color 0.25s ease;
-}
-
+/* The searched card's ring after a landing, and a map fading as it is
+   left or lands, happen at once. The rows closing up are played from
+   script, which asks for itself (motion.ts's animate). */
 @media (prefers-reduced-motion: reduce) {
-  .cd-card-ghost,
-  .cd-card-arrive,
   .cd-card-anchor.cd-card-snap,
   .cd-scroller {
     transition: none;

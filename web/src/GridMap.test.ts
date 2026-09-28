@@ -10,6 +10,7 @@ import {
   isFlown,
   opacityOf,
   openingBox,
+  reflowPlan,
   ringDelay,
   spreadDelays,
   wordsFor,
@@ -22,6 +23,7 @@ import {
   type GridPayload,
   type Placed,
 } from './grid';
+import { LEAVE_REACH_PX } from './motion';
 import { previewScheduler, type PreviewClock } from './preview';
 
 /** A card whose spine says it holds these places in the chip row. */
@@ -298,6 +300,69 @@ describe('centredScroll', () => {
     expect(at.left).toBe(layout.plotW + 17 - 390);
     // Its right edge is on the glass.
     expect(hanging.anchor.left + cardW - at.left).toBeLessThanOrEqual(390);
+  });
+});
+
+describe('reflowPlan', () => {
+  // The Matrix at 924 wide, 418 of it on screen, lighting what is rated
+  // 7 and up: hiding the empty years takes 18 of its 45 years away.
+  const real = matrix as unknown as GridPayload;
+  const lit = (f: Parameters<typeof isLit>[0]) => isLit(f, new Set(), 7);
+  const shown = layoutGrid(real, 924, DEFAULT_SETTINGS, lit);
+  const hidden = layoutGrid(real, 924, { ...DEFAULT_SETTINGS, hideEmptyYears: true }, lit);
+  const viewH = 418;
+  const at = centredScroll(shown, { clientWidth: 924, clientHeight: viewH }, 0)!.top;
+  const plan = reflowPlan(shown, hidden, at, viewH, 0);
+  const cardH = shown.metrics.cardH;
+  const reach = { top: at - LEAVE_REACH_PX, bottom: at + viewH + LEAVE_REACH_PX };
+  const meets = (top: number, h: number) => top + h > reach.top && top < reach.bottom;
+  const inHidden = new Set(hidden.cards.map((c) => c.film.id));
+
+  it('moves the scroll by the searched card’s shift, so the card stays where it is', () => {
+    expect(shown.rows.length - hidden.rows.length).toBe(18);
+    const want = hidden.anchor!.top - shown.anchor!.top;
+    expect(want).toBe(-2200);
+    expect(plan.to).toBe(at + want);
+  });
+
+  it('draws copies only of what leaves within 240px of the screen', () => {
+    expect(plan.cards.length).toBeGreaterThan(0);
+    for (const c of plan.cards) {
+      expect(inHidden.has(c.film.id)).toBe(false);
+      expect(meets(c.top, cardH)).toBe(true);
+    }
+    // Anything further out simply goes.
+    const gone = shown.cards.filter((c) => !inHidden.has(c.film.id));
+    expect(plan.cards.length).toBeLessThan(gone.length);
+    expect(plan.cards.length).toBe(gone.filter((c) => meets(c.top, cardH)).length);
+    const years = new Set(hidden.rows.map((r) => r.year));
+    for (const r of plan.rows) {
+      expect(years.has(r.year)).toBe(false);
+      expect(meets(r.top, r.height)).toBe(true);
+    }
+  });
+
+  it('keeps drawn the cards that stay from within that reach, wherever the motion takes them', () => {
+    const near = shown.cards.filter((c) => inHidden.has(c.film.id) && meets(c.top, cardH));
+    expect([...plan.keep].sort()).toEqual(near.map((c) => c.film.id).sort());
+    expect(plan.keep.has(shown.anchor!.film.id)).toBe(true);
+  });
+
+  it('stops the scroll at the top of the map, and at the end of the new plot', () => {
+    // Just below the top, the rows above the searched film close up by
+    // more than the scroll has to give.
+    expect(reflowPlan(shown, hidden, 40, viewH, 0).to).toBe(0);
+    // At the very bottom of the whole map, the shorter plot ends first.
+    const bottom = shown.plotH - viewH;
+    expect(reflowPlan(shown, hidden, bottom, viewH, 0).to).toBe(hidden.plotH - viewH);
+  });
+
+  it('measures the screen from under a header lying over the map', () => {
+    // The plot starts 116px down the scroller, so the same scroll shows
+    // 116px less of it, and the scroll can go 116px further.
+    const over = reflowPlan(shown, hidden, at + 116, viewH, 116);
+    expect(over.to).toBe(plan.to + 116);
+    expect(over.cards).toEqual(plan.cards);
   });
 });
 

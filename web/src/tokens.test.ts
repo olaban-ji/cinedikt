@@ -146,7 +146,8 @@ describe('the theme tokens', () => {
     // which the sheet's wash is drawn in; --pin-lift is how far down the
     // header lying over the map pushes the pinned year labels; the
     // --trailer- ones are an open trailer player's measurements, which
-    // trailer.ts works out.
+    // trailer.ts works out; --syn-tr is the panel synopsis's transition,
+    // timed for whatever is changing it (synopsis.ts).
     const inline = new Set([
       '--tone',
       '--swatch-r',
@@ -163,6 +164,7 @@ describe('the theme tokens', () => {
       '--trailer-gap',
       '--trailer-well',
       '--trailer-origin',
+      '--syn-tr',
     ]);
     // Set by the very rule that reads it: the sheet's wash is an oklch()
     // made from --h, which has to live in a custom property to ship as

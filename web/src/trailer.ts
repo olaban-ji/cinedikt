@@ -13,9 +13,10 @@ export type PlayWhere = 'preview' | 'panel';
  *  have a starting point to run from. `closing` keeps it in the tree
  *  while its close plays. `W` × `VH` is the size the video is drawn at
  *  from the first frame, so the frame never lays itself out again as it
- *  grows. `synLines` is how many lines the preview's synopsis folds to
- *  make room for it (0 for none at all); null when nothing folds, which
- *  is always so in the panel. */
+ *  grows. `synLines` is how many lines the synopsis beside it folds to
+ *  make room for it (0 for none at all); null when nothing folds.
+ *  `synSettled` turns on once that fold has finished, so the synopsis's
+ *  line clamp, and its ellipsis, can follow it without a snap. */
 export interface Play {
   where: PlayWhere;
   id: string;
@@ -25,6 +26,7 @@ export interface Play {
   W: number;
   VH: number;
   synLines: number | null;
+  synSettled: boolean;
 }
 
 /** Opening takes this long, on the glide curve. */
@@ -36,6 +38,9 @@ export const TRAILER_CLOSE_MS = 400;
 export const TRAILER_GONE_MS = 420;
 /** Resting this long on Watch trailer starts it muted. */
 export const TRAILER_REST_MS = 250;
+/** How long after the player opens the synopsis beside it has finished
+ *  folding: the opening, and a little over. */
+export const FOLD_SETTLE_MS = TRAILER_OPEN_MS + 20;
 
 /** What differs between the two places a player opens: how far in from
  *  the box's edges the row sits, which is where the video grows from and
@@ -96,7 +101,8 @@ export function isFor(play: Play | null, where: PlayWhere, id: string): play is 
  *  that is still closing is taken back: it keeps its frame, and opens
  *  again at once, since it never left. Anything else is replaced, so
  *  only one plays at a time. `still` opens it at once too, for a reader
- *  who has asked for nothing to move. */
+ *  who has asked for nothing to move, and its synopsis's fold is done as
+ *  soon as it starts. */
 export function startPlay(
   was: Play | null,
   where: PlayWhere,
@@ -108,15 +114,17 @@ export function startPlay(
 ): Play | null {
   if (isFor(was, where, id) && !was.closing) return null;
   const VH = videoHeight(W);
-  if (isFor(was, where, id)) return { ...was, muted, open: true, closing: false, W, VH, synLines };
-  return { where, id, muted, open: still, closing: false, W, VH, synLines };
+  const synSettled = still;
+  if (isFor(was, where, id)) return { ...was, muted, open: true, closing: false, W, VH, synLines, synSettled };
+  return { where, id, muted, open: still, closing: false, W, VH, synLines, synSettled };
 }
 
 /** A player starting to close. Null when there is none, or it is already
- *  on its way. */
+ *  on its way. Its synopsis starts to unfold, so it is no longer
+ *  settled. */
 export function stopPlay(was: Play | null): Play | null {
   if (!was || was.closing) return null;
-  return { ...was, open: false, closing: true };
+  return { ...was, open: false, closing: true, synSettled: false };
 }
 
 /** What Escape closes while a layer holding a player is on top: the

@@ -17,6 +17,9 @@ import {
   passesFloor,
   railLabelTop,
   revealDelay,
+  rowKey,
+  seamArriving,
+  seamLeaving,
   searchedTagAt,
   type GridFilm,
   warmSpan,
@@ -25,6 +28,7 @@ import {
   type GridPerson,
   type GridSettings,
   type Placed,
+  type Row,
   type SpineFilm,
 } from './grid';
 import { MapPreview } from './MapPreview';
@@ -44,18 +48,21 @@ import type { Player } from './TrailerRow';
 import { useResolvedTheme, type Theme } from './theme';
 import { markAppScroll, type AppScroll } from './overHeader';
 import {
-  ARRIVE_DELAY_MS,
-  ARRIVE_MS,
   AXIS_FADE_MS,
-  FLIP_MS,
-  GHOST_MS,
+  EASE,
+  LEAVE_REACH_PX,
   REFLOW_MS,
   REVEAL_FLIP_MS,
   SPREAD_AFTER_LANDING_MS,
   SPREAD_RISE_PX,
   SPREAD_SCALE,
   animate,
+  arriveKeyframes,
+  leaveKeyframes,
+  reflowScroll,
   revealWindow,
+  stayKeyframes,
+  stayShift,
   stillNow,
   type Box,
 } from './motion';
@@ -218,7 +225,7 @@ export function GridMap({
     const el = scroller.current;
     if (!el) return;
     const height = el.clientHeight || window.innerHeight;
-    const scrollTop = Math.floor(Math.max(0, el.scrollTop - lift.current) / WARM_STEP) * WARM_STEP;
+    const scrollTop = warmTop(el.scrollTop, lift.current);
     const anchorId = anchorIdRef.current;
     setWidth(el.clientWidth || window.innerWidth);
     setView((prev) =>
@@ -295,27 +302,36 @@ export function GridMap({
         : null,
     [payload, width, settings, selectedIdx, compact],
   );
-  // What the rows are laid out against, so a reflow can tell a change
-  // of filter from a change of map or of width.
-  const filterSig = `${settings.hideEmptyYears}|${settings.minRating}|${[...selectedIdx].sort((a, b) => a - b).join(',')}`;
-  const reflow = useReflow(
-    layout,
-    filterSig,
-    scroller,
-    settings.hideEmptyYears,
-    appScroll,
-    payload.anchor.id,
-  );
-  const codes = useMemo(() => initialsFor(payload.people), [payload.people]);
-  const byId = useMemo(
-    () => new Map(payload.people.map((p) => [p.id, p])),
-    [payload.people],
-  );
   // The chip under the pointer, in the spine's own terms. -1 for an id
   // this row does not hold, which no card carries.
   const hoveredIdx = useMemo(
     () => (hovered == null ? null : payload.people.findIndex((p) => p.id === hovered)),
     [hovered, payload.people],
+  );
+  // While a copy lands on it, the searched card is not drawn, and it
+  // appears without a fade when the copy goes (see `snapped`).
+  const anchorHidden = landing != null;
+  const cardOpacity = (c: Placed) =>
+    (c.film.isAnchor && anchorHidden) || isFlown(c, flown)
+      ? 0
+      : opacityOf(c, selectedIdx, hoveredIdx, settings.minRating);
+  // What the rows are laid out against, so a reflow can tell a change
+  // of filter from a change of map or of width.
+  const filterSig = `${settings.hideEmptyYears}|${settings.minRating}|${[...selectedIdx].sort((a, b) => a - b).join(',')}`;
+  const reflow = useReflow({
+    layout,
+    sig: filterSig,
+    scroller,
+    hiding: settings.hideEmptyYears,
+    appScroll,
+    mapId: payload.anchor.id,
+    overlayH,
+    opacity: cardOpacity,
+  });
+  const codes = useMemo(() => initialsFor(payload.people), [payload.people]);
+  const byId = useMemo(
+    () => new Map(payload.people.map((p) => [p.id, p])),
+    [payload.people],
   );
 
   // A map a flown card lands on spreads a beat later than one opened
@@ -512,16 +528,22 @@ export function GridMap({
   }, [layout, overlayH, scroller]);
 
   const viewH = view.height > 0 ? view.height : window.innerHeight;
+  // A reflow draws the cards around where its scroll is about to take
+  // the reader, not around where they were: the ones that glide into
+  // view have to be there to glide.
   const scrollTop =
-    placedFor === payload.anchor.id && view.height > 0
+    reflow.spanTop ??
+    (placedFor === payload.anchor.id && view.height > 0
       ? view.scrollTop
       : layout
         ? openedAt(layout, viewH)
-        : 0;
+        : 0);
   const span = warmSpan(scrollTop, viewH);
   const screen = { top: scrollTop, bottom: scrollTop + viewH };
   const cards = layout
-    ? layout.cards.filter((c) => inWarmSpan(c.top, layout.metrics.cardH, span))
+    ? layout.cards.filter(
+        (c) => inWarmSpan(c.top, layout.metrics.cardH, span) || reflow.keep.has(c.film.id),
+      )
     : [];
 
   // Every card's place is already known, so scrolling never moves one.
@@ -616,9 +638,6 @@ export function GridMap({
     }
   }, [glassKey, detail, sheetPx]);
 
-  // While a copy lands on it, the searched card is not drawn, and it
-  // appears without a fade when the copy goes (see `snapped`).
-  const anchorHidden = landing != null;
   const snap = anchorHidden || snapped;
   // Hidden and out of reach as it fades, and for as long as the next map
   // is on its way: its cards answer for a film the reader has left.
@@ -669,30 +688,26 @@ export function GridMap({
                 </span>
               ))}
             </div>
-            <div className="cd-plot" style={{ height: layout.plotH }}>
-              {layout.rows.map((r) =>
-                r.isBreak ? (
-                  <div
-                    key="break"
-                    className="cd-band cd-band-break"
-                    style={{ top: r.top, height: r.height }}
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <div
-                    key={r.year}
-                    className={`cd-band${r.index % 2 === 1 ? ' cd-band-odd' : ''}${r.anchorYear ? ' cd-band-anchor' : ''}${r.decade ? ' cd-band-decade' : ''}`}
-                    style={{ top: r.top, height: r.height }}
-                  />
-                ),
-              )}
+            {/* Held at its old height while the rows close up (see
+                useReflow), so the scroll is never clamped under them. */}
+            <div className="cd-plot" style={{ height: layout.plotH, minHeight: reflow.plotH }}>
+              {/* The copies of years leaving come first, so the bands that
+                  stay are drawn over them. */}
+              {reflow.rows.map(({ row: r }) => (
+                <YearBand key={`leaving:${rowKey(r)}`} row={r} leaving />
+              ))}
+              {layout.rows.map((r) => (
+                <YearBand key={rowKey(r)} row={r} />
+              ))}
               {settings.showUnrated && (
                 <div className="cd-unrated-edge" style={{ left: layout.unratedEdge }} />
               )}
               {layout.lines.map((l) => (
                 <div key={l.rating} className="cd-gridline" style={{ left: l.x }} />
               ))}
-              {reflow.ghosts.map((c) => (
+              {/* Before the cards, so the ones that stay are drawn over the
+                  copies of the ones leaving. */}
+              {reflow.cards.map(({ card: c, opacity }) => (
                 <Card
                   key={`ghost:${c.film.id}`}
                   card={c}
@@ -700,7 +715,7 @@ export function GridMap({
                   layout={layout}
                   people={byId}
                   codes={codes}
-                  opacity={reflow.ghostsOut ? 0 : 1}
+                  opacity={opacity}
                   eager={false}
                   enter={null}
                   ringed={false}
@@ -721,11 +736,7 @@ export function GridMap({
                   layout={layout}
                   people={byId}
                   codes={codes}
-                  opacity={
-                    (c.film.isAnchor && anchorHidden) || isFlown(c, flown)
-                      ? 0
-                      : opacityOf(c, selectedIdx, hoveredIdx, settings.minRating)
-                  }
+                  opacity={cardOpacity(c)}
                   off={filteredOut(c.film, selectedIdx, settings.minRating)}
                   eager={inWarmSpan(c.top, layout.metrics.cardH, screen)}
                   enter={
@@ -740,8 +751,6 @@ export function GridMap({
                   flown={isFlown(c, flown)}
                   snap={snap && c.film.isAnchor}
                   theme={theme}
-                  arriving={reflow.arriving.has(c.film.id)}
-                  fadingIn={reflow.fadingIn.has(c.film.id)}
                   hover={preview.held === c.film.id}
                   onOpen={openIfMeant}
                   onHover={lightIfHovering}
@@ -762,34 +771,12 @@ export function GridMap({
               )}
               <div className="cd-rail-layer" style={{ height: layout.plotH, width: layout.plotW }}>
                 <div className="cd-rail" style={{ width: layout.metrics.railW, height: layout.plotH }}>
-                  {layout.rows.map((r) =>
-                    r.isBreak ? (
-                      <span
-                        key="break"
-                        className="cd-rail-year cd-rail-break"
-                        style={{ top: railLabelTop(r) }}
-                        aria-hidden="true"
-                      >
-                        · · ·
-                      </span>
-                    ) : (
-                      // The row's own stretch of the rail. Its label is
-                      // pinned inside it (grid.css), so a year taller than
-                      // the screen still says which year it is until its
-                      // last card has gone by.
-                      <div
-                        key={r.year}
-                        className="cd-rail-slot"
-                        style={{ top: r.top, height: r.height }}
-                      >
-                        <span
-                          className={`cd-rail-year${r.decade ? ' cd-rail-decade' : ''}${r.anchorYear ? ' cd-rail-anchor' : ''}`}
-                        >
-                          {r.year}
-                        </span>
-                      </div>
-                    ),
-                  )}
+                  {reflow.rows.map(({ row: r, labelAt }) => (
+                    <YearLabel key={`leaving:${rowKey(r)}`} row={r} leaving labelAt={labelAt} />
+                  ))}
+                  {layout.rows.map((r) => (
+                    <YearLabel key={rowKey(r)} row={r} />
+                  ))}
                 </div>
               </div>
             </div>
@@ -816,6 +803,75 @@ export function GridMap({
         </span>
       </button>
     </>
+  );
+}
+
+/** A year's band across the plot, or the break's. `leaving` draws the
+ *  copy a reflow closes into its seam. */
+function YearBand({ row: r, leaving = false }: { row: Row; leaving?: boolean }) {
+  const key = rowKey(r);
+  return (
+    <div
+      className={
+        r.isBreak
+          ? 'cd-band cd-band-break'
+          : `cd-band${r.index % 2 === 1 ? ' cd-band-odd' : ''}${r.anchorYear ? ' cd-band-anchor' : ''}${r.decade ? ' cd-band-decade' : ''}`
+      }
+      style={{ top: r.top, height: r.height }}
+      data-band={leaving ? undefined : key}
+      data-band-leaving={leaving ? key : undefined}
+      aria-hidden={r.isBreak || leaving ? 'true' : undefined}
+    />
+  );
+}
+
+/** A year's label on the rail, or the break's "· · ·". `leaving` draws
+ *  the copy a reflow closes into its seam, its label held `labelAt` down
+ *  it, where the label was drawn: pinned to the top of the rail, perhaps,
+ *  which a copy away from its place can no longer be. */
+function YearLabel({
+  row: r,
+  leaving = false,
+  labelAt,
+}: {
+  row: Row;
+  leaving?: boolean;
+  labelAt?: number;
+}) {
+  const key = rowKey(r);
+  const tag = {
+    'data-rail': leaving ? undefined : key,
+    'data-rail-leaving': leaving ? key : undefined,
+  };
+  if (r.isBreak) {
+    return (
+      <span
+        className="cd-rail-year cd-rail-break"
+        style={{ top: railLabelTop(r) }}
+        aria-hidden="true"
+        {...tag}
+      >
+        · · ·
+      </span>
+    );
+  }
+  // The row's own stretch of the rail. Its label is pinned inside it
+  // (grid.css), so a year taller than the screen still says which year
+  // it is until its last card has gone by.
+  return (
+    <div
+      className={`cd-rail-slot${leaving ? ' cd-rail-slot-leaving' : ''}`}
+      style={{ top: r.top, height: r.height }}
+      aria-hidden={leaving ? 'true' : undefined}
+      {...tag}
+    >
+      <span
+        className={`cd-rail-year${r.decade ? ' cd-rail-decade' : ''}${r.anchorYear ? ' cd-rail-anchor' : ''}`}
+        style={leaving && labelAt != null ? { top: labelAt } : undefined}
+      >
+        {r.year}
+      </span>
+    </div>
   );
 }
 
@@ -950,7 +1006,94 @@ function openedAt(layout: GridLayout, viewH: number): number {
   return Math.floor(raw / WARM_STEP) * WARM_STEP;
 }
 
-/** The FLIP reflow for hiding and showing the empty years.
+/** A reflow worked out from the layout the reader was looking at, `was`,
+ *  and the one replacing it, `now`, with the scroller at `scrollTop`
+ *  showing `viewH` of the map and the plot starting `overlayH` down it:
+ *  where the scroll goes to keep the searched card still, what leaves
+ *  within LEAVE_REACH_PX of the screen (anything further simply goes),
+ *  and the cards that stay from within that reach, which are kept drawn
+ *  through the motion wherever it carries them. */
+export function reflowPlan(
+  was: GridLayout,
+  now: GridLayout,
+  scrollTop: number,
+  viewH: number,
+  overlayH: number,
+): { to: number; cards: Placed[]; rows: Row[]; keep: Set<string> } {
+  const a = was.anchor;
+  const b = now.anchor;
+  const want = a && b && a.film.id === b.film.id ? b.top - a.top : 0;
+  // What was on the glass, and LEAVE_REACH_PX either side of it, in the
+  // old layout's terms.
+  const reach = {
+    top: scrollTop - overlayH - LEAVE_REACH_PX,
+    bottom: scrollTop - overlayH + viewH + LEAVE_REACH_PX,
+  };
+  const staying = new Set(now.cards.map((c) => c.film.id));
+  const rowsNow = new Set(now.rows.map(rowKey));
+  const near = was.cards.filter((c) => inWarmSpan(c.top, was.metrics.cardH, reach));
+  return {
+    to: reflowScroll(scrollTop, want, overlayH + now.plotH - viewH),
+    cards: near.filter((c) => !staying.has(c.film.id)),
+    rows: was.rows.filter((r) => !rowsNow.has(rowKey(r)) && inWarmSpan(r.top, r.height, reach)),
+    keep: new Set(near.filter((c) => staying.has(c.film.id)).map((c) => c.film.id)),
+  };
+}
+
+/** The top of the screen in the plot, `lift` being how far down the
+ *  scroller the plot starts, in the steps the warm band moves by. */
+function warmTop(scrollTop: number, lift: number): number {
+  return Math.floor(Math.max(0, scrollTop - lift) / WARM_STEP) * WARM_STEP;
+}
+
+/** A card leaving the map in a reflow, and the opacity it was drawn at. */
+interface LeavingCard {
+  card: Placed;
+  opacity: number;
+}
+
+/** A year leaving the map in a reflow, and how far down its stretch of
+ *  the rail its label was drawn. */
+interface LeavingRow {
+  row: Row;
+  labelAt: number | undefined;
+}
+
+/** One reflow, from the render that changes the filters until its motion
+ *  has ended. */
+interface Flight {
+  mapId: string;
+  sig: string;
+  /** The layout it starts from, the one the reader was looking at. */
+  from: GridLayout;
+  /** The scroller's position before the new layout committed, and the
+   *  one that keeps the searched card still on the new layout. */
+  scrollTop: number;
+  to: number;
+  /** The plot's height before the new layout committed. The plot keeps
+   *  at least this height until the motion ends. */
+  plotH: number;
+  /** What leaves within reach of the screen, drawn where it was as it
+   *  goes. */
+  cards: LeavingCard[];
+  rows: LeavingRow[];
+  /** Where each year's label was on screen before the new layout
+   *  committed, by rowKey. */
+  labels: Map<string, number>;
+  /** Cards that stay and were within reach of the screen. They are drawn
+   *  through the motion wherever it takes them, so a card carried off the
+   *  screen is seen going rather than simply gone. */
+  keep: Set<string>;
+  /** False for a reader who has asked for nothing to move. */
+  moving: boolean;
+  /** The scroller has moved and the motion has started. */
+  played: boolean;
+}
+
+const NO_CARDS = new Set<string>();
+
+/** Hiding or showing the empty years: the rows close up, or open out, as
+ *  one motion (see motion.ts).
  *
  *  Rows leaving above the reader would carry the whole map up the
  *  screen, so the searched film is pinned — not a card that happens to
@@ -958,142 +1101,263 @@ function openedAt(layout: GridLayout, viewH: number): number {
  *  the one movement the reader asked for, and it should look like the
  *  map closing up around the film it is of.
  *
- *  Cards are moved by writing to their style directly. React has just
- *  committed their new positions; what is wanted is the old one for a
- *  single frame, and a state round trip for that would be a frame late.
- */
-function useReflow(
-  layout: GridLayout | null,
-  sig: string,
-  scroller: RefObject<HTMLDivElement | null>,
-  hiding: boolean,
-  appScroll: RefObject<AppScroll> | undefined,
-  mapId: string,
-): {
-  ghosts: Placed[];
-  ghostsOut: boolean;
-  /** Cards the reflow has just placed, held out of sight for a frame. */
-  arriving: Set<string>;
-  /** The same cards, fading in to their own opacity (.cd-card-arrive). */
-  fadingIn: Set<string>;
+ *  The scroll and the plot's height are taken in the render that
+ *  changes the filters, before the new layout commits. A plot that
+ *  shrank in the commit would have had the browser clamp the scroll by
+ *  the time a layout effect could read it, and every distance measured
+ *  after that would start from the wrong place. So the plot is drawn at
+ *  no less than its old height until the motion ends, and the layout
+ *  effect moves the scroll on from the position taken before.
+ *
+ *  The motion is played with Web Animations, started in the layout
+ *  effect, before the browser paints: the first frame drawn already has
+ *  everything where it was. */
+function useReflow({
+  layout,
+  sig,
+  scroller,
+  hiding,
+  appScroll,
+  mapId,
+  overlayH,
+  opacity,
+}: {
+  layout: GridLayout | null;
+  /** What the rows are laid out against. */
+  sig: string;
+  scroller: RefObject<HTMLDivElement | null>;
+  hiding: boolean;
+  appScroll: RefObject<AppScroll> | undefined;
+  mapId: string;
+  /** How far down the scroller the plot starts. */
+  overlayH: number;
+  /** The opacity each card is drawn at on this layout. */
+  opacity: (c: Placed) => number;
+}): {
+  /** Copies of the cards leaving, and of the years' bands and labels. */
+  cards: LeavingCard[];
+  rows: LeavingRow[];
+  /** Cards to draw whether or not they are in the warm band. */
+  keep: Set<string>;
+  /** Where to take the warm band from, for the render the reflow
+   *  commits in: where the scroll is about to go. */
+  spanTop: number | null;
+  /** The plot's least height while the motion plays. */
+  plotH: number | undefined;
   /** Set for the one layout this hook moved the scroller for, so the
    *  ordinary pin does not move it a second time. */
   handled: RefObject<boolean>;
 } {
   const handled = useRef(false);
-  const last = useRef<{ mapId: string; sig: string; hiding: boolean; cards: Placed[] } | null>(
-    null,
-  );
-  const [ghosts, setGhosts] = useState<Placed[]>([]);
-  // A ghost mounts where it was, at the opacity it had, and is let go a
-  // frame later. Mounted already faded, it would simply vanish.
-  const [ghostsOut, setGhostsOut] = useState(false);
-  const [arriving, setArriving] = useState<Set<string>>(new Set());
-  const [fadingIn, setFadingIn] = useState<Set<string>>(new Set());
-  const timers = useRef<number[]>([]);
-  useEffect(
-    () => () => {
-      for (const t of timers.current) window.clearTimeout(t);
-    },
-    [],
-  );
+  // The layout on screen: the last one committed, what it was laid out
+  // against, and the opacity each of its cards was drawn at.
+  const last = useRef<{
+    mapId: string;
+    sig: string;
+    hiding: boolean;
+    layout: GridLayout;
+    opacity: (c: Placed) => number;
+  } | null>(null);
+  const drawnAt = useRef(opacity);
+  drawnAt.current = opacity;
+  const [flight, setFlight] = useState<Flight | null>(null);
+  // A flight belongs to its map. A map opened meanwhile holds nothing.
+  const live = flight?.mapId === mapId ? flight : null;
+  const release = useRef(0);
+  useEffect(() => () => window.clearTimeout(release.current), []);
+
+  // Only a change of filter reflows, and only one that hides the empty
+  // years or stops hiding them. A new map, a resize or a year range each
+  // put the reader somewhere else entirely, and gliding three hundred
+  // cards across that would be motion about nothing. A floor or a
+  // selection changed with nothing hidden only dims and lights in place.
+  const was = last.current;
+  const el = scroller.current;
+  if (
+    layout &&
+    el &&
+    was &&
+    was.mapId === mapId &&
+    was.sig !== sig &&
+    (hiding || was.hiding) &&
+    live?.sig !== sig
+  ) {
+    const scrollTop = el.scrollTop;
+    const moving = !stillNow();
+    const plan = reflowPlan(was.layout, layout, scrollTop, el.clientHeight, overlayH);
+    // A year's label is pinned to the top of the rail while its row runs
+    // under it (grid.css), so where each is drawn is known only by
+    // looking, and only now, before the new layout commits.
+    const labels = new Map<string, number>();
+    const labelAt = new Map<string, number>();
+    if (moving) {
+      for (const n of el.querySelectorAll<HTMLElement>('[data-rail]')) {
+        const key = n.dataset.rail ?? '';
+        const label = railLabel(n);
+        const top = label.getBoundingClientRect().top;
+        labels.set(key, top);
+        if (label !== n) labelAt.set(key, top - n.getBoundingClientRect().top);
+      }
+    }
+    setFlight({
+      mapId,
+      sig,
+      from: was.layout,
+      scrollTop,
+      to: plan.to,
+      // A reflow that follows another before its motion ends starts from
+      // a plot still held at the height before that one.
+      plotH: Math.max(was.layout.plotH, live?.plotH ?? 0),
+      cards: moving ? plan.cards.map((card) => ({ card, opacity: was.opacity(card) })) : [],
+      rows: moving
+        ? plan.rows.map((row) => ({ row, labelAt: labelAt.get(rowKey(row)) }))
+        : [],
+      labels,
+      keep: moving ? plan.keep : NO_CARDS,
+      moving,
+      played: false,
+    });
+  }
 
   useLayoutEffect(() => {
-    const el = scroller.current;
-    if (!layout || !el) return;
-    const before = last.current;
-    last.current = { mapId, sig, hiding, cards: layout.cards };
-    // Only a change of filter reflows. A new map, a resize or a year
-    // range each put the reader somewhere else entirely, and gliding
-    // three hundred cards across that would be motion about nothing.
-    // Back onto a map whose empty years were hidden is a new map too,
-    // though its filters differ from the last one's.
-    if (!before || before.mapId !== mapId || before.sig === sig || (!hiding && !before.hiding)) {
-      return;
-    }
-
-    const was = new Map(before.cards.map((c) => [c.film.id, c]));
-    const now = new Map(layout.cards.map((c) => [c.film.id, c]));
-    const anchorId = layout.anchor?.film.id;
-    const anchorWas = anchorId ? was.get(anchorId) : undefined;
-    const anchorNow = anchorId ? now.get(anchorId) : undefined;
-    const shift = anchorWas && anchorNow ? anchorNow.top - anchorWas.top : 0;
-    if (shift !== 0) {
-      markAppScroll(appScroll, false);
-      el.scrollTop += shift;
-    }
+    const node = scroller.current;
+    if (!live || live.played || !layout || !node) return;
     handled.current = true;
-
-    const left = before.cards.filter((c) => !now.has(c.film.id));
-    const came = new Set([...now.keys()].filter((id) => !was.has(id)));
-
-    if (stillNow()) {
-      setGhosts([]);
-      setArriving(new Set());
-      setFadingIn(new Set());
+    if (node.scrollTop !== live.to) {
+      markAppScroll(appScroll, false);
+      node.scrollTop = live.to;
+    }
+    // What the scroll actually moved by, which is what everything else is
+    // measured against: the browser may round it.
+    const applied = node.scrollTop - live.scrollTop;
+    window.clearTimeout(release.current);
+    if (!live.moving) {
+      setFlight(null);
       return;
     }
-
-    setGhosts(left);
-    setGhostsOut(false);
-    setArriving(came);
-    setFadingIn(came);
-    timers.current.push(window.setTimeout(() => setGhostsOut(true), FLIP_MS));
-    timers.current.push(
-      window.setTimeout(() => {
-        setGhosts([]);
-        setGhostsOut(false);
-      }, FLIP_MS + GHOST_MS),
+    setFlight((f) => (f === live ? { ...f, played: true } : f));
+    playReflow(node, live, layout, applied, drawnAt.current);
+    // The copies go, and the plot lets go of its old height, as the
+    // motion ends. The scroll was kept inside the new plot, so it does
+    // not move when the plot shortens.
+    release.current = window.setTimeout(
+      () => setFlight((f) => (f?.sig === live.sig ? null : f)),
+      REFLOW_MS,
     );
-    // Let go once the hidden state has been painted. The fade itself
-    // waits its 60 ms in the stylesheet (.cd-card-arrive), so the cards
-    // that only moved are on their way before anything new appears
-    // among them, and it ends at the card's own opacity — a card the
-    // filters dim arrives dim rather than lit and then dimmed.
-    timers.current.push(window.setTimeout(() => setArriving(new Set()), FLIP_MS));
-    timers.current.push(
-      window.setTimeout(() => setFadingIn(new Set()), FLIP_MS + ARRIVE_DELAY_MS + ARRIVE_MS),
-    );
+  }, [live, layout, scroller, appScroll]);
 
-    // Put every card that stayed back where it was on screen, then let
-    // it go on the next frame.
-    const moved: HTMLElement[] = [];
-    for (const [id, card] of now) {
-      const old = was.get(id);
-      if (!old) continue;
-      const dx = old.left - card.left;
-      const dy = old.top - card.top + shift;
-      if (dx === 0 && dy === 0) continue;
-      // The searched card's tag sits beside it, not in it, so it is
-      // moved with it.
-      const key = CSS.escape(id);
-      for (const node of el.querySelectorAll<HTMLElement>(
-        `[data-card="${key}"], [data-card-tag="${key}"]`,
-      )) {
-        node.style.transition = 'none';
-        node.style.transform = `translate(${dx}px, ${dy}px)`;
-        moved.push(node);
-      }
+  useLayoutEffect(() => {
+    last.current = layout ? { mapId, sig, hiding, layout, opacity } : null;
+  });
+
+  return {
+    cards: live?.cards ?? [],
+    rows: live?.rows ?? [],
+    keep: live?.keep ?? NO_CARDS,
+    spanTop: live && !live.played ? warmTop(live.to, overlayH) : null,
+    plotH: live?.plotH,
+    handled,
+  };
+}
+
+/** Starts a reflow's motion, on the layout React has just committed and
+ *  after the scroll has moved by `applied`. Everything is placed where it
+ *  was on screen and let go: what stays glides to its new place, what
+ *  arrives opens out of its seam, and the copies of what leaves close
+ *  into theirs. For a reader who has asked for nothing to move, animate
+ *  does nothing and the new layout simply stands. */
+function playReflow(
+  el: HTMLElement,
+  f: Flight,
+  layout: GridLayout,
+  applied: number,
+  opacity: (c: Placed) => number,
+): void {
+  const wasRows = f.from.rows;
+  const nowRows = layout.rows;
+  const wasCard = new Map(f.from.cards.map((c) => [c.film.id, c]));
+  const nowCard = new Map(layout.cards.map((c) => [c.film.id, c]));
+  const wasRow = new Map(wasRows.map((r) => [rowKey(r), r]));
+  const nowRow = new Map(nowRows.map((r) => [rowKey(r), r]));
+  const run = (n: Element, frames: Keyframe[], fill?: FillMode) =>
+    animate(n, frames, { duration: REFLOW_MS, easing: EASE.row, fill });
+  // A year's label that stays goes from where it was drawn to where it is
+  // drawn now. That is its row's move, unless the label was pinned to
+  // the top of the rail before or is now, which only the two looks can
+  // tell. Every label is looked at before anything starts to move.
+  const labels = [...el.querySelectorAll<HTMLElement>('[data-rail]')].map((n) => {
+    const key = n.dataset.rail ?? '';
+    const label = railLabel(n);
+    const was = f.labels.get(key);
+    return { n, key, label, dy: was == null ? null : was - label.getBoundingClientRect().top };
+  });
+
+  // The cards, and the searched card's tag, which sits beside it rather
+  // than in it and so is moved with it.
+  for (const n of el.querySelectorAll<HTMLElement>('[data-card], [data-card-tag]')) {
+    const now = nowCard.get(n.dataset.card ?? n.dataset.cardTag ?? '');
+    if (!now) continue;
+    const was = wasCard.get(now.film.id);
+    if (was) {
+      const { dx, dy } = stayShift(was, now, applied);
+      if (dx !== 0 || dy !== 0) run(n, stayKeyframes(dx, dy));
+    } else {
+      // Up to the opacity this layout gives it rather than the one its
+      // style shows now: a card the filters dim arrives dim.
+      const seam = seamArriving(rowKey(now.film), wasRows, nowRows, applied);
+      run(n, arriveKeyframes(seam - now.top, opacity(now), false));
     }
-    if (moved.length === 0) return;
-    const frame = requestAnimationFrame(() => {
-      for (const node of moved) {
-        node.style.transition = `transform ${REFLOW_MS}ms var(--ease-glide)`;
-        node.style.transform = '';
-      }
-      timers.current.push(
-        window.setTimeout(() => {
-          for (const node of moved) {
-            node.style.transition = '';
-            node.style.transform = '';
-          }
-        }, REFLOW_MS),
-      );
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [layout, sig, hiding, scroller, appScroll, mapId]);
+  }
+  // The years' bands. What stays glides by its row's move.
+  for (const n of el.querySelectorAll<HTMLElement>('[data-band]')) {
+    const key = n.dataset.band ?? '';
+    const now = nowRow.get(key);
+    if (!now) continue;
+    const was = wasRow.get(key);
+    if (was) {
+      const { dy } = stayShift(was, now, applied);
+      if (dy !== 0) run(n, stayKeyframes(0, dy));
+    } else {
+      run(n, arriveKeyframes(seamArriving(key, wasRows, nowRows, applied) - now.top, 1, true));
+    }
+  }
+  // Their labels on the rail (looked at above).
+  for (const { n, key, label, dy } of labels) {
+    const now = nowRow.get(key);
+    if (!now) continue;
+    const was = wasRow.get(key);
+    if (was) {
+      const by = dy ?? stayShift(was, now, applied).dy;
+      if (by !== 0) run(label, stayKeyframes(0, by));
+    } else {
+      run(n, arriveKeyframes(seamArriving(key, wasRows, nowRows, applied) - now.top, 1, false));
+    }
+  }
+  // The copies of what leaves, drawn where it was. They hold their last
+  // frame until the flight lets them go.
+  const leaving = new Map(f.cards.map((g) => [g.card.film.id, g]));
+  for (const n of el.querySelectorAll<HTMLElement>('[data-card-leaving]')) {
+    const g = leaving.get(n.dataset.cardLeaving ?? '');
+    if (!g) continue;
+    const seam = seamLeaving(rowKey(g.card.film), wasRows, nowRows);
+    run(n, leaveKeyframes(applied, seam - g.card.top, g.opacity, false), 'forwards');
+  }
+  for (const n of el.querySelectorAll<HTMLElement>('[data-band-leaving], [data-rail-leaving]')) {
+    const band = n.dataset.bandLeaving != null;
+    const key = (band ? n.dataset.bandLeaving : n.dataset.railLeaving) ?? '';
+    const was = wasRow.get(key);
+    if (!was) continue;
+    const seam = seamLeaving(key, wasRows, nowRows);
+    run(n, leaveKeyframes(applied, seam - was.top, 1, band), 'forwards');
+  }
+}
 
-  return { ghosts, ghostsOut, arriving, fadingIn, handled };
+/** The label in a year's stretch of the rail, or the break's "· · ·",
+ *  which is its own element. */
+function railLabel(n: HTMLElement): HTMLElement {
+  return n.classList.contains('cd-rail-slot') && n.firstElementChild instanceof HTMLElement
+    ? n.firstElementChild
+    : n;
 }
 
 /** The hover preview on show: whose it is, where it sits, and the
@@ -1281,8 +1545,6 @@ export const Card = memo(function Card({
   flown = false,
   snap = false,
   theme,
-  arriving = false,
-  fadingIn = false,
   ghost = false,
   hover = false,
   onOpen,
@@ -1317,13 +1579,8 @@ export const Card = memo(function Card({
   /** Which theme the poster fallback and the people's colours are
    *  mixed for. */
   theme: Theme;
-  /** Just placed by a reflow, and held out of sight for a frame. */
-  arriving?: boolean;
-  /** Just placed by a reflow and fading in, a moment behind the cards
-   *  that only moved. */
-  fadingIn?: boolean;
-  /** A card that has just left, held at its old place for long enough
-   *  to fade rather than vanish. */
+  /** A copy of a card a reflow has just taken off the map, drawn where
+   *  it was while it closes into its seam (see useReflow). */
   ghost?: boolean;
   /** Drawn as if the pointer were on it, as it is on its hover preview
    *  or on the way there. */
@@ -1345,7 +1602,7 @@ export const Card = memo(function Card({
     ['--poster-fill' as string]: posterFallback(said?.title ?? String(film.id), theme),
   };
   const waiting = enter?.hidden ?? false;
-  const shownAt = waiting || arriving ? 0 : opacity;
+  const shownAt = waiting ? 0 : opacity;
   // The searched card says so in its label, so the tag beside it is
   // drawn and not read.
   const label = `${said?.title ?? 'Loading'}, ${film.year}, rated ${film.rating == null ? 'not yet' : film.rating.toFixed(1)}${film.isAnchor ? ', the searched movie' : ''}${off ? ', filtered out' : ''}`;
@@ -1378,13 +1635,14 @@ export const Card = memo(function Card({
       <button
         type="button"
         data-card={ghost ? undefined : film.id}
+        data-card-leaving={ghost ? film.id : undefined}
         aria-hidden={ghost || undefined}
         inert={ghost || undefined}
         disabled={off || undefined}
         // A card waiting to spread is put in its hidden state at once
         // (.cd-card-held has no transitions), and let go into it from
         // there with its own delay.
-        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${flown ? ' cd-card-flown' : ''}${snap ? ' cd-card-snap' : ''}${fadingIn ? ' cd-card-arrive' : ''}${ghost ? ' cd-card-ghost' : ''}${off ? ' cd-card-off' : ''}${hover && !off ? ' cd-card-hover' : ''}`}
+        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${flown ? ' cd-card-flown' : ''}${snap ? ' cd-card-snap' : ''}${off ? ' cd-card-off' : ''}${hover && !off ? ' cd-card-hover' : ''}`}
         style={{
           left: card.left,
           top: card.top,

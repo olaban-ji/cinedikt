@@ -48,6 +48,9 @@ import {
   AXIS_H,
   AXIS_LABEL_W,
   railLabelTop,
+  rowKey,
+  seamArriving,
+  seamLeaving,
   searchedTagAt,
   type Row,
   type GridPayload,
@@ -839,6 +842,86 @@ describe('hiding the empty years', () => {
   it('hides nothing when the caller cannot say what is lit', () => {
     const l = layoutGrid(career(), 1280, settings({ hideEmptyYears: true }));
     expect(l.cards.length).toBe(3);
+  });
+});
+
+describe('the seam the rows close into and open out of', () => {
+  // Person 0 is in 1999 and 2002, and the searched film is 2000's; the
+  // other years hold only person 1. Selecting person 0 and hiding the
+  // empty years takes 1998, 2001 and 2003 away.
+  const career = () =>
+    payloadOf({ id: 'tt0000001', year: 2000, rating: 8 }, [
+      { id: 'tt0000010', year: 1998, rating: 7, people: [1] },
+      { id: 'tt0000011', year: 1999, rating: 7, people: [0] },
+      { id: 'tt0000001', year: 2000, rating: 8, people: [0, 1] },
+      { id: 'tt0000012', year: 2001, rating: 6, people: [1] },
+      { id: 'tt0000013', year: 2002, rating: 7.5, people: [0] },
+      { id: 'tt0000014', year: 2003, rating: 6.5, people: [1] },
+    ], castOf(2));
+  const lit = (f: SpineFilm) => isLit(f, new Set([0]), null);
+  const shown = layoutGrid(career(), 1280, settings(), lit).rows;
+  const hidden = layoutGrid(career(), 1280, settings({ hideEmptyYears: true }), lit).rows;
+  const at = (rows: Row[], year: number) => rows.find((r) => r.year === year)!;
+
+  it('keys a row by its year, and a film by the row it is in', () => {
+    expect(shown.map(rowKey)).toEqual(['1998', '1999', '2000', '2001', '2002', '2003']);
+    expect(hidden.map(rowKey)).toEqual(['1999', '2000', '2002']);
+    expect(rowKey(real.anchor)).toBe(String(real.anchor.year));
+    expect(rowKey({ year: 0, isBreak: true })).toBe('break');
+  });
+
+  it('closes a leaving year into the new top of the next row below it that stays', () => {
+    expect(seamLeaving('2001', shown, hidden)).toBe(at(hidden, 2002).top);
+    // The first row is no exception: 1998 closes into 1999, which moves
+    // up to the top of the plot.
+    expect(seamLeaving('1998', shown, hidden)).toBe(at(hidden, 1999).top);
+    expect(at(hidden, 1999).top).toBe(AXIS_H);
+  });
+
+  it('closes a year with nothing staying below it into the bottom of the last row above it that stays', () => {
+    const last = at(hidden, 2002);
+    expect(seamLeaving('2003', shown, hidden)).toBe(last.top + last.height);
+  });
+
+  it('closes a card leaving a year that stays into the foot of its own row', () => {
+    // A film nobody selected shares 1999 with one of person 0's, on the
+    // same rating, so it takes a second lane. Hiding the empty years
+    // takes it and keeps the row, one lane shorter.
+    const p = career();
+    p.films.push(['tt0000015', 1999, 7, 6, [1]]);
+    const whole = layoutGrid(p, 1280, settings(), lit).rows;
+    const kept = layoutGrid(p, 1280, settings({ hideEmptyYears: true }), lit).rows;
+    expect(at(kept, 1999).height).toBeLessThan(at(whole, 1999).height);
+    expect(seamLeaving('1999', whole, kept)).toBe(at(kept, 1999).top + at(kept, 1999).height);
+  });
+
+  it('opens an arriving year out of the old top of the next row below it that was showing, moved by the scroll', () => {
+    // Showing the years again pushes the searched film down, and the
+    // scroll follows it by that much: the seam is where the two rows met
+    // on screen, in the new layout's terms.
+    const shift = at(shown, 2000).top - at(hidden, 2000).top;
+    expect(shift).toBeGreaterThan(0);
+    expect(seamArriving('2001', hidden, shown, shift)).toBe(at(hidden, 2002).top + shift);
+    expect(seamArriving('1998', hidden, shown, shift)).toBe(at(hidden, 1999).top + shift);
+    // With the scroll clamped, only what it did move by.
+    expect(seamArriving('2001', hidden, shown, 12)).toBe(at(hidden, 2002).top + 12);
+  });
+
+  it('opens a year with nothing showing below it out of the old bottom of the row above it', () => {
+    const shift = at(shown, 2000).top - at(hidden, 2000).top;
+    const last = at(hidden, 2002);
+    expect(seamArriving('2003', hidden, shown, shift)).toBe(last.top + last.height + shift);
+  });
+
+  it('plays the one motion both ways: a year opens out of the seam it closes into', () => {
+    // On screen, with the scroll following the searched film, the seam a
+    // year closes into when hiding is the one it opens out of when shown.
+    const shift = at(hidden, 2000).top - at(shown, 2000).top;
+    for (const year of ['1998', '2001', '2003']) {
+      expect(seamArriving(year, hidden, shown, -shift) + shift).toBe(
+        seamLeaving(year, shown, hidden),
+      );
+    }
   });
 });
 

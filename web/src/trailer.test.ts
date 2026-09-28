@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import css from './grid.css?raw';
 import { screenOf, type ScreenClass } from './screen';
 import {
+  FOLD_SETTLE_MS,
   MIN_VIDEO_H,
   PLAYER,
   TRAILER_CLOSE_MS,
@@ -197,6 +198,7 @@ describe('playerVars', () => {
       W: 430,
       VH: 241.875,
       synLines: null,
+      synSettled: false,
     };
     expect(playerVars(play)).toEqual({
       '--trailer-w': '430px',
@@ -219,11 +221,27 @@ describe('startPlay', () => {
       W: 430,
       VH: 241.875,
       synLines: null,
+      synSettled: false,
     });
   });
 
   it('opens at once for a reader who has asked for nothing to move', () => {
     expect(startPlay(null, 'panel', 'tt1', true, 430, true)?.open).toBe(true);
+  });
+
+  it('carries how far the synopsis folds for it, settled only once the fold has had time to finish', () => {
+    const folding = startPlay(null, 'panel', 'tt1', false, 430, false, 2)!;
+    expect(folding.synLines).toBe(2);
+    expect(folding.synSettled).toBe(false);
+    // Nothing moves for a reader who has asked for stillness, so the
+    // fold is done as soon as it starts.
+    expect(startPlay(null, 'panel', 'tt1', false, 430, true, 2)!.synSettled).toBe(true);
+    // Taken back while it closes, it folds again from wherever the
+    // unfold had got to.
+    const back = startPlay(stopPlay({ ...folding, open: true, synSettled: true }), 'panel', 'tt1', false, 430, false, 2)!;
+    expect(back.synSettled).toBe(false);
+    // The opening, and a little over.
+    expect(FOLD_SETTLE_MS).toBe(TRAILER_OPEN_MS + 20);
   });
 
   it('leaves one already open or opening as it is', () => {
@@ -253,6 +271,11 @@ describe('stopPlay', () => {
   it('starts the close, keeping the player to play it', () => {
     const open = { ...startPlay(null, 'panel', 'tt1', false, 430, false)!, open: true };
     expect(stopPlay(open)).toEqual({ ...open, open: false, closing: true });
+  });
+
+  it('unsettles the synopsis, which starts to unfold as the player closes', () => {
+    const settled = { ...startPlay(null, 'panel', 'tt1', false, 430, false, 1)!, open: true, synSettled: true };
+    expect(stopPlay(settled)).toEqual({ ...settled, open: false, closing: true, synSettled: false });
   });
 
   it('does nothing with nothing open, or one already closing', () => {
