@@ -144,7 +144,9 @@ describe('the theme tokens', () => {
     const defined = new Set([...props(':root').keys(), ...props(":root[data-theme='light']").keys()]);
     // Set inline by the components, per element. --h is a film's hue,
     // which the sheet's wash is drawn in; --pin-lift is how far down the
-    // header lying over the map pushes the pinned year labels.
+    // header lying over the map pushes the pinned year labels; the
+    // --trailer- ones are an open trailer player's measurements, which
+    // trailer.ts works out.
     const inline = new Set([
       '--tone',
       '--swatch-r',
@@ -156,6 +158,11 @@ describe('the theme tokens', () => {
       '--rail-w',
       '--h',
       '--pin-lift',
+      '--trailer-w',
+      '--trailer-vh',
+      '--trailer-gap',
+      '--trailer-well',
+      '--trailer-origin',
     ]);
     // Set by the very rule that reads it: the sheet's wash is an oklch()
     // made from --h, which has to live in a custom property to ship as

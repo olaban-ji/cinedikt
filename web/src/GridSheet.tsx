@@ -1,4 +1,4 @@
-import { useMemo, useRef, type CSSProperties, type MutableRefObject } from 'react';
+import { useEffect, useMemo, useRef, type CSSProperties, type MutableRefObject } from 'react';
 import { initialsFor, type GridFilm, type GridPayload, type GridPerson } from './grid';
 import { personColour } from './personColour';
 import { PosterImage } from './PosterImage';
@@ -6,6 +6,8 @@ import { hueOf, posterFallback, sheetPosterPx } from './poster';
 import { useScreen } from './screen';
 import { SHEET_EXIT_MS, useCloser, useDrag, useEscape, useFocusTrapped, useGlide } from './sheet';
 import { useResolvedTheme } from './theme';
+import { TrailerRow, useTrailer, type Player } from './TrailerRow';
+import { escapeCloses, isFor } from './trailer';
 
 interface Props {
   film: GridFilm;
@@ -16,25 +18,43 @@ interface Props {
   /** Given the sheet's own way out while it is up, so opening a map can
    *  close it on its exit first. */
   closer?: MutableRefObject<((then?: () => void) => void) | null>;
+  /** The page's one trailer player, which the panel's trailer plays in. */
+  player: Player;
 }
 
-/** Everything a card cannot hold: the full title, how the film sits
- *  against the searched one, and who put it on the grid.
+/** Everything a card cannot hold: the full title, what the film is
+ *  about and its trailer, how the film sits against the searched one,
+ *  and who put it on the grid.
  *
  *  A panel down the right on a desktop, a tablet or a landscape phone,
  *  and a sheet from the bottom on a phone, each held in from the edges.
  *  It arrives and leaves under its own power. Whatever it was asked to
  *  do — narrow the map, map another film — waits until it is gone, so
  *  nothing ever changes underneath a sheet that is still on the way out. */
-export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer }: Props) {
+export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer, player }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const screen = useScreen();
   const { phone } = screen;
   const { phase, leave } = useGlide(onClose, SHEET_EXIT_MS);
   const drag = useDrag(phone, leave);
-  useEscape(leave);
+  useEscape(() => sheetEscape(player, film.id, leave));
   useCloser(closer, leave);
   useFocusTrapped(ref);
+  const trailer = useTrailer(film.id);
+  // The trailer closes as the panel starts to go, however it was sent
+  // away, so its sound stops at once.
+  const { stop: stopTrailer, drop: dropTrailer } = player;
+  useEffect(() => {
+    if (phase === 'out') stopTrailer('panel');
+  }, [phase, stopTrailer]);
+  // Once the panel has gone, its player goes at once too, closing or
+  // not: there is no close left to play, and the same film's panel
+  // opened straight after must not find a player it never started. A
+  // panel taken away with no exit, the route moving underneath it, lands
+  // here as well.
+  useEffect(() => () => dropTrailer('panel'), [dropTrailer]);
+  const playing = isFor(player.play, 'panel', film.id);
+  const synopsis = film.synopsis?.trim();
   const people = payload.people.filter((p) => film.people.includes(p.id));
   // Worked out over the whole map rather than this film's few, so a
   // person has the same initials here as on every card.
@@ -83,7 +103,7 @@ export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer }: P
             ×
           </button>
         </div>
-        <div className="cd-sheet-body">
+        <div className={`cd-sheet-body${playing ? ' cd-sheet-playing' : ''}`}>
           <div className="cd-sheet-head">
             <PosterImage
               id={film.id}
@@ -104,6 +124,24 @@ export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer }: P
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* What the film is about, whole, and its trailer, which plays
+              here rather than on another tab. */}
+          <div className="cd-sheet-about">
+            {synopsis && <p className="cd-sheet-synopsis">{synopsis}</p>}
+            <TrailerRow
+              where="panel"
+              id={film.id}
+              title={film.title}
+              trailer={trailer}
+              player={player}
+              onPlay={(muted, W) => {
+                // A rest on the button that comes due as the panel goes
+                // starts nothing.
+                if (phase !== 'out') player.start('panel', film.id, muted, W);
+              }}
+            />
           </div>
 
           <VersusBlock film={film} anchor={payload.anchor} />
@@ -152,6 +190,13 @@ export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer }: P
       </div>
     </>
   );
+}
+
+/** Escape in the panel: the trailer first, while one is open in it, and
+ *  the panel itself with the next press. */
+export function sheetEscape(player: Pick<Player, 'now' | 'stop'>, id: string, leave: () => void): void {
+  if (escapeCloses(player.now(), 'panel', id) === 'trailer') player.stop('panel');
+  else leave();
 }
 
 /** Whose map this is. The searched film is not connected to itself. */

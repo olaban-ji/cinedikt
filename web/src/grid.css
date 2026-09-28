@@ -184,6 +184,10 @@
      for opacity: it finishes the visible change at once and then
      crawls. */
   --ease-fade: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Not one of the five either: a trailer closing. It eases in and out,
+     where a sheet's exit only speeds up, because the player plays its
+     opening path backwards and comes to rest where the button was. */
+  --ease-close: cubic-bezier(0.55, 0, 0.3, 1);
 
   /* Shadows that are the same in both themes. A thing lifted off the
      page casts the same dark shadow on paper as on charcoal, so only
@@ -624,8 +628,11 @@ button {
   padding: 2px 0 1px;
 }
 
+/* A card whose hover preview the pointer has moved onto (.cd-card-hover)
+   stays as it was under the pointer. */
 @media (hover: hover) {
-  .cd-card:not(.cd-card-anchor):hover {
+  .cd-card:not(.cd-card-anchor):hover,
+  .cd-card-hover:not(.cd-card-anchor) {
     z-index: 5;
     translate: 0 -3px;
     box-shadow: var(--shHi);
@@ -1101,6 +1108,12 @@ button {
   transform: translateX(12px);
 }
 
+/* The switch's icon stands in for its words and track where there is no
+   room for them, on phones and short screens (below). */
+.cd-quick-icon {
+  display: none;
+}
+
 /* View's container is not a button, so it neither takes the focus nor
    presses: each button inside does, on its own. */
 .cd-view-open:focus-visible,
@@ -1133,20 +1146,78 @@ button {
   }
 }
 
-@media (max-width: 639.98px) {
-  .cd-view-button {
-    left: 6px;
+/* On phones and short screens View and the quick switch are icons
+   alone, each 46 square like an icon-only Recenter, which is a finger's
+   size: View by its width, the switch by its 36px icon and 5px either
+   side, and both by the pill's height. The toast says what the switch
+   did, since it has no words here to say it (see flipHideEmpty). */
+@media (max-width: 639.98px), (max-height: 499.98px) {
+  .cd-view-open {
+    width: 46px;
+    padding: 0;
+    gap: 0;
+    justify-content: center;
   }
 
-  .cd-view-open {
-    gap: 7px;
-    padding: 0 12px;
+  .cd-view-open svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .cd-view-label,
+  .cd-quick-label,
+  .cd-quick-track {
+    display: none;
+  }
+
+  /* The count moves onto the icon's corner. Its ring is the card colour
+     the pill is filled with, so the badge reads as cut out of the pill
+     rather than lying on the icon. */
+  .cd-view-badge {
+    position: absolute;
+    top: 5px;
+    right: 4px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    border-radius: 6px;
+    font-size: 10.5px;
+    box-shadow: 0 0 0 2px var(--c);
+  }
+
+  .cd-view-quick-on {
+    max-width: 64px;
   }
 
   .cd-view-quick-switch {
-    gap: 8px;
-    padding: 0 12px 0 10px;
-    font-size: 13px;
+    padding: 0 5px;
+    gap: 0;
+  }
+
+  /* On, the icon takes the accent the track would have taken. */
+  .cd-quick-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--t2);
+    transition:
+      background-color 0.2s ease,
+      color 0.2s ease;
+  }
+
+  .cd-view-quick-switch[aria-checked='true'] .cd-quick-icon {
+    background: var(--acc);
+    color: var(--accInk);
+  }
+}
+
+@media (max-width: 639.98px) {
+  .cd-view-button {
+    left: 6px;
   }
 
   /* A labelled Recenter does not fit beside the switch, so it keeps its
@@ -1182,6 +1253,13 @@ button {
     outline-offset: -2px;
   }
 
+  /* The phone icon's accent fill is gone too, so on is said the same
+     way the track says it. */
+  .cd-view-quick-switch[aria-checked='true'] .cd-quick-icon {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
   .cd-view-rule {
     background: ButtonText;
   }
@@ -1195,7 +1273,8 @@ button {
   .cd-view-open,
   .cd-view-quick-switch,
   .cd-quick-track,
-  .cd-quick-knob {
+  .cd-quick-knob,
+  .cd-quick-icon {
     transition: none;
   }
 
@@ -1258,9 +1337,10 @@ button {
   }
 
   /* A card the pointer rests on still takes its hover shadow; it just
-     does not rise to meet it. The selector matches the hover rule's, so
+     does not rise to meet it. The selectors match the hover rule's, so
      that this one, coming later, wins. */
-  .cd-card:not(.cd-card-anchor):hover {
+  .cd-card:not(.cd-card-anchor):hover,
+  .cd-card-hover:not(.cd-card-anchor) {
     translate: none;
   }
 
@@ -1809,6 +1889,22 @@ button {
   margin-top: -72px;
 }
 
+/* YouTube allows nothing drawn over its player. On a phone and a
+   landscape phone the body is pulled up under the bottom of the close
+   button (its top is 44px down the sheet on a phone and 46px on a
+   landscape phone; the button's 44px hit area reaches 56px, and 56px in
+   from the right), so while a trailer is open that corner is cut out of
+   the body. A video scrolled up to it goes under the edge there, as it
+   does along the rest of the top, instead of under the button. A
+   desktop's or tablet's body starts below the button. */
+.cd-sheet-phone .cd-sheet-playing {
+  clip-path: polygon(0 0, calc(100% - 56px) 0, calc(100% - 56px) 12px, 100% 12px, 100% 100%, 0 100%);
+}
+
+.cd-sheet-short .cd-sheet-playing {
+  clip-path: polygon(0 0, calc(100% - 56px) 0, calc(100% - 56px) 10px, 100% 10px, 100% 100%, 0 100%);
+}
+
 /* "Map …" is pinned under the body on a phone, apart from the person
    rows: a thumb cannot reach the middle of a tall sheet, and a scroll
    that ends in a tap must not be able to land on it. */
@@ -1901,6 +1997,24 @@ button {
   background: var(--ln2);
   color: var(--t);
   font-weight: 700;
+}
+
+/* The synopsis and the trailer, between the title and the comparison.
+   Never squeezed: the body scrolls instead. */
+.cd-sheet-about {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+/* Whole, however long: the panel is where a reader goes to read it. */
+.cd-sheet-synopsis {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--t2);
+  text-wrap: pretty;
 }
 
 /* How the film sits against the searched one: a sentence and the two
@@ -2181,6 +2295,581 @@ button {
   .cd-sheet-primary:active,
   .cd-sheet-person:active {
     transform: none;
+  }
+}
+
+/* ---- trailer row and player ----
+
+   Watch trailer, in the film panel and in the map's preview, and the
+   YouTube player that opens where it sits. TrailerRow puts the place on
+   the row (cd-trailer-panel or cd-trailer-preview): the panel's sits in
+   22px of padding and is sized for a finger, the preview's in 16px and
+   sized for a mouse. While a player is open TrailerRow also sets its
+   measurements: --trailer-w and --trailer-vh, the video's size;
+   --trailer-gap, between the controls and the video; --trailer-well,
+   the two together; and --trailer-origin, the button's corner. */
+
+.cd-trailer {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The button and the controls that replace it share one cell, and
+   cross-fade in it. In the panel the button is only as wide as it needs
+   to be; in the preview it runs the width of the box. */
+.cd-trailer-cell {
+  display: grid;
+  justify-items: start;
+}
+
+.cd-trailer-preview .cd-trailer-cell {
+  justify-items: stretch;
+}
+
+.cd-trailer-btn,
+.cd-trailer-controls {
+  grid-area: 1 / 1;
+}
+
+.cd-trailer-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 14px 0 8px;
+  border: 0;
+  border-radius: 13px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t);
+  text-align: left;
+  font-size: 14px;
+  font-weight: 600;
+  transition:
+    opacity 0.2s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
+}
+
+.cd-trailer-preview .cd-trailer-btn {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px 0 6px;
+  border-radius: 12px;
+  font-size: 13.5px;
+}
+
+.cd-trailer-panel .cd-trailer-btn:active {
+  transform: scale(0.97);
+}
+
+.cd-trailer-btn:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+/* Stepped aside for the controls in its cell. It takes no pointer
+   either: once faded out it is drawn over them, since its opacity puts
+   it on a layer above the controls, and it would otherwise catch every
+   press meant for them. */
+.cd-trailer-open .cd-trailer-btn {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The play square, and the sound toggle's, which shares its shape. */
+.cd-trailer-sq {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--acc);
+  color: var(--accInk);
+}
+
+.cd-trailer-yt {
+  margin-left: 4px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t3);
+}
+
+.cd-trailer-preview .cd-trailer-yt {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+/* Where the button will be while the answer is on its way, the size it
+   usually comes out at, so little moves when it lands. */
+.cd-trailer-skel {
+  display: block;
+  width: 226px;
+  height: 44px;
+  border-radius: 13px;
+  background: var(--skel);
+}
+
+.cd-trailer-preview.cd-trailer-skel {
+  width: auto;
+  height: 40px;
+  border-radius: 12px;
+}
+
+.cd-trailer-none {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  font-size: 13.5px;
+  color: var(--t3);
+}
+
+.cd-trailer-preview.cd-trailer-none {
+  box-sizing: border-box;
+  height: 40px;
+  padding: 0 6px;
+  font-size: 13px;
+}
+
+/* An empty square: the shape of the button that is not there. */
+.cd-trailer-none .cd-trailer-sq {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: inherit;
+}
+
+/* The controls bleed to the box's edges, as the video under them does. */
+.cd-trailer-controls {
+  justify-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  margin: 0 -22px;
+  padding: 0 12px 0 18px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.cd-trailer-preview .cd-trailer-controls {
+  height: 40px;
+  margin: 0 -16px;
+  padding: 0 10px 0 12px;
+}
+
+.cd-trailer-open .cd-trailer-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.cd-trailer-sound {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 12px 0 4px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--t);
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color 0.15s ease;
+}
+
+.cd-trailer-preview .cd-trailer-sound {
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px 0 4px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+/* Muted, the square is an outline; with the sound on it is filled. */
+.cd-trailer-sound .cd-trailer-sq {
+  background: transparent;
+  color: var(--t);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.cd-trailer-sound[aria-pressed='true'] .cd-trailer-sq {
+  background: var(--acc);
+  color: var(--accInk);
+  box-shadow: none;
+}
+
+.cd-trailer-preview .cd-trailer-sound .cd-trailer-sq {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+.cd-trailer-spacer {
+  flex: 1;
+}
+
+.cd-trailer-out {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 10px;
+  border-radius: 12px;
+  color: var(--t2);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.cd-trailer-preview .cd-trailer-out {
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+
+.cd-trailer-close {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--t2);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.cd-trailer-preview .cd-trailer-close {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.cd-trailer-sound:focus-visible,
+.cd-trailer-out:focus-visible,
+.cd-trailer-close:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .cd-trailer-btn:hover {
+    background: var(--accWash);
+    box-shadow: inset 0 0 0 1px var(--acc);
+  }
+
+  .cd-trailer-sound:hover {
+    background: var(--accWash);
+  }
+
+  .cd-trailer-out:hover,
+  .cd-trailer-close:hover {
+    color: var(--t);
+    background: var(--ln2);
+  }
+}
+
+/* The well the video opens in. Closed it takes no room; open it is the
+   gap and the video, and what is below it moves down as it grows. Each
+   state carries the transition into it: open glides out, closed plays
+   the same path back, a little quicker. */
+.cd-trailer-well {
+  position: relative;
+  flex-shrink: 0;
+  height: 0;
+  margin: 0 -22px;
+  overflow: hidden;
+  transition: height 400ms var(--ease-close);
+}
+
+.cd-trailer-preview .cd-trailer-well {
+  margin: 0 -16px;
+}
+
+.cd-trailer-open .cd-trailer-well {
+  height: var(--trailer-well);
+  transition: height 520ms var(--ease-glide);
+}
+
+/* Drawn at its full size from the start, and scaled up out of the
+   button's corner, so the frame inside never lays itself out again. It
+   fades in over the first half of the opening, and on the way out waits
+   until it is small before it fades. */
+.cd-trailer-video {
+  position: absolute;
+  left: 0;
+  top: var(--trailer-gap);
+  width: var(--trailer-w);
+  height: var(--trailer-vh);
+  background: #000;
+  transform-origin: var(--trailer-origin);
+  transform: scale(0.04);
+  opacity: 0;
+  transition:
+    transform 400ms var(--ease-close),
+    opacity 220ms ease 160ms;
+}
+
+.cd-trailer-open .cd-trailer-video {
+  transform: scale(1);
+  opacity: 1;
+  transition:
+    transform 520ms var(--ease-glide),
+    opacity 260ms ease;
+}
+
+.cd-trailer-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* In the preview the open player also takes the box's bottom padding,
+   so the video runs to its foot. */
+.cd-trailer-preview {
+  transition: margin-bottom 400ms var(--ease-close);
+}
+
+.cd-trailer-preview.cd-trailer-open {
+  margin-bottom: -16px;
+  transition: margin-bottom 520ms var(--ease-glide);
+}
+
+/* Forced colours drop every ring and fill here. They come back as
+   outlines, which take no room, and the sound being on as a highlight. */
+@media (forced-colors: active) {
+  .cd-trailer-btn,
+  .cd-trailer-sound,
+  .cd-trailer-out,
+  .cd-trailer-close {
+    outline: 1px solid ButtonText;
+    outline-offset: -1px;
+  }
+
+  .cd-trailer-none .cd-trailer-sq,
+  .cd-trailer-sound .cd-trailer-sq {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+
+  .cd-trailer-sound[aria-pressed='true'] .cd-trailer-sq {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+/* For a reader who has asked for nothing to move, the player is simply
+   open, and simply gone: the player does not wait for either. After the
+   rules it undoes, each state's included, so that it wins. */
+@media (prefers-reduced-motion: reduce) {
+  .cd-trailer-btn,
+  .cd-trailer-controls,
+  .cd-trailer-sound,
+  .cd-trailer-sound .cd-trailer-sq,
+  .cd-trailer-out,
+  .cd-trailer-close,
+  .cd-trailer-well,
+  .cd-trailer-open .cd-trailer-well,
+  .cd-trailer-video,
+  .cd-trailer-open .cd-trailer-video,
+  .cd-trailer-preview,
+  .cd-trailer-preview.cd-trailer-open {
+    transition: none;
+  }
+
+  .cd-trailer-panel .cd-trailer-btn:active {
+    transform: none;
+  }
+}
+
+/* ---- hover preview ----
+
+   A card's synopsis and trailer, beside it on the map, for a pointer
+   resting on it (MapPreview). It is placed in the plot by script
+   (placePreview in preview.ts): its left edge, and its top or its
+   bottom, whichever it grows from. Above every card, the axis and the
+   rail, and under the header. It comes in from 6px nearer its card
+   (.cd-preview-left when it is left of the card), and goes at once. */
+.cd-preview {
+  position: absolute;
+  z-index: 12;
+  box-sizing: border-box;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--s);
+  box-shadow:
+    inset 0 0 0 1px var(--ln2),
+    var(--pop);
+  overflow: hidden;
+  color: var(--t);
+  opacity: 0;
+  translate: -6px 0;
+  transition:
+    opacity 0.16s ease,
+    translate 0.22s var(--ease-glide);
+}
+
+.cd-preview-left {
+  translate: 6px 0;
+}
+
+.cd-preview-in {
+  opacity: 1;
+  translate: none;
+}
+
+/* While a trailer is open in it, the preview's top glides up with the
+   opening to keep the grown box inside the map, and back with the
+   close, on the player's own timings. */
+.cd-preview-trailer {
+  transition:
+    opacity 0.16s ease,
+    translate 0.22s var(--ease-glide),
+    top 400ms var(--ease-close);
+}
+
+.cd-preview-trailer-open {
+  transition:
+    opacity 0.16s ease,
+    translate 0.22s var(--ease-glide),
+    top 520ms var(--ease-glide);
+}
+
+/* The film's hue across the top, in the sheet's wash colours, fading to
+   nothing. Behind everything else in the box, which is a stacking
+   context of its own. That puts it over the box's own background, the
+   inset ring included, so it starts 1px in and stays inside the ring. */
+.cd-preview-wash {
+  --wash: radial-gradient(120% 100% at 0% 0%, oklch(0.45 0.09 var(--h)), transparent 70%);
+  position: absolute;
+  z-index: -1;
+  top: 1px;
+  left: 1px;
+  right: 1px;
+  height: 120px;
+  border-radius: 15px 15px 0 0;
+  background: var(--wash);
+  pointer-events: none;
+}
+
+:root[data-theme='light'] .cd-preview-wash {
+  --wash: radial-gradient(120% 100% at 0% 0%, oklch(0.86 0.07 var(--h)), transparent 70%);
+}
+
+.cd-preview-head {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.cd-preview-title {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 18px;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.cd-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--t2);
+}
+
+.cd-preview-pill {
+  padding: 2px 8px;
+  border-radius: 7px;
+  background: var(--ln2);
+  color: var(--t);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Six lines at most (SYN_LINES of SYN_LINE_H in preview.ts). To make
+   room for a trailer it folds to fewer, its max-height set in whole
+   lines by script, or away entirely, taking back the box's gap. Its
+   clamp follows once the fold has finished. The fold runs on the
+   player's timings. */
+.cd-preview-syn {
+  margin: 0;
+  max-height: 121.5px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--t2);
+  text-wrap: pretty;
+  transition:
+    max-height 400ms var(--ease-close),
+    margin-top 400ms var(--ease-close),
+    opacity 0.2s ease;
+}
+
+.cd-preview-trailer-open .cd-preview-syn {
+  transition:
+    max-height 520ms var(--ease-glide),
+    margin-top 520ms var(--ease-glide),
+    opacity 0.2s ease;
+}
+
+.cd-preview-syn-none {
+  display: block;
+  color: var(--t3);
+}
+
+.cd-preview-syn-gone {
+  margin-top: -12px;
+  opacity: 0;
+}
+
+/* Forced colours drop the ring and the shadow, which are the box's only
+   edge. */
+@media (forced-colors: active) {
+  .cd-preview {
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+}
+
+/* For a reader who has asked for nothing to move, the preview simply
+   appears, and makes room for a trailer at once. */
+@media (prefers-reduced-motion: reduce) {
+  .cd-preview,
+  .cd-preview-trailer,
+  .cd-preview-trailer-open,
+  .cd-preview-syn,
+  .cd-preview-trailer-open .cd-preview-syn {
+    transition: none;
   }
 }
 

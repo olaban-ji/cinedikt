@@ -22,6 +22,7 @@ import {
   type GridPayload,
   type Placed,
 } from './grid';
+import { previewScheduler, type PreviewClock } from './preview';
 
 /** A card whose spine says it holds these places in the chip row. */
 function card(people: number[] = [], id = 'tt0000001', isAnchor = false): Placed {
@@ -77,6 +78,7 @@ describe('a filtered-out card', () => {
     'aria-label': string;
     onClick: () => void;
     onMouseEnter: () => void;
+    onMouseLeave: () => void;
   }
 
   /** The card's button as it would be drawn, with its handlers live.
@@ -139,6 +141,34 @@ describe('a filtered-out card', () => {
     b.onMouseEnter();
     expect(opened).toEqual([]);
     expect(lit).toEqual([]);
+  });
+
+  it('never opens a hover preview', () => {
+    const c = card([1]);
+    const rested: string[] = [];
+    const b = drawn({
+      card: c,
+      off: filteredOut(c.film, new Set([0]), null),
+      onPreview: (id, over) => rested.push(`${id} ${over}`),
+    });
+    b.onMouseEnter();
+    expect(rested).toEqual([]);
+    // Nor is it drawn as hovered for one.
+    expect(drawn({ card: c, off: true, hover: true }).className).not.toContain('cd-card-hover');
+  });
+
+  it('tells the preview when the pointer comes to rest on it and when it leaves', () => {
+    const c = card([1]);
+    const rested: string[] = [];
+    const b = drawn({ card: c, onPreview: (id, over) => rested.push(`${id} ${over}`) });
+    b.onMouseEnter();
+    b.onMouseLeave();
+    expect(rested).toEqual([`${c.film.id} true`, `${c.film.id} false`]);
+  });
+
+  it('keeps its hover state while the pointer is on its preview', () => {
+    expect(drawn({ hover: true }).className).toContain('cd-card-hover');
+    expect(drawn({}).className).not.toContain('cd-card-hover');
   });
 
   it('stays enabled when only a chip preview dims it', () => {
@@ -297,5 +327,206 @@ describe('openingBox', () => {
     const layout = layoutGrid(real, 390, DEFAULT_SETTINGS, undefined, true);
     const box = openingBox(real, DEFAULT_SETTINGS, scroller(layout.plotH + 500), 0, true)!;
     expect(box.top).toBeCloseTo(layout.anchor!.top);
+  });
+});
+
+/** Time the test turns by hand. */
+function handClock(): PreviewClock & { advance: (ms: number) => void } {
+  let now = 0;
+  let next = 1;
+  const due = new Map<number, { at: number; run: () => void }>();
+  return {
+    now: () => now,
+    after: (ms, run) => {
+      due.set(next, { at: now + ms, run });
+      return next++;
+    },
+    cancel: (timer) => {
+      due.delete(timer);
+    },
+    advance: (ms) => {
+      const end = now + ms;
+      for (;;) {
+        let first: [number, { at: number; run: () => void }] | null = null;
+        for (const entry of due) if (entry[1].at <= end && (!first || entry[1].at < first[1].at)) first = entry;
+        if (!first) break;
+        due.delete(first[0]);
+        now = first[1].at;
+        first[1].run();
+      }
+      now = end;
+    },
+  };
+}
+
+/** A scheduler over a map that records what it was asked to do. The
+ *  map opens nothing for a card in `empty`, whose words have not come. */
+function scheduled(empty: Set<string> = new Set()) {
+  const clock = handClock();
+  const state = { showing: null as string | null, playing: false, did: [] as string[] };
+  const sched = previewScheduler(
+    {
+      showing: () => state.showing,
+      playing: () => state.playing,
+      open: (id) => {
+        if (empty.has(id)) return;
+        state.showing = id;
+        state.did.push(`open ${id}`);
+      },
+      close: () => {
+        state.showing = null;
+        state.did.push('close');
+      },
+    },
+    clock,
+  );
+  return { clock, state, sched };
+}
+
+describe('when the hover preview opens', () => {
+  it('opens once the pointer has rested 480ms on a card', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(479);
+    expect(state.did).toEqual([]);
+    clock.advance(1);
+    expect(state.did).toEqual(['open a']);
+  });
+
+  it('opens nothing for a pointer that crosses a card on the way somewhere', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(300);
+    sched.leave();
+    sched.rest('b');
+    clock.advance(200);
+    sched.leave();
+    clock.advance(1000);
+    expect(state.did).toEqual([]);
+  });
+
+  it('swaps to the next card after 90ms while one is showing', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(480);
+    sched.leave();
+    sched.rest('b');
+    clock.advance(89);
+    expect(state.showing).toBe('a');
+    clock.advance(1);
+    expect(state.did).toEqual(['open a', 'open b']);
+  });
+
+  it('swaps after 90ms from one closed less than 350ms ago, and waits 480ms after that', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(480);
+    sched.leave();
+    clock.advance(160);
+    expect(state.did).toEqual(['open a', 'close']);
+    clock.advance(200);
+    sched.rest('b');
+    clock.advance(90);
+    expect(state.did).toEqual(['open a', 'close', 'open b']);
+    sched.shut();
+    clock.advance(350);
+    sched.rest('c');
+    clock.advance(90);
+    expect(state.showing).toBeNull();
+    clock.advance(390);
+    expect(state.showing).toBe('c');
+  });
+
+  it('counts a card with nothing to show as no preview showing, so the next still waits 480ms', () => {
+    const { clock, state, sched } = scheduled(new Set(['a']));
+    sched.rest('a');
+    clock.advance(480);
+    expect(state.showing).toBeNull();
+    sched.leave();
+    sched.rest('b');
+    clock.advance(479);
+    expect(state.showing).toBeNull();
+    clock.advance(1);
+    expect(state.did).toEqual(['open b']);
+  });
+
+  it('waits the full 480ms while the preview’s trailer plays, so drifting over cards does not swap it', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(480);
+    state.playing = true;
+    sched.leave();
+    sched.rest('b');
+    clock.advance(90);
+    expect(state.showing).toBe('a');
+    clock.advance(389);
+    expect(state.showing).toBe('a');
+    clock.advance(1);
+    expect(state.showing).toBe('b');
+  });
+});
+
+describe('when the hover preview closes', () => {
+  it('closes 160ms after the pointer has left the card and the preview', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(480);
+    sched.leave();
+    clock.advance(159);
+    expect(state.showing).toBe('a');
+    clock.advance(1);
+    expect(state.showing).toBeNull();
+  });
+
+  it('waits 450ms while its trailer plays', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(480);
+    state.playing = true;
+    sched.leave();
+    clock.advance(449);
+    expect(state.showing).toBe('a');
+    clock.advance(1);
+    expect(state.showing).toBeNull();
+  });
+
+  it('stays open while the pointer is on the preview, and closes once it leaves that too', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(480);
+    // Off the card, across the gap, onto the preview.
+    sched.leave();
+    clock.advance(60);
+    sched.hold();
+    clock.advance(5000);
+    expect(state.showing).toBe('a');
+    sched.leave();
+    clock.advance(160);
+    expect(state.did).toEqual(['open a', 'close']);
+  });
+
+  it('stays open for a pointer that comes back to its own card', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(480);
+    sched.leave();
+    clock.advance(100);
+    sched.rest('a');
+    clock.advance(5000);
+    expect(state.did).toEqual(['open a']);
+  });
+
+  it('closes at once when told to, and forgets a preview on its way', () => {
+    const { clock, state, sched } = scheduled();
+    sched.rest('a');
+    clock.advance(200);
+    sched.shut();
+    clock.advance(1000);
+    expect(state.did).toEqual([]);
+    sched.rest('a');
+    clock.advance(480);
+    sched.shut();
+    expect(state.did).toEqual(['open a', 'close']);
+    sched.dispose();
   });
 });

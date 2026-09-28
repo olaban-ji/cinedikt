@@ -60,6 +60,9 @@ export interface GridFilm extends Omit<SpineFilm, 'people'> {
   /** YYYY-MM-DD when we have it. The year band stacks by this, not labels. */
   released?: string;
   poster?: string;
+  /** What the film is about, from OMDb or, where it has none, TMDb.
+   *  Absent when no source has one yet. */
+  synopsis?: string;
   people: string[];
 }
 

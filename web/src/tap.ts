@@ -57,6 +57,18 @@ export function canHover(): boolean {
   return window.matchMedia('(hover: hover)').matches;
 }
 
+/** Whether the pointer can rest on something precisely: a mouse or a
+ *  trackpad, not a finger and not a stylus hovering over a screen.
+ *  Resting on a card to preview it, and on Watch trailer to start it
+ *  muted, are for this pointer only. */
+export function canRest(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(hover: hover) and (pointer: fine)').matches
+  );
+}
+
 /** How long a pointer has to rest on a chip before it previews. Crossing
  *  the row on the way somewhere else should not make the map flash. */
 export const HOVER_DELAY_MS = 140;

@@ -11,6 +11,7 @@ const TOUCH = '(max-width: 1023.98px), (max-height: 499.98px), (pointer: coarse)
 const NARROW = '(max-width: 1023.98px)';
 const SHORT = '(min-width: 640px) and (max-height: 499.98px)';
 const PHONE = '(max-width: 639.98px)';
+const OVERLAY = '(max-width: 639.98px), (max-height: 499.98px)';
 
 interface Rule {
   /** The @media query the rule sits in, or null at the top level. */
@@ -105,6 +106,25 @@ describe('the floating buttons', () => {
     expect(get('.cd-recentre:active .cd-float-pill', 'transform')).toBe('scale(0.97)');
     expect(get('.cd-view-open:active, .cd-view-quick-switch:active', 'transform')).toBe('scale(0.97)');
     expect(get('.cd-float:active .cd-float-pill', 'transform')).toBeUndefined();
+  });
+
+  it('turn View and the quick switch into icons 46 square on phones and short screens', () => {
+    // Each keeps a finger's size with no words: View by its own width,
+    // the switch by its icon and the padding either side of it. Both
+    // take the pill's height, 46 at these sizes (above).
+    expect(get('.cd-view-open', 'width', OVERLAY)).toBe('46px');
+    expect(get('.cd-view-open', 'padding', OVERLAY)).toBe('0');
+    const icon = px(get('.cd-quick-icon', 'width', OVERLAY));
+    expect(icon).toBe(px(get('.cd-quick-icon', 'height', OVERLAY)));
+    expect(get('.cd-view-quick-switch', 'padding', OVERLAY)).toBe('0 5px');
+    expect(icon + 2 * 5).toBe(46);
+    expect(get('.cd-view-label, .cd-quick-label, .cd-quick-track', 'display', OVERLAY)).toBe('none');
+    // The icon is only drawn there.
+    expect(get('.cd-quick-icon', 'display')).toBe('none');
+    expect(get('.cd-quick-icon', 'display', OVERLAY)).toBe('flex');
+    // The switch grows out of View to a width that holds the rule
+    // before it and all 46 of it.
+    expect(px(get('.cd-view-quick-on', 'max-width', OVERLAY))).toBeGreaterThanOrEqual(1 + 46);
   });
 
   it('keep View’s slop on View itself, now that its float is not a button', () => {

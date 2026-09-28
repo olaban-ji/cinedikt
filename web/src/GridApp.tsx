@@ -49,6 +49,8 @@ import { posterFallback } from './poster';
 import { Progress, useProgress } from './Progress';
 import { isSearchShortcut, isTyping, searchPlaceholder } from './search';
 import { Toast, useToast } from './Toast';
+import { usePlayer } from './TrailerRow';
+import { hideEmptyToast } from './quickSwitch';
 import { filmPath, movieIdFromPath, routeFrom, usePageTitle } from './movieParam';
 import {
   applyFilters,
@@ -334,7 +336,14 @@ export function GridApp() {
   const [lit, setLit] = useState<Set<string>>(new Set());
   const [openId, setOpenId] = useState<string | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
+  // The one trailer player, shared by the panel and the map's preview so
+  // that only one is ever open.
+  const player = usePlayer();
+  const stopTrailer = player.stop;
   const [searching, setSearching] = useState(false);
+  // The search field has text in it, which an Escape clears before it
+  // closes the map's hover preview.
+  const [searchTyped, setSearchTyped] = useState(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
   // Marked by the map before each scroll it makes by itself, so the
   // header lying over it can tell those from the reader's.
@@ -482,6 +491,8 @@ export function GridApp() {
     // (closeLayers).
     setOpenId(null);
     setViewOpen(false);
+    // A trailer belongs to the map it was opened on.
+    stopTrailer();
     if (movieChanged) toast.hide();
     if (movieId === null) {
       setDrawn(null);
@@ -541,7 +552,7 @@ export function GridApp() {
     return () => ctrl.abort();
     // `attempt` is not read here: it is what makes Try again run this
     // again for a movie that has not changed.
-  }, [movieId, attempt, loadGrid]);
+  }, [movieId, attempt, loadGrid, stopTrailer]);
 
   const prefetch = useCallback(
     (id: string) => {
@@ -743,8 +754,14 @@ export function GridApp() {
   const viewOpenRef = useRef<HTMLButtonElement>(null);
   const flipHideEmpty = () => {
     const on = !settings.hideEmptyYears;
+    // How many years turning it on hides, from the settings as they
+    // stand before the flip.
+    const hidden = payload ? emptyYearCount(payload, settings, selectedIdx) : 0;
     setSettings((was) => ({ ...was, hideEmptyYears: on }));
     capture('hide_empty_years', { on, from: 'quick' });
+    // On phones and short screens the switch is an icon, so the toast
+    // says what it did. Wider, its label already says it.
+    if (screen.overlay) toast.show(hideEmptyToast(on, hidden, setSettings, toast.hide));
     // Turned off with no year left for it to hide, the switch folds away
     // and goes inert under the press, which would drop the focus on the
     // document. hidesSome does not depend on the setting, so this is
@@ -1052,6 +1069,7 @@ export function GridApp() {
             placeholder={searchPlaceholder(loading || gliding, loadingTitle, payload?.anchor.title)}
             onPick={setMovieId}
             onFocusChange={setSearching}
+            onTyped={setSearchTyped}
             // A film sheet or the View panel is a dialog with the focus
             // inside it. A key that pulled the focus out to the field
             // behind the scrim would leave the reader typing into a
@@ -1136,6 +1154,8 @@ export function GridApp() {
           flown={flown}
           leaving={leaving}
           landing={landing}
+          player={player}
+          searchTyped={searchTyped}
         />
       ) : error ? (
         <MapError
@@ -1182,6 +1202,7 @@ export function GridApp() {
           onRemap={onRemap}
           onClose={() => setOpenId(null)}
           closer={sheetCloser}
+          player={player}
         />
       )}
 
@@ -1211,7 +1232,9 @@ export function GridApp() {
                 <circle className="cd-view-knob" cx="9" cy="7" r="2.2" />
                 <circle className="cd-view-knob" cx="15" cy="17" r="2.2" />
               </svg>
-              View
+              {/* The word goes on phones and short screens, where View
+                  is its icon alone. */}
+              <span className="cd-view-label">View</span>
               {/* How many settings differ from the defaults. The label
                   says it for a screen reader, the badge for the eye. */}
               {changed > 0 && (
@@ -1225,17 +1248,27 @@ export function GridApp() {
               inert={!quick || undefined}
             >
               <span className="cd-view-rule" aria-hidden="true" />
+              {/* Named outright: on phones and short screens the words
+                  and the track give way to the icon, which says nothing
+                  to a screen reader. */}
               <button
                 type="button"
                 role="switch"
                 aria-checked={settings.hideEmptyYears}
+                aria-label="Hide empty years"
                 className="cd-view-quick-switch"
                 onClick={flipHideEmpty}
               >
+                <span className="cd-quick-icon" aria-hidden="true">
+                  {/* Two arrows closing on a dashed line: rows folding together. */}
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2v6M9 5l3 3 3-3M12 22v-6M9 19l3-3 3 3M3 12h2M9 12h2M13 12h2M19 12h2" />
+                  </svg>
+                </span>
                 <span className="cd-quick-track" aria-hidden="true">
                   <span className="cd-quick-knob" />
                 </span>
-                Hide empty years
+                <span className="cd-quick-label">Hide empty years</span>
               </button>
             </span>
           </span>
@@ -1514,6 +1547,7 @@ function SearchField({
   placeholder,
   onPick,
   onFocusChange,
+  onTyped,
   shortcuts,
 }: {
   /** What the empty field says (see searchPlaceholder). */
@@ -1521,6 +1555,8 @@ function SearchField({
   onPick: (id: string, title?: string) => void;
   /** The header must not slide away from under a reader who is typing. */
   onFocusChange: (on: boolean) => void;
+  /** Whether the field has text in it, for the map's hover preview. */
+  onTyped: (typed: boolean) => void;
   /** Whether ⌘K, Ctrl+K and "/" may bring the reader here. */
   shortcuts: boolean;
 }) {
@@ -1596,6 +1632,10 @@ function SearchField({
   useEscape(() => {
     if (typed.length > 0) setQuery('');
   });
+  // The same rule for the map's hover preview, which hears Escape on its
+  // own and leaves this one to the field while it has text.
+  const hasText = typed.length > 0;
+  useEffect(() => onTyped(hasText), [hasText, onTyped]);
 
   return (
     <div

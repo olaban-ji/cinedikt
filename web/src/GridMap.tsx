@@ -27,11 +27,20 @@ import {
   type Placed,
   type SpineFilm,
 } from './grid';
+import { MapPreview } from './MapPreview';
 import { PosterImage } from './PosterImage';
 import { posterFallback, sheetPosterPx, sheetPosterURL } from './poster';
+import {
+  placePreview,
+  previewBounds,
+  previewScheduler,
+  type PreviewBounds,
+  type PreviewPlace,
+} from './preview';
 import { useScreen } from './screen';
 import { personVars } from './personColour';
-import { canHover, useOffScreen, useTapGuard } from './tap';
+import { canHover, canRest, useOffScreen, useTapGuard } from './tap';
+import type { Player } from './TrailerRow';
 import { useResolvedTheme, type Theme } from './theme';
 import { markAppScroll, type AppScroll } from './overHeader';
 import {
@@ -116,6 +125,12 @@ interface Props {
   leaving?: boolean;
   /** Set while a flown card is on its way to this map's searched film. */
   landing?: Landing | null;
+  /** The page's one trailer player, which the hover preview's trailer
+   *  plays in. */
+  player: Player;
+  /** The search field has text in it, which Escape clears before it
+   *  closes the hover preview. */
+  searchTyped?: boolean;
 }
 
 /** How opaque a card that does not match the selection is. */
@@ -175,6 +190,8 @@ export function GridMap({
   flown = null,
   leaving = false,
   landing = null,
+  player,
+  searchTyped = false,
 }: Props) {
   const tap = useTapGuard();
   // The poster fallback is painted in JavaScript, not CSS, so it is the
@@ -527,6 +544,28 @@ export function GridMap({
     [onCardHover],
   );
 
+  // The hover preview beside a card the pointer rests on. Gone at once
+  // while a panel or View is up, and while the map is being left or
+  // landed on.
+  const previewBlocked = covered || leaving || landing != null;
+  const preview = usePreview({
+    layout,
+    scroller,
+    overlayH,
+    headerAway,
+    blocked: previewBlocked,
+    selected: selectedIdx,
+    minRating: settings.minRating,
+    said: (id) => wordsFor({ id, isAnchor: id === payload.anchor.id }, detail, payload.anchor),
+    light: lightIfHovering,
+    player,
+    searchTyped,
+  });
+  const peek = previewBlocked ? null : preview.peek;
+  const peekFilm = peek
+    ? wordsFor({ id: peek.id, isAnchor: peek.id === payload.anchor.id }, detail, payload.anchor)
+    : undefined;
+
   // Recenter is only worth offering when the film it would go to is not
   // already in front of the reader.
   const anchorAt = useCallback(() => {
@@ -703,10 +742,24 @@ export function GridMap({
                   theme={theme}
                   arriving={reflow.arriving.has(c.film.id)}
                   fadingIn={reflow.fadingIn.has(c.film.id)}
+                  hover={preview.held === c.film.id}
                   onOpen={openIfMeant}
                   onHover={lightIfHovering}
+                  onPreview={preview.onCard}
                 />
               ))}
+              {peek && peekFilm && (
+                <MapPreview
+                  key={`${payload.anchor.id}:${peek.id}`}
+                  film={peekFilm}
+                  place={peek.place}
+                  player={player}
+                  bounds={preview.bounds}
+                  plotH={layout.plotH}
+                  onEnter={preview.onEnter}
+                  onLeave={preview.onLeave}
+                />
+              )}
               <div className="cd-rail-layer" style={{ height: layout.plotH, width: layout.plotW }}>
                 <div className="cd-rail" style={{ width: layout.metrics.railW, height: layout.plotH }}>
                   {layout.rows.map((r) =>
@@ -1043,6 +1096,177 @@ function useReflow(
   return { ghosts, ghostsOut, arriving, fadingIn, handled };
 }
 
+/** The hover preview on show: whose it is, where it sits, and the
+ *  layout it was placed on. A new layout is a map whose cards may have
+ *  moved, so a preview placed on an older one is not drawn (see
+ *  usePreview for the one exception). */
+interface Peek {
+  id: string;
+  place: PreviewPlace;
+  on: GridLayout;
+}
+
+/** The hover preview's state and the pointer's part in it. A pointer
+ *  that can rest precisely, resting on a card that can be opened, opens
+ *  its preview beside it (see previewScheduler for when). Moving onto
+ *  the preview keeps it, and the card keeps its hover state and its
+ *  chips lit meanwhile. A scroll, Escape, a panel or View opening, the
+ *  map being left and any new layout close it at once, except while its
+ *  trailer is fullscreen. */
+function usePreview(o: {
+  layout: GridLayout | null;
+  scroller: RefObject<HTMLDivElement | null>;
+  overlayH: number;
+  headerAway: boolean;
+  /** Something else has the map: a panel or View is up, or the map is
+   *  being left or landed on. */
+  blocked: boolean;
+  selected: Set<number>;
+  minRating: number | null;
+  /** What a card says, once its words have come: who is on it, for its
+   *  chips, and all the preview has to show. */
+  said: (id: string) => GridFilm | undefined;
+  /** Lights these people's chips. */
+  light: (people: string[]) => void;
+  player: Player;
+  /** The search field has text in it. */
+  searchTyped: boolean;
+}): {
+  /** The preview to draw, if there is one. */
+  peek: Peek | null;
+  /** The card drawn as hovered for its preview. */
+  held: string | null;
+  onCard: (id: string, over: boolean) => void;
+  onEnter: () => void;
+  onLeave: () => void;
+  bounds: (loose: boolean) => PreviewBounds;
+} {
+  // Read by timers and listeners that outlive the render they began in.
+  const live = useRef(o);
+  live.current = o;
+  const [peek, setPeek] = useState<Peek | null>(null);
+  // What is showing as of now, for a pointer faster than a render.
+  const showing = useRef<string | null>(null);
+  const [held, setHeld] = useState<string | null>(null);
+  // The card the pointer is on, if it is on one.
+  const under = useRef<string | null>(null);
+
+  const [bounds] = useState(() => (loose: boolean) => {
+    const { layout, scroller, overlayH, headerAway } = live.current;
+    const el = scroller.current ?? { scrollLeft: 0, scrollTop: 0, clientWidth: 0, clientHeight: 0 };
+    return previewBounds(el, layout?.metrics.railW ?? 0, overlayH, headerAway ? 0 : overlayH, loose);
+  });
+
+  const [sched] = useState(() =>
+    previewScheduler({
+      showing: () => showing.current,
+      playing: () => live.current.player.now()?.where === 'preview',
+      // Only a card whose words have come has a preview to show. One that
+      // is still an empty box opens nothing, and so neither counts as a
+      // preview showing nor keeps its hover state for one.
+      open: (id) => {
+        const { layout, blocked, selected, minRating, said } = live.current;
+        const card = layout?.cards.find((c) => c.film.id === id);
+        if (!layout || !card || blocked || filteredOut(card.film, selected, minRating) || !said(id)) return;
+        showing.current = id;
+        setPeek({ id, place: placePreview(card, layout.metrics, bounds(false), layout.plotH), on: layout });
+      },
+      close: () => {
+        showing.current = null;
+        setPeek(null);
+        setHeld(null);
+        // The chips a card or its preview lit go with it, unless the
+        // pointer is on a card, which lit its own.
+        if (under.current == null) live.current.light([]);
+      },
+    }),
+  );
+  useEffect(() => () => sched.dispose(), [sched]);
+
+  // Whether the preview's own trailer has gone fullscreen. The browser
+  // then sizes the page's viewport to the screen, so the map lays itself
+  // out again, and pins its scroll, under a preview the reader cannot
+  // see. Closing it for that would unmount the frame and end the
+  // fullscreen the moment it began.
+  const [fullscreen] = useState(() => () => {
+    const f = live.current.player.frame.current;
+    return f != null && document.fullscreenElement === f;
+  });
+
+  useEffect(() => {
+    if (o.blocked) sched.shut();
+  }, [o.blocked, sched]);
+  useEffect(() => {
+    if (!fullscreen()) {
+      sched.shut();
+      return;
+    }
+    // Carried across to the new layout, so it is still drawn. Its place
+    // was worked out on the old one, which is out of sight behind the
+    // fullscreen frame; once that ends, the next new layout or scroll
+    // closes it as usual.
+    const now = o.layout;
+    setPeek((p) => (p && now ? { ...p, on: now } : p));
+  }, [o.layout, sched, fullscreen]);
+  useEffect(() => {
+    const el = o.scroller.current;
+    const onScroll = () => {
+      if (!fullscreen()) sched.shut();
+    };
+    // In the capture phase, before this same press reaches the search
+    // field, which empties itself on it: a field with text in it takes
+    // this Escape, and the preview waits for the next one.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !live.current.searchTyped) sched.shut();
+    };
+    el?.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      el?.removeEventListener('scroll', onScroll);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [o.scroller, sched, fullscreen]);
+
+  const onCard = useCallback(
+    (id: string, over: boolean) => {
+      if (over) {
+        under.current = id;
+        // The pointer is on a card of its own now, which is hovered in
+        // its own right.
+        setHeld(null);
+        if (canRest()) sched.rest(id);
+        return;
+      }
+      if (under.current === id) under.current = null;
+      if (showing.current === id) {
+        // Perhaps on its way to the preview. The card keeps its hover
+        // state, and the chips it lit stay lit, until the preview closes
+        // or the pointer settles on another card.
+        setHeld(id);
+        live.current.light(live.current.said(id)?.people ?? []);
+      }
+      sched.leave();
+    },
+    [sched],
+  );
+
+  const onEnter = useCallback(() => {
+    sched.hold();
+    const id = showing.current;
+    if (!id) return;
+    setHeld(id);
+    live.current.light(live.current.said(id)?.people ?? []);
+  }, [sched]);
+
+  const onLeave = useCallback(() => sched.leave(), [sched]);
+
+  // Read as it draws, not only once the effect above has carried it
+  // across: the draw with the new layout comes first, and a preview
+  // missing from it would already be gone, and its frame with it.
+  const drawn = peek && (peek.on === o.layout || fullscreen()) ? peek : null;
+  return { peek: drawn, held, onCard, onEnter, onLeave, bounds };
+}
+
 export const Card = memo(function Card({
   card,
   layout,
@@ -1060,8 +1284,10 @@ export const Card = memo(function Card({
   arriving = false,
   fadingIn = false,
   ghost = false,
+  hover = false,
   onOpen,
   onHover,
+  onPreview,
 }: {
   card: Placed;
   /** What this card says, once it has arrived. Its place is already
@@ -1099,8 +1325,14 @@ export const Card = memo(function Card({
   /** A card that has just left, held at its old place for long enough
    *  to fade rather than vanish. */
   ghost?: boolean;
+  /** Drawn as if the pointer were on it, as it is on its hover preview
+   *  or on the way there. */
+  hover?: boolean;
   onOpen: (filmId: string) => void;
   onHover: (people: string[]) => void;
+  /** The pointer has come to rest on this card, or left it, for the
+   *  hover preview. Never called for a filtered-out card. */
+  onPreview?: (filmId: string, over: boolean) => void;
 }) {
   const { film } = card;
   const { cardW, cardH, titleLines, posterW, posterH } = layout.metrics;
@@ -1129,12 +1361,17 @@ export const Card = memo(function Card({
   }, [off, onHover]);
   // Taken off the map with the pointer still on it, as when hiding the
   // empty years closes up its row: nothing says the pointer left then
-  // either. onHover is stable, so this runs only as the card goes.
+  // either. onHover and onPreview are stable, so this runs only as the
+  // card goes.
   useEffect(
     () => () => {
-      if (under.current) onHover([]);
+      if (!under.current) return;
+      onHover([]);
+      onPreview?.(film.id, false);
     },
-    [onHover],
+    // A card's film never changes: it is keyed by it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [onHover, onPreview],
   );
   return (
     <>
@@ -1147,7 +1384,7 @@ export const Card = memo(function Card({
         // A card waiting to spread is put in its hidden state at once
         // (.cd-card-held has no transitions), and let go into it from
         // there with its own delay.
-        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${flown ? ' cd-card-flown' : ''}${snap ? ' cd-card-snap' : ''}${fadingIn ? ' cd-card-arrive' : ''}${ghost ? ' cd-card-ghost' : ''}${off ? ' cd-card-off' : ''}`}
+        className={`cd-card${film.isAnchor ? ' cd-card-anchor' : ''}${said ? '' : ' cd-card-waiting'}${waiting ? ' cd-card-held' : enter ? ' cd-card-entering' : ''}${ringed ? ' cd-card-ringed' : ''}${flown ? ' cd-card-flown' : ''}${snap ? ' cd-card-snap' : ''}${fadingIn ? ' cd-card-arrive' : ''}${ghost ? ' cd-card-ghost' : ''}${off ? ' cd-card-off' : ''}${hover && !off ? ' cd-card-hover' : ''}`}
         style={{
           left: card.left,
           top: card.top,
@@ -1172,10 +1409,12 @@ export const Card = memo(function Card({
           if (off) return;
           under.current = true;
           onHover(on);
+          onPreview?.(film.id, true);
         }}
         onMouseLeave={() => {
           under.current = false;
           onHover([]);
+          onPreview?.(film.id, false);
         }}
       >
         <PosterImage

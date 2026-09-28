@@ -127,6 +127,43 @@ export function fetchPosterStandIn(id: string): Promise<string | undefined> {
   return pending;
 }
 
+/** One lookup per film for the visit. A film with no trailer keeps its
+ *  null, so opening it again asks nothing; a failure is forgotten, so
+ *  the next open asks again. */
+const trailers = new Map<string, Promise<string | null>>();
+
+/** The answers that have come back, kept beside the lookups so a film
+ *  opened again can show its trailer row straight away rather than a
+ *  placeholder for the moment a settled promise takes to say so. */
+const trailerAnswers = new Map<string, string | null>();
+
+/** The YouTube id of a film's trailer, or null when it has none that can
+ *  play embedded, or the lookup failed. Asked the first time a film's
+ *  preview or panel opens. */
+export function fetchTrailer(id: string): Promise<string | null> {
+  const existing = trailers.get(id);
+  if (existing) return existing;
+  const pending = getJSON<{ key?: string | null }>(`/trailers/${encodeURIComponent(id)}`)
+    .then((body) => {
+      const key = body.key || null;
+      trailerAnswers.set(id, key);
+      return key;
+    })
+    .catch(() => {
+      trailers.delete(id);
+      return null;
+    });
+  trailers.set(id, pending);
+  return pending;
+}
+
+/** What fetchTrailer has already answered for a film this visit: its
+ *  key, or null for none. Undefined while nothing is known, which is
+ *  also so after a failure, since that is not kept. */
+export function trailerKnown(id: string): string | null | undefined {
+  return trailerAnswers.get(id);
+}
+
 export interface FirstRunHit {
   id: string;
   title: string;
