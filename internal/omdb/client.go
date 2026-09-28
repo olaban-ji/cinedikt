@@ -4,7 +4,6 @@ package omdb
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +30,16 @@ var ErrQuota = errors.New("omdb: daily request limit reached")
 // it, so a caller should stop asking rather than spend the day being
 // told the same thing.
 var ErrKey = errors.New("omdb: invalid API key")
+
+// ErrUnreadable is an answer from OMDb that cannot be read: not JSON
+// even once it has been repaired, or JSON of a shape the client does
+// not expect. It wraps the decode error, so a log says why.
+//
+// It is an answer, not a failed lookup. OMDb sends the same bytes for
+// a title every time it is asked, so asking again changes nothing: a
+// caller records it the way it records OMDb having nothing, and
+// neither retries it nor counts it as a failure.
+var ErrUnreadable = errors.New("omdb: unreadable answer")
 
 // QuotaPause is how long lookups are skipped after a quota error. OMDb's
 // free quota resets daily; an hour keeps a long-running server from
@@ -144,12 +153,13 @@ func (c *Client) IMDbRating(ctx context.Context, imdbID string) (Rating, error) 
 		c.pause()
 		return Rating{}, err
 	}
-	if err != nil && !errors.Is(err, ErrNotFound) {
+	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrUnreadable) {
 		// Key problems and the like are transient; never cache them.
 		return Rating{}, err
 	}
-	// Cache "not found" too: those ids would otherwise be re-queried on
-	// every crawl and eat the daily quota.
+	// Cache "not found" too, and an answer that cannot be read: those ids
+	// would otherwise be re-queried on every crawl and eat the daily
+	// quota, and OMDb would only say the same again.
 	if cerr := c.cache.Set(imdbID, body); cerr != nil {
 		return Rating{}, fmt.Errorf("omdb: cache %s: %w", imdbID, cerr)
 	}
@@ -290,8 +300,8 @@ func parse(body []byte, asked string) (Rating, error) {
 		IMDbRating string `json:"imdbRating"`
 		IMDbVotes  string `json:"imdbVotes"`
 	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		return Rating{}, fmt.Errorf("omdb: decode: %w", err)
+	if err := decode(body, &env); err != nil {
+		return Rating{}, err
 	}
 	if env.Response != "True" {
 		switch {

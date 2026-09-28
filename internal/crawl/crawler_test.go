@@ -3,6 +3,7 @@ package crawl
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sort"
@@ -390,6 +391,36 @@ func TestIMDbRatings(t *testing.T) {
 	// Only crawled movies (with an IMDb id) are looked up, never filmography entries.
 	if ratings.calls.Load() != 2 {
 		t.Errorf("rating lookups = %d, want 2", ratings.calls.Load())
+	}
+}
+
+// unreadableRatings answers for tt1 and cannot read OMDb's answer for
+// any other.
+type unreadableRatings struct{}
+
+func (unreadableRatings) IMDbRating(_ context.Context, imdbID string) (omdb.Rating, error) {
+	if imdbID == "tt1" {
+		return omdb.Rating{Value: 8.7, Votes: 100}, nil
+	}
+	return omdb.Rating{}, fmt.Errorf("%w: unexpected end of JSON input", omdb.ErrUnreadable)
+}
+
+// TestAnUnreadableRatingIsNoRating: OMDb's answer that cannot be read
+// even once repaired is a movie with no rating to be had, like one OMDb
+// has none for. The movie is written without one, and it is not counted
+// as a failed lookup.
+func TestAnUnreadableRatingIsNoRating(t *testing.T) {
+	w := newFakeWriter()
+	c := New(fixture(), w, Options{Concurrency: 2, Ratings: unreadableRatings{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	stats, err := c.Run(context.Background(), 1, 2)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if m, ok := w.movieMeta[2]; !ok || m.IMDbRating != 0 {
+		t.Errorf("movie 2 written = %v, meta %+v; want written without rating", ok, m)
+	}
+	if stats.RatingErrors != 0 {
+		t.Errorf("RatingErrors = %d, want 0", stats.RatingErrors)
 	}
 }
 

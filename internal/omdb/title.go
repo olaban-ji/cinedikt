@@ -2,7 +2,7 @@ package omdb
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -17,7 +17,8 @@ type Title struct {
 	// Released is the full date. Zero when OMDb has only a year, or
 	// nothing at all.
 	Released time.Time
-	// Plot is the full synopsis, trimmed. Empty when OMDb has none.
+	// Plot is the full synopsis, cleaned of control characters and
+	// trimmed. Empty when OMDb has none.
 	Plot string
 }
 
@@ -31,7 +32,8 @@ func titleCacheKey(imdbID string) string { return "tf:" + imdbID }
 //
 // It returns a Title and no error when OMDb answered but had none of
 // them: a film with no poster is a fact worth storing, or it would be
-// asked for again every night forever.
+// asked for again every night forever. An answer that cannot be read
+// even once repaired is ErrUnreadable, and is a fact of the same kind.
 func (c *Client) Lookup(ctx context.Context, imdbID string) (Title, error) {
 	if c.paused() {
 		return Title{}, ErrQuota
@@ -62,10 +64,10 @@ func (c *Client) Lookup(ctx context.Context, imdbID string) (Title, error) {
 	return t, nil
 }
 
-// ParsePlot reads OMDb's plot. "N/A" and an empty value are both no
-// synopsis at all.
+// ParsePlot reads OMDb's plot, cleaned of control characters and
+// trimmed. "N/A" and an empty value are both no synopsis at all.
 func ParsePlot(raw string) string {
-	raw = strings.TrimSpace(raw)
+	raw = cleanText(raw)
 	if raw == "N/A" {
 		return ""
 	}
@@ -111,8 +113,8 @@ func parseTitle(body []byte, asked string) (Title, error) {
 		Released string `json:"Released"`
 		Plot     string `json:"Plot"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return Title{}, fmt.Errorf("omdb: decode: %w", err)
+	if err := decode(body, &payload); err != nil {
+		return Title{}, err
 	}
 	if !strings.EqualFold(payload.Response, "true") {
 		switch {
@@ -177,7 +179,9 @@ func (c *Client) Search(ctx context.Context, query string) ([]Hit, error) {
 		if err == ErrQuota {
 			c.pause()
 		}
-		if err == ErrNotFound {
+		// An answer that cannot be read is no more use to the reader
+		// than one with nothing in it, and is told the same way.
+		if err == ErrNotFound || errors.Is(err, ErrUnreadable) {
 			return nil, nil
 		}
 		return nil, err
@@ -200,8 +204,8 @@ func parseSearch(body []byte) ([]Hit, error) {
 			Poster string `json:"Poster"`
 		} `json:"Search"`
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("omdb: decode search: %w", err)
+	if err := decode(body, &payload); err != nil {
+		return nil, err
 	}
 	if !strings.EqualFold(payload.Response, "true") {
 		switch {
@@ -221,7 +225,7 @@ func parseSearch(body []byte) ([]Hit, error) {
 		if !strings.EqualFold(r.Type, "movie") || r.IMDbID == "" {
 			continue
 		}
-		hit := Hit{IMDbID: r.IMDbID, Title: r.Title, Year: searchYear(r.Year)}
+		hit := Hit{IMDbID: r.IMDbID, Title: cleanText(r.Title), Year: searchYear(r.Year)}
 		if posterIsSafe(r.Poster) {
 			hit.Poster = r.Poster
 		}

@@ -206,6 +206,14 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 						// answer, and it is stored so the title is
 						// never asked about again.
 						answers <- Poster{TConst: id, OK: true}
+					case errors.Is(err, omdb.ErrUnreadable):
+						// OMDb answered in a way that cannot be read
+						// even once repaired, and will answer the same
+						// way tomorrow. It is stored as OMDb having no
+						// picture, so the TMDb stand-in takes the title
+						// up, rather than as a failure retried daily.
+						j.Logger.Info("OMDb's answer is unreadable; no poster from it", "tconst", id, "err", err)
+						answers <- Poster{TConst: id, OK: true}
 					case err != nil:
 						// The lookup failed rather than came back
 						// empty, so it is worth asking again tomorrow.

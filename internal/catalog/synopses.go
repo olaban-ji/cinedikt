@@ -264,9 +264,15 @@ func (j *SynopsisJob) Run(ctx context.Context) error {
 		var keyErr error
 		for _, a := range j.ask(ctx, fresh, workers) {
 			switch {
-			case a.err == nil, errors.Is(a.err, omdb.ErrNotFound):
+			case a.err == nil, errors.Is(a.err, omdb.ErrNotFound), errors.Is(a.err, omdb.ErrUnreadable):
 				// OMDb answered. Having nothing is an answer too, and
 				// storing it is what stops the title coming round again.
+				// So is an answer that cannot be read even once repaired:
+				// OMDb sends the same bytes every time, so it is OMDb
+				// having no synopsis to give, not a lookup to retry.
+				if errors.Is(a.err, omdb.ErrUnreadable) {
+					j.Logger.Info("OMDb's answer is unreadable; no synopsis from it", "tconst", a.id, "err", a.err)
+				}
 				answered = append(answered, a.id)
 				plots = append(plots, textOrNull(a.plot))
 				if a.plot != "" {

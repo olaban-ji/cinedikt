@@ -339,6 +339,12 @@ func (c *Crawler) writeIMDbRating(ctx context.Context, r *run, movieID int, imdb
 	case errors.Is(err, omdb.ErrNotFound):
 		c.opts.Logger.Debug("no imdb rating", "movie", movieID, "imdb_id", imdbID)
 		return
+	case errors.Is(err, omdb.ErrUnreadable):
+		// OMDb's answer cannot be read even once repaired, and would be
+		// the same next time: the movie has no rating to be had, like
+		// one OMDb has none for, and it is not a failed lookup.
+		c.opts.Logger.Debug("imdb rating unreadable", "movie", movieID, "imdb_id", imdbID, "err", err)
+		return
 	case errors.Is(err, omdb.ErrQuota):
 		// Warn once per pause; every movie until then is skipped quietly.
 		atomic.AddInt64(&r.stats.RatingErrors, 1)

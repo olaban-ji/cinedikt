@@ -90,7 +90,11 @@ survives every future generation.
 
 A lookup that came back empty is still an answer, and is not asked
 again. Only a lookup that *failed* is retried, and not within the same
-run.
+run. OMDb's answers are not always valid JSON (a stray backslash, a raw
+tab in a plot), so one that does not decode is repaired and read again.
+One that still cannot be read is an answer too: OMDb sends the same
+bytes every time, so it is stored as OMDb having no picture and no
+plot, and the TMDb stand-in takes the title up.
 
 ## Synopses and trailers
 
