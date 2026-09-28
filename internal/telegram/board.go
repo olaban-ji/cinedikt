@@ -152,6 +152,8 @@ func busyHeadline(id string) string {
 		return "Filling in synopses"
 	case notify.JobTrailers:
 		return "Finding trailers"
+	case notify.JobPeople:
+		return "Finding people photos"
 	default:
 		return "Colouring the opening screen"
 	}
@@ -297,7 +299,7 @@ func runningText(id string, j *job, w writer) string {
 	case j.Total > 0 && (j.Share >= 0.99 || (!j.ETA.IsZero() && j.ETA.Sub(w.now) < 2*time.Minute)):
 		return "almost done"
 	case j.Total > 0 && pct(j.Share) >= 1:
-		text := fmt.Sprintf("%d%% of %s films", pct(j.Share), total)
+		text := fmt.Sprintf("%d%% of %s %s", pct(j.Share), total, unitOf(id))
 		if !j.ETA.IsZero() {
 			text += " · done about " + w.when(roundETA(j.ETA, w.now))
 		}
@@ -314,9 +316,20 @@ func runningText(id string, j *job, w writer) string {
 		return total + " films to look up"
 	case notify.JobTrailers:
 		return "checking " + total + " films"
+	case notify.JobPeople:
+		return "checking " + total + " people"
 	default:
 		return total + " films to colour"
 	}
+}
+
+// unitOf is what a job's work is counted in: people for the photos,
+// films for everything else.
+func unitOf(id string) string {
+	if id == notify.JobPeople {
+		return "people"
+	}
+	return "films"
 }
 
 // idleText is a job that is up to date, and the one thing worth
@@ -346,6 +359,8 @@ func idleText(id string, j *job, w writer) string {
 	case notify.JobSynopses:
 		text += lately("added")
 	case notify.JobTrailers:
+		text += lately("found")
+	case notify.JobPeople:
 		text += lately("found")
 	case notify.JobColours:
 		if j.LastErrors > 0 {

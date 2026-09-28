@@ -119,6 +119,9 @@ func messages() map[string][]part {
 	trailersDown := failingJob(notify.AllFailed, 2, 70*time.Minute)
 	trailersDown.Provider, trailersDown.Lookups = "TMDb", 50
 	trailersDown.Detail = `catalog: all 50 lookups to TMDb failed; the last: tmdb: giving up after 4 attempts: tmdb: HTTP 503`
+	peopleDown := failingJob(notify.AllFailed, 2, 70*time.Minute)
+	peopleDown.Provider, peopleDown.Lookups = "TMDb", 50
+	peopleDown.Detail = `catalog: all 50 lookups to TMDb failed; the last: tmdb: giving up after 4 attempts: tmdb: HTTP 503`
 
 	return map[string][]part{
 		"p1-new-catalog":           {w.published(published, time.Time{})},
@@ -141,6 +144,7 @@ func messages() map[string][]part {
 		"p6-search-unexpected":     {w.jobFailing(notify.JobTMDbIDs, idsOdd)},
 		"p6-synopses-omdb-down":    {w.jobFailing(notify.JobSynopses, synopsesDown)},
 		"p6-trailers-tmdb-down":    {w.jobFailing(notify.JobTrailers, trailersDown)},
+		"p6-people-tmdb-down":      {w.jobFailing(notify.JobPeople, peopleDown)},
 		"p7-tmdb-key":              {w.keyRejected("TMDb", "tmdb: HTTP 401: Invalid API key: You must be granted a valid key.")},
 		"p7-omdb-key":              {w.keyRejected("OMDb", "catalog: OMDb refused the key: omdb: invalid API key")},
 		"p8-posters-working-again": {w.workingAgain(notify.JobPosters, testNow.Add(-(2*time.Hour + 10*time.Minute)), yesterday, false)},
@@ -155,6 +159,7 @@ func messages() map[string][]part {
 		"p10-backup-posters":       {w.longPass(notify.JobTMDbPosters, notify.Event{Done: 1204, None: 96, Took: 2*time.Hour + 5*time.Minute}, "")},
 		"p10-synopses":             {w.longPass(notify.JobSynopses, notify.Event{Done: 36120, None: 1880, Errors: 14, Took: 52 * time.Minute}, "")},
 		"p10-trailers":             {w.longPass(notify.JobTrailers, notify.Event{Done: 9310, None: 1204, Took: 38 * time.Minute}, "")},
+		"p10-people-photos":        {w.longPass(notify.JobPeople, notify.Event{Done: 41280, None: 8812, Took: 2*time.Hour + 47*time.Minute}, "")},
 		"p11-manual-published":     {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Published, Films: 757802, People: 3120442, PrevFilms: 756598, Took: 97 * time.Minute})},
 		"p11-manual-nothing-new":   {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Checked, LiveSince: yesterday})},
 		"p11-manual-skipped":       {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Skipped, Cause: notify.FileMoved})},

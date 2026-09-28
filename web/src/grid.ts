@@ -19,6 +19,11 @@ export interface GridPerson {
   order: number;
   /** How many of this person's films belong on the grid, career-wide. */
   count?: number;
+  /** The address of the person's photo on TMDb's image host, 185 pixels
+   *  wide. Absent when the server's people job has not answered for them
+   *  yet, when TMDb has no photo, and once an answer is too old to show;
+   *  fetchPeoplePhotos tells the first of those from the others. */
+  photo?: string;
 }
 
 /** Where a card goes and whose it is, and nothing else. The server
@@ -63,7 +68,14 @@ export interface GridFilm extends Omit<SpineFilm, 'people'> {
   /** What the film is about, from OMDb or, where it has none, TMDb.
    *  Absent when no source has one yet. */
   synopsis?: string;
+  /** IMDb's genres, up to three, in IMDb's order. Absent when IMDb lists none. */
+  genres?: string[];
   people: string[];
+}
+
+/** The genres as the preview and the panel show them: "Action · Sci-Fi". */
+export function genreLine(f: Pick<GridFilm, 'genres'>): string {
+  return (f.genres ?? []).map((g) => g.trim()).filter(Boolean).join(' · ');
 }
 
 /** What the server sends: the searched film, its people, and the spine. */

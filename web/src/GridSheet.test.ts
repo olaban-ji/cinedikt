@@ -176,6 +176,25 @@ describe('the panel’s synopsis', () => {
   });
 });
 
+describe('the panel’s year and rating line', () => {
+  it('follows the rating with the genres, as plain text, when IMDb lists some', () => {
+    expect(panel(KEY, { genres: ['Action', 'Sci-Fi'] })).toContain(
+      '<div class="cd-sheet-meta"><span>2003</span><span class="cd-sheet-pill">7.2</span><span class="cd-sheet-genres">Action · Sci-Fi</span></div>',
+    );
+    expect(panel(KEY, { rating: null, genres: ['Crime', 'Drama', 'Film-Noir'] })).toContain(
+      '<span class="cd-sheet-pill">No rating</span><span class="cd-sheet-genres">Crime · Drama · Film-Noir</span></div>',
+    );
+  });
+
+  it('is the year and the rating alone when IMDb lists none', () => {
+    for (const genres of [undefined, [], ['', ' ']]) {
+      const html = panel(KEY, { genres });
+      expect(html).toContain('<div class="cd-sheet-meta"><span>2003</span><span class="cd-sheet-pill">7.2</span></div>');
+      expect(html).not.toContain('cd-sheet-genres');
+    }
+  });
+});
+
 describe('the panel’s trailer row', () => {
   it('holds a placeholder the size of the button while the answer is on its way', () => {
     const html = panel(undefined);
@@ -456,6 +475,62 @@ describe('the panel’s synopsis at every screen class', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+/** What the stylesheet cannot say about the phone's head at 390×844,
+ *  as Chrome lays it out: the text column beside the poster is 220px
+ *  wide, which a long title such as "The Lord of the Rings: The
+ *  Fellowship of the Ring" takes four lines of, and a line of the meta's
+ *  13.5px Figtree is 16px tall. */
+const LONG_TITLE_LINES = 4;
+const META_LINE = 16;
+
+/** Where the synopsis starts in a phone's body under a long title and
+ *  three genres, which do not fit beside the year and the pill and drop
+ *  onto a second line: the head's text, taller than its poster, and the
+ *  body's gap. */
+function phoneTopUnderGenres(): number {
+  const titleLine =
+    px(decls('.cd-sheet-phone .cd-sheet-title').get('font-size')) * Number(decls('.cd-sheet-title').get('line-height'));
+  const text = decls('.cd-sheet-head-text');
+  const pill = META_LINE + 2 * px(decls('.cd-sheet-pill').get('padding')!.split(' ')[0]);
+  const meta = pill + px(decls('.cd-sheet-meta').get('row-gap')) + META_LINE;
+  const head = LONG_TITLE_LINES * titleLine + px(text.get('gap')) + meta + px(text.get('padding-bottom'));
+  return head + px(decls('.cd-sheet-body').get('gap'));
+}
+
+describe('the panel’s genres', () => {
+  it('drop onto a second line as one piece, in the line’s own type', () => {
+    const meta = decls('.cd-sheet-meta');
+    expect(meta.get('flex-wrap')).toBe('wrap');
+    expect(px(meta.get('gap'))).toBe(8);
+    expect(px(meta.get('row-gap'))).toBe(5);
+    // No rule of their own: a flex item moves to the next line whole,
+    // and breaks inside itself only when it is wider than the column.
+    // Kept to one line instead, a list that long would run out of it.
+    expect(decls('.cd-sheet-genres').size).toBe(0);
+  });
+
+  it('leave the synopsis measured from its real top, on a phone under a long title', () => {
+    const at = panelAt(390, 844);
+    const top = phoneTopUnderGenres();
+    // The head runs past its poster, so the synopsis starts lower than
+    // a head as tall as the poster would put it; Chrome has it at 194.
+    expect(top).toBeCloseTo(194, 0);
+    expect(top).toBeGreaterThan(at.synTop);
+    const { body, p } = laidOut({ ...at, synTop: top }, LONG);
+    const m = measureSynopsis(body, p);
+    expect(m.lines).toBe(restingLines(at.bodyH, top));
+    expect(m.lines).toBe(4);
+    // Watch trailer's foot, More's row counted, and 16 to spare.
+    expect(top + m.lines * SYN_LH + MORE_ROW_H + ABOUT_GAP + 44 + 16).toBeLessThanOrEqual(at.bodyH);
+    // Where the room is short, the taller head costs lines: counted from
+    // a poster-high head, a phone 540 tall would rest at four.
+    const low = panelAt(390, 540);
+    expect(restingLines(low.bodyH, low.synTop)).toBe(4);
+    const under = laidOut({ ...low, synTop: top }, LONG);
+    expect(measureSynopsis(under.body, under.p).lines).toBe(2);
   });
 });
 

@@ -3,9 +3,11 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -370,6 +372,187 @@ func TestTheSynopsisJobStopsOnTheDailyLimit(t *testing.T) {
 	}
 }
 
+// fiveVotes gives the fixture's unrated film five votes, the kind of
+// film only a sweep with no floor reaches.
+func fiveVotes(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.pool.Exec(context.Background(), `
+		INSERT INTO `+Live+`.ratings (tconst, average_rating, num_votes) VALUES ('tt0000001', 6.0, 5)`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// hookedOMDb is fakeOMDb with something that happens as a title is asked
+// about, the way a reader's mark can land while a pass is running.
+type hookedOMDb struct {
+	*fakeOMDb
+	on map[string]func()
+}
+
+func (f hookedOMDb) Lookup(ctx context.Context, id string) (omdb.Title, error) {
+	if hook := f.on[id]; hook != nil {
+		hook()
+	}
+	return f.fakeOMDb.Lookup(ctx, id)
+}
+
+// pausingOMDb is fakeOMDb with the real client's daily-limit pause: the
+// lookup that is told the day's requests are spent pauses the client,
+// and the jobs look at PausedUntil before they ask anything.
+type pausingOMDb struct {
+	*fakeOMDb
+	mu    sync.Mutex
+	until time.Time
+}
+
+func (f *pausingOMDb) Lookup(ctx context.Context, id string) (omdb.Title, error) {
+	got, err := f.fakeOMDb.Lookup(ctx, id)
+	if errors.Is(err, omdb.ErrQuota) {
+		f.mu.Lock()
+		f.until = time.Now().Add(time.Hour)
+		f.mu.Unlock()
+	}
+	return got, err
+}
+
+func (f *pausingOMDb) PausedUntil() time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.until
+}
+
+// reset is the next day: the limit is back.
+func (f *pausingOMDb) reset() {
+	f.mu.Lock()
+	f.until = time.Time{}
+	f.mu.Unlock()
+	f.fakeOMDb.mu.Lock()
+	f.fakeOMDb.errs = nil
+	f.fakeOMDb.mu.Unlock()
+}
+
+// TestTheSynopsisSweepReachesEveryFilmBehindWhatReadersMeet is the
+// default floor of zero: the sweep asks about every film a map can draw,
+// a five-vote one included, most voted first. A reader's mark that lands
+// mid-sweep is looked at before the next batch, so it goes ahead of the
+// rest of the sweep however long that is.
+func TestTheSynopsisSweepReachesEveryFilmBehindWhatReadersMeet(t *testing.T) {
+	if SynopsisSweepMinVotes != 0 {
+		t.Fatalf("the synopsis sweep's default floor is %d, want 0", SynopsisSweepMinVotes)
+	}
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	clearSynopses(t, s)
+	fiveVotes(t, s)
+	posterPassHas(t, s, map[string]string{
+		"tt0000001": "ok", "tt0111161": "ok", "tt0133093": "ok", "tt0234215": "ok",
+		"tt0000002": "ok", "tt0000003": "ok",
+	})
+	fake := hookedOMDb{
+		fakeOMDb: &fakeOMDb{answers: map[string]omdb.Title{
+			"tt0000001": {Plot: "Five votes' worth."},
+			"tt0111161": {Plot: "Hope."},
+			"tt0133093": {Plot: "Red pill."},
+			"tt0234215": {Plot: "More pills."},
+		}},
+		// While Shawshank is asked about, a reader is shown Reloaded.
+		on: map[string]func(){"tt0111161": func() {
+			if err := s.markSynopsesWanted(ctx, []string{"tt0234215"}); err != nil {
+				t.Error(err)
+			}
+		}},
+	}
+	// One title a batch, so the order is the whole of what is checked.
+	job := &SynopsisJob{Store: s, Client: fake, Logger: quietLogger(), MinVotes: SynopsisSweepMinVotes, Batch: 1, Workers: 1}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Reloaded goes ahead of the Matrix, which has more votes, and the
+	// five-vote film is reached last. The documentary and the adult
+	// title are not films a map draws.
+	want := []string{"tt0111161", "tt0234215", "tt0133093", "tt0000001"}
+	if !reflect.DeepEqual(fake.asked, want) {
+		t.Fatalf("asked %v, want %v", fake.asked, want)
+	}
+	if text, source, _ := synopsisRow(t, s, "tt0000001"); text != "Five votes' worth." || source != SynopsisOMDb {
+		t.Errorf("five-vote film = %q from %q", text, source)
+	}
+}
+
+// TestASpentDailyLimitPausesTheSweepAndItResumes: a sweep of every film
+// can outlast a day's OMDb requests. When the limit is spent the pass
+// pauses, keeping what it learned and losing nothing it did not; while
+// the client is paused a pass asks nothing, whatever woke it; and once
+// the limit resets, the next pass starts with what a reader has met and
+// then the title the limit stopped.
+func TestASpentDailyLimitPausesTheSweepAndItResumes(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	clearSynopses(t, s)
+	fiveVotes(t, s)
+	posterPassHas(t, s, map[string]string{
+		"tt0000001": "ok", "tt0111161": "ok", "tt0133093": "ok", "tt0234215": "ok",
+	})
+	fake := &pausingOMDb{fakeOMDb: &fakeOMDb{
+		answers: map[string]omdb.Title{
+			"tt0000001": {Plot: "Five votes' worth."},
+			"tt0111161": {Plot: "Hope."},
+			"tt0133093": {Plot: "Red pill."},
+			"tt0234215": {Plot: "More pills."},
+		},
+		errs: map[string]error{"tt0133093": omdb.ErrQuota},
+	}}
+	var sink recordingSink
+	job := &SynopsisJob{Store: s, Client: fake, Logger: quietLogger(), MinVotes: SynopsisSweepMinVotes, Batch: 1, Workers: 1, Notify: &sink}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"tt0111161", "tt0133093"}; !reflect.DeepEqual(fake.asked, want) {
+		t.Fatalf("asked %v, want %v and nothing after the limit", fake.asked, want)
+	}
+	paused := sink.of(notify.Paused)
+	if len(paused) != 1 || paused[0].Cause != notify.DailyLimit || !paused[0].NextTry.Equal(fake.PausedUntil()) {
+		t.Errorf("paused = %+v, want the daily limit until %v", paused, fake.PausedUntil())
+	}
+	if text, _, _ := synopsisRow(t, s, "tt0111161"); text != "Hope." {
+		t.Errorf("shawshank = %q; what was learned before the limit was lost", text)
+	}
+	if _, _, ok := synopsisRow(t, s, "tt0133093"); ok {
+		t.Error("the title the limit stopped was written down, and will not be asked again")
+	}
+
+	// A reader is shown the five-vote film while the limit is spent. The
+	// mark wakes the job, and it asks nothing.
+	if err := s.markSynopsesWanted(ctx, []string{"tt0000001"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.asked) != 2 {
+		t.Fatalf("asked %v while the limit was spent", fake.asked[2:])
+	}
+
+	// The next day.
+	fake.reset()
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"tt0111161", "tt0133093", "tt0000001", "tt0133093", "tt0234215"}; !reflect.DeepEqual(fake.asked, want) {
+		t.Fatalf("asked %v, want %v", fake.asked, want)
+	}
+	for id, want := range map[string]string{"tt0133093": "Red pill.", "tt0234215": "More pills.", "tt0000001": "Five votes' worth."} {
+		if text, _, _ := synopsisRow(t, s, id); text != want {
+			t.Errorf("%s = %q, want %q", id, text, want)
+		}
+	}
+	if fin := sink.of(notify.Finished); len(fin) != 1 || fin[0].Done != 3 {
+		t.Errorf("finished = %+v, want the resumed pass's three", fin)
+	}
+}
+
 // TestThePosterPassAndTheSynopsisJobShareOnePause is why the synopsis
 // job is handed the poster pass's client rather than one of its own:
 // OMDb's daily limit is per key, and when it is spent both have to stop.
@@ -457,12 +640,12 @@ func TestDueTMDbDataIsDroppedAndOMDbsIsKept(t *testing.T) {
 	}
 
 	// With an OMDb key, overviews wait for the backstop too.
-	overviews, trailers, err := s.forgetDueTMDbData(ctx, tmdbForgetDays)
+	gone, err := s.forgetDueTMDbData(ctx, tmdbForgetDays)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if overviews != 1 || trailers != 2 {
-		t.Errorf("dropped %d overviews and %d trailers, want 1 and 2", overviews, trailers)
+	if gone.overviews != 1 || gone.trailers != 2 {
+		t.Errorf("dropped %d overviews and %d trailers, want 1 and 2", gone.overviews, gone.trailers)
 	}
 	if _, _, ok := synopsisRow(t, s, "tt0000001"); ok {
 		t.Error("a TMDb overview past the backstop was kept")
@@ -481,11 +664,11 @@ func TestDueTMDbDataIsDroppedAndOMDbsIsKept(t *testing.T) {
 
 	// With no OMDb key, nothing would re-ask an overview, so each goes
 	// the day it comes due.
-	if overviews, _, err = s.forgetDueTMDbData(ctx, tmdbRefreshDays); err != nil {
+	if gone, err = s.forgetDueTMDbData(ctx, tmdbRefreshDays); err != nil {
 		t.Fatal(err)
 	}
-	if overviews != 1 {
-		t.Errorf("dropped %d overviews, want 1", overviews)
+	if gone.overviews != 1 {
+		t.Errorf("dropped %d overviews, want 1", gone.overviews)
 	}
 	if _, _, ok := synopsisRow(t, s, "tt0111161"); ok {
 		t.Error("a TMDb overview past 150 days was kept")
@@ -633,5 +816,43 @@ func TestASynopsisPassEndsOnABatchOfFailures(t *testing.T) {
 		if _, _, ok := synopsisRow(t, s, id); ok {
 			t.Errorf("%s: a failed lookup was written down", id)
 		}
+	}
+}
+
+// TestATimedOutSynopsisLookupIsAskedOncePerPass: the OMDb client's own
+// timeout reads as a deadline, the way a stopping pass does, but the
+// pass has not stopped. The title stays at the head of the queue, since
+// nothing was written down for it, and the pass must go on past it
+// rather than ask it again in every batch.
+func TestATimedOutSynopsisLookupIsAskedOncePerPass(t *testing.T) {
+	s := testStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	publishFixture(t, s)
+	clearSynopses(t, s)
+	fiveVotes(t, s)
+	posterPassHas(t, s, map[string]string{
+		"tt0000001": "ok", "tt0111161": "ok", "tt0133093": "ok", "tt0234215": "ok",
+	})
+	fake := &fakeOMDb{
+		answers: map[string]omdb.Title{
+			"tt0000001": {Plot: "Five votes' worth."},
+			"tt0133093": {Plot: "Red pill."},
+			"tt0234215": {Plot: "More pills."},
+		},
+		errs: map[string]error{"tt0111161": fmt.Errorf("omdb: GET x: %w", context.DeadlineExceeded)},
+	}
+	job := &SynopsisJob{Store: s, Client: fake, Logger: quietLogger(), MinVotes: 0, Batch: 2, Workers: 1}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("the pass did not end; asked %d times", fake.count())
+	}
+	if want := []string{"tt0111161", "tt0133093", "tt0234215", "tt0000001"}; !reflect.DeepEqual(fake.asked, want) {
+		t.Fatalf("asked %v, want %v, the title that timed out once", fake.asked, want)
+	}
+	if _, _, ok := synopsisRow(t, s, "tt0111161"); ok {
+		t.Error("a lookup that timed out was written down")
 	}
 }

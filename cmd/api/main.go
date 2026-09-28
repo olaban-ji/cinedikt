@@ -32,7 +32,6 @@ import (
 	"cinedikt/internal/rediscache"
 	"cinedikt/internal/telegram"
 	"cinedikt/internal/tmdb"
-	"cinedikt/internal/trailer"
 )
 
 // warmWorkers is how many background crawls run alongside requests.
@@ -104,9 +103,6 @@ func run(logger *slog.Logger) error {
 		// on this one limiter rather than each spending a rate of its
 		// own.
 		limiter := tmdb.NewLimiter(cfg.TMDBRatePerSecond)
-		// And YouTube's, for the embed check a trailer has to pass,
-		// shared by the endpoint and the trailer job the same way.
-		oembed := trailer.NewOEmbed()
 		client, closer, err := searchFallback(ctx, cfg, limiter, logger)
 		if err != nil {
 			return err
@@ -114,14 +110,17 @@ func run(logger *slog.Logger) error {
 		if closer != nil {
 			defer closer.Close()
 		}
+		// Trailers and people's photos are only ever read here; their
+		// jobs look them up. Without TMDb credentials they cannot, and
+		// what they have not reached is "none" rather than an answer on
+		// its way.
+		catalogServer.WithTrailers(store, client != nil)
+		catalogServer.WithPeoplePhotos(store, client != nil)
 		if client != nil {
 			catalogServer.WithSearchFallback(client)
 			catalogServer.WithPosterStandIn(client, store)
-			catalogServer.WithTrailers(client, store, oembed)
 			logger.Info("catalog search falls back to tmdb when nothing matches", "tmdb_rate", cfg.TMDBRatePerSecond)
 		} else {
-			// Stored trailers are still served; nothing new is looked up.
-			catalogServer.WithTrailers(nil, store, oembed)
 			logger.Info("tmdb search fallback is off", "reason", "no TMDB_API_KEY or TMDB_ACCESS_TOKEN")
 		}
 		server.WithCatalog(catalogServer)
@@ -174,9 +173,9 @@ func run(logger *slog.Logger) error {
 				PosterWorkers:         cfg.PosterWorkers,
 				SynopsisSweepMinVotes: cfg.SynopsisSweepMinVotes,
 				// The second chance for titles OMDb has no picture
-				// for, the id matcher and the trailers. Optional:
-				// without it the catalog still works, with more grey
-				// boxes in the long tail.
+				// for, the id matcher, the trailers and people's
+				// photos. Optional: without it the catalog still
+				// works, with more grey boxes in the long tail.
 				TMDbAuth: tmdb.Auth{
 					APIKey:      cfg.TMDBAPIKey,
 					AccessToken: cfg.TMDBAccessToken,
@@ -185,7 +184,8 @@ func run(logger *slog.Logger) error {
 				TMDbLimiter:          limiter,
 				TMDbSweepMinVotes:    cfg.TMDbSweepMinVotes,
 				TrailerSweepMinVotes: cfg.TrailerSweepMinVotes,
-				OEmbed:               oembed,
+				PeopleSweepMinVotes:  cfg.PeopleSweepMinVotes,
+				PeopleSweepRate:      cfg.PeopleSweepRate,
 				Notify:               sink,
 			}).Start(ctx); err != nil {
 				return err
@@ -256,8 +256,8 @@ func limits(cfg config.Config) api.Limits {
 }
 
 // searchFallback is the TMDb client a reader's request asks: a missed
-// catalog search, a poster stand-in, a trailer nobody has looked up. It
-// waits on limiter, the process's one TMDb budget.
+// catalog search, and a poster stand-in. It waits on limiter, the
+// process's one TMDb budget.
 //
 // No credentials means no client: a title stored as a primary or
 // original name is still found, and search does not depend on TMDb

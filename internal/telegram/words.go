@@ -67,6 +67,7 @@ var jobList = []jobInfo{
 	{notify.JobTMDbIDs, "Search matching", "Search matching", "no TMDb key"},
 	{notify.JobSynopses, "Synopses", "Synopses", "no OMDb key"},
 	{notify.JobTrailers, "Trailers", "Trailers", "no TMDb key"},
+	{notify.JobPeople, "People photos", "People photos", "no TMDb key"},
 	{notify.JobColours, "Opening colours", "Opening colours", ""},
 }
 
@@ -261,7 +262,9 @@ func impactSentence(id string) string {
 	case notify.JobSynopses:
 		return "Films without a synopsis stay without one for now; the site still works."
 	case notify.JobTrailers:
-		return "Trailers not found yet are looked up when someone opens the film; the site still works."
+		return "Films without a trailer stay without one for now; the site still works."
+	case notify.JobPeople:
+		return "People without a photo stay without one for now; the site still works."
 	case notify.JobColours:
 		return "New films on the opening screen show without their placeholder colour; nothing else is affected."
 	default:
@@ -281,7 +284,7 @@ func keyVar(p string) string {
 // meanwhile, so "stopped" is not read as pictures vanishing.
 func keyImpact(p string) string {
 	if p == "TMDb" {
-		return "Backup posters, search matching and trailers have stopped. Films OMDb has no poster for stay blank until this is fixed."
+		return "Backup posters, search matching, trailers and people photos have stopped. Films OMDb has no poster for stay blank until this is fixed."
 	}
 	return "Poster and synopsis lookups have stopped. Posters already saved still show; new films will have none until this is fixed."
 }
@@ -470,7 +473,7 @@ func (w writer) workingAgain(id string, since time.Time, liveSince time.Time, vi
 func (w writer) keyBack(p string, since time.Time) part {
 	back := "Poster lookups are running again."
 	if p == "TMDb" {
-		back = "Backup posters and search matching are running again."
+		back = "Backup posters, search matching, trailers and people photos are running again."
 	}
 	return w.push(sevOK, false, p+" key works again", "", "",
 		"It was turned down from "+w.when(since)+" to "+w.when(w.now)+" ("+human(w.now.Sub(since))+"). "+back)
@@ -547,6 +550,11 @@ func (w writer) longPass(id string, e notify.Event, fixed string) part {
 		head = "Trailers done: " + count(e.Done) + " found"
 		if e.None > 0 {
 			body += " " + count(e.None) + " films have no trailer that can play here."
+		}
+	case notify.JobPeople:
+		head = "People photos done: " + count(e.Done) + " found"
+		if e.None > 0 {
+			body += " " + count(e.None) + " people have no photo on TMDb."
 		}
 	default:
 		head = info(id).label + " done: " + count(e.Done) + " coloured"

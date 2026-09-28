@@ -166,8 +166,8 @@ func TestTheCheckerKeepsToItsOwnBudget(t *testing.T) {
 }
 
 // TestPickStopsAfterMaxCandidates: a studio that blocks embedding blocks
-// every upload, and a long list checked one by one would outlast the
-// budget a reader waits on.
+// every upload, and a long list checked one by one would spend YouTube's
+// budget on a film whose answer is already plain.
 func TestPickStopsAfterMaxCandidates(t *testing.T) {
 	codes := map[string]int{}
 	var ks []string

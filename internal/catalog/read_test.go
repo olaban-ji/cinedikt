@@ -2,17 +2,19 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 )
 
-// publishFixture loads the fixture and makes it live, so the read
-// queries have a catalog schema to read.
-func publishFixture(t *testing.T, s *Store) {
+// publishFixture loads the fixture, with any extra title.basics rows,
+// and makes it live, so the read queries have a catalog schema to read.
+func publishFixture(t *testing.T, s *Store, extra ...string) {
 	t.Helper()
 	resetLive(t, s)
-	counts := loadFixture(t, s)
+	counts := loadFixture(t, s, extra...)
 	if err := s.Publish(context.Background(), genAt(at(24, 0, 42)), counts); err != nil {
 		t.Fatal(err)
 	}
@@ -194,5 +196,59 @@ func TestFilmsSayWhoOfTheAnchorsPeopleIsOnThem(t *testing.T) {
 	}
 	if by["tt0234215"].Title != "The Matrix Reloaded" {
 		t.Errorf("title = %q", by["tt0234215"].Title)
+	}
+}
+
+// unfiled is a movie IMDb lists no genres for, which title.basics writes
+// as \N. Only the genres test loads it.
+const unfiled = "tt0000004\tmovie\tA Film Nobody Filed\tA Film Nobody Filed\t0\t1985\t\\N\t95\t\\N"
+
+// TestFilmsCarryTheirGenres is the read: a card's detail and the
+// searched film both say what kind of film it is, as IMDb lists it, and
+// a film IMDb lists nothing for says nothing at all.
+func TestFilmsCarryTheirGenres(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s, unfiled)
+	// The unfiled film is this test's alone, so the shared fixture goes
+	// back afterwards: the tests share one database, and none of the
+	// others expects a seventh film in it.
+	t.Cleanup(func() { publishFixture(t, s) })
+
+	want := []string{"Action", "Sci-Fi"}
+	films, err := s.Films(ctx, "tt0133093", []string{"tt0133093", "tt0234215", "tt0000004"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]Movie{}
+	for _, m := range films {
+		by[m.ID] = m
+	}
+	for _, id := range []string{"tt0133093", "tt0234215"} {
+		if got := by[id].Genres; !slices.Equal(got, want) {
+			t.Errorf("%s genres = %q, want %q", id, got, want)
+		}
+	}
+	grid, err := s.Grid(ctx, "tt0133093")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := grid.Anchor.Genres; !slices.Equal(got, want) {
+		t.Errorf("anchor genres = %q, want %q", got, want)
+	}
+
+	none, ok := by["tt0000004"]
+	if !ok {
+		t.Fatal("the film with no genres was not read")
+	}
+	if len(none.Genres) != 0 {
+		t.Errorf("genres = %q, want none", none.Genres)
+	}
+	raw, err := json.Marshal(none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"genres"`) {
+		t.Errorf("a film with no genres says %s, want no genres key", raw)
 	}
 }

@@ -333,3 +333,113 @@ func TestTheDefaultLimiterIsTheProcessBudget(t *testing.T) {
 		t.Error("a nil limiter took the client's own away")
 	}
 }
+
+func TestFindPersonByIMDbReturnsTheIDAndThePhotoPath(t *testing.T) {
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/find/nm0000206" || r.URL.Query().Get("external_source") != "imdb_id" {
+			t.Errorf("request = %s", r.URL)
+		}
+		w.Write([]byte(`{"movie_results":[],"person_results":[{"id":6384,"name":"Keanu Reeves","profile_path":" /keanu.jpg ","adult":false}]}`))
+	})
+	got, err := c.FindPersonByIMDb(context.Background(), "nm0000206")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The bare path is kept, trimmed; an address is built from it at the
+	// width it is served at.
+	if got.ID != 6384 || got.Profile != "/keanu.jpg" {
+		t.Errorf("found = %+v", got)
+	}
+	if url := PosterURL(got.Profile, ProfileWidth); url != "https://image.tmdb.org/t/p/w185/keanu.jpg" {
+		t.Errorf("address = %q", url)
+	}
+}
+
+// TestAPersonTMDbDoesNotHaveIsNotFound: an empty result is an answer, and
+// the caller stops asking.
+func TestAPersonTMDbDoesNotHaveIsNotFound(t *testing.T) {
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"movie_results":[],"person_results":[],"tv_results":[]}`))
+	})
+	_, err := c.FindPersonByIMDb(context.Background(), "nm9999999")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestAPersonWithNoPhotoIsAnAnswer: TMDb has the person, and says so with
+// a null profile_path. That is a definite "no photo", with the id kept.
+func TestAPersonWithNoPhotoIsAnAnswer(t *testing.T) {
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"person_results":[{"id":1234,"profile_path":null,"adult":false}]}`))
+	})
+	got, err := c.FindPersonByIMDb(context.Background(), "nm0000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != 1234 || got.Profile != "" {
+		t.Errorf("found = %+v, want the id and no photo", got)
+	}
+}
+
+// TestAnAdultPersonKeepsTheIDButNotThePhoto: TMDb's adult flag keeps a
+// photo off a chip row that sits beside ordinary movies.
+func TestAnAdultPersonKeepsTheIDButNotThePhoto(t *testing.T) {
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"person_results":[{"id":777,"profile_path":"/x.jpg","adult":true}]}`))
+	})
+	got, err := c.FindPersonByIMDb(context.Background(), "nm0000002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != 777 || got.Profile != "" {
+		t.Errorf("found = %+v, want the id and no photo", got)
+	}
+}
+
+// TestOnlyANameIDIsSentToThePersonLookup: "nm" and digits goes out; a
+// title id, or anything else, never reaches TMDb.
+func TestOnlyANameIDIsSentToThePersonLookup(t *testing.T) {
+	var hits atomic.Int32
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(`{"person_results":[{"id":1,"profile_path":"/a.jpg"}]}`))
+	})
+	if _, err := c.FindPersonByIMDb(context.Background(), "nm0000206"); err != nil {
+		t.Errorf("a name id was refused: %v", err)
+	}
+	for _, bad := range []string{"tt0133093", "nm", "nm12a4", "NM0000206", "nm0000206/../x", ""} {
+		if _, err := c.FindPersonByIMDb(context.Background(), bad); err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("%q: error = %v, want it refused", bad, err)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Errorf("TMDb was asked %d times, want once", hits.Load())
+	}
+	// And the movie lookup refuses a name id the same way.
+	if _, err := c.FindByIMDb(context.Background(), "nm0000206"); err == nil {
+		t.Error("a name id was sent to the movie lookup")
+	}
+}
+
+// TestARefusedKeyOnThePersonLookupIsAStatusError, so the people job can
+// tell a key only a person can fix from a fault that will pass.
+func TestARefusedKeyOnThePersonLookupIsAStatusError(t *testing.T) {
+	var hits atomic.Int32
+	c, _ := newTestClient(t, Auth{APIKey: "bad"}, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"status_message":"Invalid API key"}`))
+	})
+	_, err := c.FindPersonByIMDb(context.Background(), "nm0000206")
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized {
+		t.Fatalf("error %v is not a *StatusError with status 401", err)
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Error("a refused key read as no such person")
+	}
+	if hits.Load() != 1 {
+		t.Errorf("hits = %d, want one attempt", hits.Load())
+	}
+}

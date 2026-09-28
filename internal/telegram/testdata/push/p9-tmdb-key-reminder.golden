@@ -1,4 +1,4 @@
 🔴 <b>TMDb key still turned down</b>
 <b>To fix:</b> check TMDB_ACCESS_TOKEN (or TMDB_API_KEY) under Variables in Railway, then redeploy.
-Turned down since yesterday 13:20 (1 day 1 hr). Backup posters, search matching and trailers have stopped. Films OMDb has no poster for stay blank until this is fixed.
+Turned down since yesterday 13:20 (1 day 1 hr). Backup posters, search matching, trailers and people photos have stopped. Films OMDb has no poster for stay blank until this is fixed.
 <blockquote expandable>Details: tmdb: HTTP 401</blockquote>

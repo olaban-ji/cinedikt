@@ -19,8 +19,8 @@ import (
 )
 
 // Runner keeps a catalog up to date: it imports one if there is none,
-// checks hourly for a new generation, and fills in posters, synopses and
-// trailers continuously beside both.
+// checks hourly for a new generation, and fills in posters, synopses,
+// trailers and people's photos continuously beside both.
 //
 // It is the whole of what the importer does, in one place, because the
 // API can run it too. Starting the app on an empty database should
@@ -50,8 +50,8 @@ type Runner struct {
 	SynopsisSweepMinVotes int
 	// TMDbAuth turns on the second-chance poster fetch for titles OMDb
 	// has no picture for, and for addresses that have stopped
-	// answering, the id matcher and the trailer job. Empty leaves all
-	// of those off.
+	// answering, the id matcher, the trailer job and the people job.
+	// Empty leaves all of those off.
 	TMDbAuth tmdb.Auth
 	// TMDbLimiter is the process's one TMDb budget, the same limiter
 	// the request-path client waits on. TMDb counts requests per
@@ -63,13 +63,19 @@ type Runner struct {
 	// TMDbSweepMinVotes is how well known a title has to be to be
 	// fetched ahead of anybody asking. Zero sweeps the whole catalog.
 	TMDbSweepMinVotes int
-	// TrailerSweepMinVotes is how well known a film has to be for its
-	// trailer to be looked up before anybody opens it.
+	// TrailerSweepMinVotes is how well known a film has to be for the
+	// trailer job's sweep to reach it. Zero sweeps every film; a film a
+	// reader opens is looked up whatever its votes.
 	TrailerSweepMinVotes int
-	// OEmbed is the YouTube check a trailer has to pass, shared with the
-	// endpoint so the two keep to one budget. Nil builds one for the
-	// runner alone.
-	OEmbed trailer.Checker
+	// PeopleSweepMinVotes is how well known a person's best known film a
+	// map can show has to be for the people job's sweep to reach them.
+	// Zero sweeps everyone; a person on a map a reader opens is looked
+	// up whatever their votes.
+	PeopleSweepMinVotes int
+	// PeopleSweepRate is the pace of the people job's sweep and re-asks,
+	// in lookups a second, on top of TMDbLimiter. Zero or less takes
+	// PeopleSweepPerSecond.
+	PeopleSweepRate float64
 	// Keep leaves the downloaded files on disk, for development.
 	Keep bool
 	// Notify is told what every job is doing: when an import starts,
@@ -130,7 +136,7 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 		enabled = append(enabled, notify.JobPosters, notify.JobSynopses)
 	}
 	if client != nil {
-		enabled = append(enabled, notify.JobTMDbPosters, notify.JobTMDbIDs, notify.JobTrailers)
+		enabled = append(enabled, notify.JobTMDbPosters, notify.JobTMDbIDs, notify.JobTrailers, notify.JobPeople)
 	}
 	report(r.Notify, notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: enabled})
 	var wg sync.WaitGroup
@@ -179,16 +185,37 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 		})
 		start(func() {
 			fillTrailers(ctx, &TrailerJob{
-				Store:    r.Store,
-				Videos:   client,
-				Check:    r.oembed(),
+				Store: r.Store,
+				TMDb:  client,
+				// The only thing in the process that asks YouTube, so
+				// its limiter is the whole of that budget.
+				Check:    trailer.NewOEmbed(),
 				Logger:   r.Logger.With("job", "trailers"),
 				MinVotes: r.TrailerSweepMinVotes,
+				Wanted:   wakes.TrailersWanted,
 				Notify:   r.Notify,
 			}, r.Logger, wakes)
 		})
+		sweepRate := r.PeopleSweepRate
+		if sweepRate <= 0 {
+			sweepRate = PeopleSweepPerSecond
+		}
+		start(func() {
+			fillPeople(ctx, &PersonPhotoJob{
+				Store:    r.Store,
+				TMDb:     client,
+				Logger:   r.Logger.With("job", "people-photos"),
+				MinVotes: r.PeopleSweepMinVotes,
+				// A pace of the sweep's own, on top of the limiter the
+				// client waits on, so the rest of that budget stays free
+				// for what readers are waiting on.
+				Sweep:  rate.NewLimiter(rate.Limit(sweepRate), 1),
+				Wanted: wakes.PeopleWanted,
+				Notify: r.Notify,
+			}, r.Logger, wakes)
+		})
 	} else {
-		r.Logger.Info("no TMDb credentials; movies OMDb has no poster for will have none, an empty search stays empty, and no trailers are found ahead of readers")
+		r.Logger.Info("no TMDb credentials; movies OMDb has no poster for will have none, an empty search stays empty, and no trailers or people's photos are found")
 	}
 	// And the colours the opening screen fills its frames with. It
 	// needs no credentials — the posters are public — so it runs
@@ -323,15 +350,6 @@ func (r *Runner) tmdbClient() *tmdb.Client {
 		return nil
 	}
 	return tmdb.New(r.TMDbAuth, tmdb.WithLimiter(r.TMDbLimiter))
-}
-
-// oembed is the YouTube check the trailer job uses: the one the process
-// shares, or one of the runner's own.
-func (r *Runner) oembed() trailer.Checker {
-	if r.OEmbed != nil {
-		return r.OEmbed
-	}
-	return trailer.NewOEmbed()
 }
 
 // buildTMDb is the poster fallback, or nil when there are no TMDb

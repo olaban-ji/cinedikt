@@ -212,25 +212,31 @@ export function usePlayer(): Player {
 }
 
 /** A film's trailer, for its row: undefined while it is being asked for,
- *  then its YouTube key, or null when it has none that plays embedded or
- *  the lookup failed. Asked the first time the row is shown; a film
- *  already answered this visit shows its answer at once. */
+ *  which takes in the seconds the server may say the answer is pending
+ *  and it is asked again, then its YouTube key, or null when it has none
+ *  that plays embedded or the lookup failed. Asked the first time the
+ *  row is shown; a film already answered this visit shows its answer at
+ *  once. */
 export function useTrailer(id: string): string | null | undefined {
   const [got, setGot] = useState<{ id: string; key: string | null | undefined }>(() => ({
     id,
     key: trailerKnown(id),
   }));
-  useEffect(() => {
-    if (trailerKnown(id) !== undefined) return;
-    let live = true;
-    fetchTrailer(id).then((key) => {
-      if (live) setGot({ id, key });
-    });
-    return () => {
-      live = false;
-    };
-  }, [id]);
+  useEffect(() => askForTrailer(id, (key) => setGot({ id, key })), [id]);
   return got.id === id ? got.key : trailerKnown(id);
+}
+
+/** Asks for a film's trailer on behalf of its row, and hands the answer
+ *  to `got` unless the row has gone first. Nothing is asked when the
+ *  answer is already known. Returns what the row calls as it goes, which
+ *  also stops a pending answer being asked again for nobody. */
+export function askForTrailer(id: string, got: (key: string | null) => void): () => void {
+  if (trailerKnown(id) !== undefined) return () => {};
+  const stop = new AbortController();
+  void fetchTrailer(id, stop.signal).then((key) => {
+    if (!stop.signal.aborted) got(key);
+  });
+  return () => stop.abort();
 }
 
 interface RowProps {

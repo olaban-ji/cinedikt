@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -76,6 +77,21 @@ func posterRow(t *testing.T, s *Store, tconst string) (url, status, source strin
 		source = *src
 	}
 	return url, status, source, w != nil, a != nil
+}
+
+// posterColour is the opening screen's colour for a title, or "" when
+// it has none to work out yet.
+func posterColour(t *testing.T, s *Store, tconst string) string {
+	t.Helper()
+	var c *string
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT colour FROM meta.posters WHERE tconst = $1`, tconst).Scan(&c); err != nil {
+		t.Fatal(err)
+	}
+	if c == nil {
+		return ""
+	}
+	return *c
 }
 
 func TestTMDbFallbackTakesWhatAReaderWantedFirst(t *testing.T) {
@@ -196,7 +212,7 @@ func TestTMDbFallbackAsksEachTitleOnce(t *testing.T) {
 		t.Fatal("the sweep asked about nothing")
 	}
 	// A second pass has nothing left: a definite "no" is stored, and
-	// that is what stops the queue coming round for ever.
+	// that is what stops the queue coming round until it comes due.
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -276,6 +292,118 @@ func TestWantingAPosterIgnoresTitlesThatHaveOne(t *testing.T) {
 	}
 	if _, _, _, wanted, _ := posterRow(t, s, "tt0111161"); !wanted {
 		t.Error("a title with no poster was not marked")
+	}
+}
+
+// TestTMDbPosterAnswersAreAskedAgainLastOnceTheyComeDue is TMDb's six
+// months for the backup posters. An answer older than 150 days is asked
+// again, after what a reader wants and what the sweep has left, oldest
+// first: a picture of TMDb's, and TMDb's "nothing" for a title that still
+// has no picture. A new picture replaces the old in place; TMDb no longer
+// having one takes its own away. An answer inside the 150 days, and
+// TMDb's "nothing" for a title whose own picture works, are left alone.
+func TestTMDbPosterAnswersAreAskedAgainLastOnceTheyComeDue(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	// meta outlives every test, and a stamp another test left behind
+	// could be due.
+	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.posters`); err != nil {
+		t.Fatal(err)
+	}
+	blankPosters(t, s)
+	for _, stmt := range []string{
+		// A reader has just met the unrated film, which has no picture.
+		`UPDATE meta.posters SET wanted_at = now() WHERE tconst = 'tt0000001'`,
+		// The documentary is well known enough for the sweep.
+		`UPDATE meta.posters SET votes = 5000 WHERE tconst = 'tt0000002'`,
+		// Shawshank shows a picture of TMDb's, 160 days old, and the
+		// opening screen has its colour.
+		`UPDATE meta.posters
+		 SET poster_url = 'https://image.tmdb.org/t/p/w780/old.jpg', source = 'tmdb', tmdb_at = now() - interval '160 days',
+		     colour = '#112233'
+		 WHERE tconst = 'tt0111161'`,
+		// TMDb had nothing for Reloaded 151 days ago, and it still has
+		// no picture.
+		`UPDATE meta.posters SET tmdb_at = now() - interval '151 days' WHERE tconst = 'tt0234215'`,
+		// The Matrix's picture of TMDb's is 149 days old, and coloured.
+		`UPDATE meta.posters
+		 SET poster_url = 'https://image.tmdb.org/t/p/w780/matrix.jpg', source = 'tmdb', tmdb_at = now() - interval '149 days',
+		     colour = '#445566'
+		 WHERE tconst = 'tt0133093'`,
+		// A title with a picture of OMDb's that works, for which TMDb
+		// once had nothing.
+		`INSERT INTO meta.posters (tconst, poster_url, status, fetched_at, tmdb_at)
+		 VALUES ('tt0000009', 'https://m.media-amazon.com/images/M/fine.jpg', 'ok', now(), now() - interval '170 days')`,
+	} {
+		if _, err := s.pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	find := &fakeFinder{answers: map[string]tmdb.Found{
+		"tt0000001": {ID: 1, Poster: "https://image.tmdb.org/t/p/w780/unrated.jpg"},
+		"tt0111161": {ID: 278, Poster: "https://image.tmdb.org/t/p/w780/new.jpg"},
+		"tt0234215": {ID: 604, Poster: "https://image.tmdb.org/t/p/w780/reloaded.jpg"},
+		// TMDb has since lost the Matrix's picture.
+		"tt0133093": {ID: 603},
+	}}
+	// One title a batch, so the order is the whole of what is checked.
+	job := &TMDbJob{Store: s, Client: find, Logger: quietLogger(), MinVotes: 1000, Batch: 1}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"tt0000001", "tt0000002", "tt0111161", "tt0234215"}; !reflect.DeepEqual(find.askedFor(), want) {
+		t.Fatalf("asked %v, want %v", find.askedFor(), want)
+	}
+	for _, want := range []struct {
+		tconst, url, source string
+	}{
+		{"tt0111161", "https://image.tmdb.org/t/p/w780/new.jpg", "tmdb"},
+		{"tt0234215", "https://image.tmdb.org/t/p/w780/reloaded.jpg", "tmdb"},
+		{"tt0133093", "https://image.tmdb.org/t/p/w780/matrix.jpg", "tmdb"},
+		{"tt0000009", "https://m.media-amazon.com/images/M/fine.jpg", ""},
+	} {
+		if url, _, source, _, _ := posterRow(t, s, want.tconst); url != want.url || source != want.source {
+			t.Errorf("%s = %q from %q, want %q from %q", want.tconst, url, source, want.url, want.source)
+		}
+	}
+	// The same answer renews the id match.
+	if id := tmdbID(t, s, "tt0111161"); id != 278 {
+		t.Errorf("shawshank tmdb id = %d", id)
+	}
+	// The old picture's colour went with it, for the colour job to work
+	// out afresh. The Matrix's picture did not change, and keeps its own.
+	if c := posterColour(t, s, "tt0111161"); c != "" {
+		t.Errorf("shawshank's new picture kept the old one's colour %s", c)
+	}
+	if c := posterColour(t, s, "tt0133093"); c != "#445566" {
+		t.Errorf("matrix colour = %q before its picture came due", c)
+	}
+
+	// Caught up. Then the Matrix's picture comes due, and TMDb no longer
+	// has one: its terms leave nothing to keep.
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(find.askedFor()); n != 4 {
+		t.Fatalf("caught up, but asked %v", find.askedFor()[4:])
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE meta.posters SET tmdb_at = now() - interval '151 days' WHERE tconst = 'tt0133093'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if asked := find.askedFor(); len(asked) != 5 || asked[4] != "tt0133093" {
+		t.Fatalf("asked %v, want the Matrix last", asked)
+	}
+	url, status, source, _, checked := posterRow(t, s, "tt0133093")
+	if url != "" || source != "" || status != "ok" || !checked {
+		t.Errorf("matrix = %q, %s, from %q, asked %v; want no picture, and TMDb's answer stamped", url, status, source, checked)
+	}
+	if c := posterColour(t, s, "tt0133093"); c != "" {
+		t.Errorf("matrix kept the colour %s of a picture it no longer has", c)
 	}
 }
 

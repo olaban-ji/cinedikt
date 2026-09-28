@@ -1,7 +1,6 @@
 // Package trailer chooses the YouTube trailer a film's panel plays in
-// place. The on-demand lookup behind GET /api/trailers/{tconst} and the
-// background job that fills meta.trailers ahead of it both choose through
-// Pick, so a title gets the same answer whichever of them asks.
+// place. The trailer job that fills meta.trailers chooses through Pick;
+// GET /api/trailers/{tconst} only reads what it chose.
 package trailer
 
 import (
@@ -33,8 +32,8 @@ type Checker interface {
 // MaxCandidates is how many of a film's ranked trailers are checked
 // before it is taken to have none that can be embedded. A studio that
 // blocks embedding blocks all of its uploads, and checking a long list
-// one by one would outlast the budget a reader waits on, answering
-// nothing each time rather than "none" once.
+// one by one would spend YouTube's budget, and a reader's wait, on a
+// film whose answer is already plain.
 const MaxCandidates = 8
 
 // Pick returns the key of the best trailer for a TMDb movie that YouTube
@@ -142,13 +141,14 @@ const defaultOEmbedEndpoint = "https://www.youtube.com/oembed"
 // asking politely is the whole of what keeps a key-less endpoint open.
 const OEmbedRate = 5
 
-// OEmbedTimeout bounds one check. A reader is waiting on the first
-// lookup of a film, inside a budget of a few seconds.
+// OEmbedTimeout bounds one check. A reader who has opened a film nobody
+// had looked up is waiting on the job's answer, and one check that hangs
+// must not hold it for long.
 const OEmbedTimeout = 3 * time.Second
 
 // OEmbed asks YouTube's oEmbed endpoint whether a video can be embedded.
-// It needs no key. One per process, shared by the endpoint and the job,
-// so the two together keep to OEmbedRate.
+// It needs no key. The trailer job holds the process's one, and it is
+// the only thing that asks YouTube, so the process keeps to OEmbedRate.
 type OEmbed struct {
 	http     *http.Client
 	endpoint string

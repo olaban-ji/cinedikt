@@ -33,9 +33,11 @@ const (
 )
 
 // SynopsisSweepMinVotes is how well known a title has to be for the
-// synopsis job to ask about it before any reader has met it. Below it,
-// a title is asked about only once a card for it has been drawn.
-const SynopsisSweepMinVotes = 1000
+// synopsis job to ask about it before any reader has met it. Zero is
+// every film: the sweep reaches the whole catalog, most voted first,
+// behind the films readers have met. Below a higher floor, a film is
+// asked about only once a card for it has been drawn.
+const SynopsisSweepMinVotes = 0
 
 // SynopsisBatch is how many titles are claimed per round. Small, so a
 // title a reader has just met waits behind a handful rather than a page.
@@ -149,8 +151,8 @@ type SynopsisJob struct {
 	// says the day's requests are spent, both stop until it resets.
 	Client PosterFiller
 	Logger *slog.Logger
-	// MinVotes is the sweep's floor. Titles a reader has met are asked
-	// about whatever their votes.
+	// MinVotes is the sweep's floor; zero sweeps every film. Titles a
+	// reader has met are asked about whatever their votes.
 	MinVotes int
 	// Batch is how many are claimed per round; zero takes SynopsisBatch.
 	Batch int
@@ -226,6 +228,9 @@ func (j *SynopsisJob) Run(ctx context.Context) error {
 	// the queue; this pass must not ask it again. A head made of nothing
 	// but this pass's failures ends the pass, so an OMDb that is down
 	// costs one batch of failed requests rather than the whole queue.
+	// Only a title left unanswered is kept: an answer takes its title
+	// out of the queue, and a sweep of every film would otherwise hold
+	// every title it has asked about for as long as the pass runs.
 	tried := make(map[string]bool)
 	for {
 		if ctx.Err() != nil {
@@ -239,13 +244,7 @@ func (j *SynopsisJob) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		var fresh []string
-		for _, id := range ids {
-			if !tried[id] {
-				fresh = append(fresh, id)
-				tried[id] = true
-			}
-		}
+		fresh := untried(ids, tried)
 		if len(fresh) == 0 {
 			if found+blank+failed > 0 {
 				track.done(found + blank + failed)
@@ -279,8 +278,14 @@ func (j *SynopsisJob) Run(ctx context.Context) error {
 				spent = true
 			case errors.Is(a.err, omdb.ErrKey):
 				keyErr = a.err
-			case errors.Is(a.err, errSkipped), stopping(a.err):
+			case errors.Is(a.err, errSkipped):
+			case stopping(a.err):
+				// The pass stopping, or this one request running out of
+				// time: the OMDb client's own timeout is a deadline too.
+				// Either way the title is not asked again this pass.
+				tried[a.id] = true
 			default:
+				tried[a.id] = true
 				failed++
 				last = a.err
 				j.Logger.Warn("synopsis lookup failed", "tconst", a.id, "err", a.err)
@@ -368,7 +373,7 @@ func (s *Store) refillSynopsisQueue(ctx context.Context, minVotes int) error {
 		   OR NOT EXISTS (SELECT 1 FROM `+Live+`.titles t WHERE t.tconst = q.tconst)`); err != nil {
 		return fmt.Errorf("catalog: clear answered synopsis queue: %w", err)
 	}
-	_, err := s.pool.Exec(ctx, `
+	err := s.fillQueue(ctx, `
 		INSERT INTO meta.synopsis_queue (tconst, votes)
 		SELECT t.tconst, coalesce(r.num_votes, 0)
 		FROM `+Live+`.titles t

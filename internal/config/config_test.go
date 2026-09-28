@@ -261,22 +261,60 @@ func TestTheSynopsisAndTrailerFloorsHaveDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SynopsisSweepMinVotes != 1000 || cfg.TrailerSweepMinVotes != 10000 {
-		t.Errorf("defaults = %d and %d, want 1000 and 10000", cfg.SynopsisSweepMinVotes, cfg.TrailerSweepMinVotes)
+	// Both sweeps cover every film by default. The trailer endpoint only
+	// reads, so its job has to reach every film a reader can open, and
+	// a synopsis is worth having for every film a map can draw.
+	if cfg.SynopsisSweepMinVotes != 0 || cfg.TrailerSweepMinVotes != 0 {
+		t.Errorf("defaults = %d and %d, want 0 and 0", cfg.SynopsisSweepMinVotes, cfg.TrailerSweepMinVotes)
 	}
 
-	t.Setenv("SYNOPSIS_SWEEP_MIN_VOTES", "0")
+	// Each is still a dial.
+	t.Setenv("SYNOPSIS_SWEEP_MIN_VOTES", "1000")
 	t.Setenv("TRAILER_SWEEP_MIN_VOTES", "250")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SynopsisSweepMinVotes != 0 || cfg.TrailerSweepMinVotes != 250 {
-		t.Errorf("set = %d and %d, want 0 and 250", cfg.SynopsisSweepMinVotes, cfg.TrailerSweepMinVotes)
+	if cfg.SynopsisSweepMinVotes != 1000 || cfg.TrailerSweepMinVotes != 250 {
+		t.Errorf("set = %d and %d, want 1000 and 250", cfg.SynopsisSweepMinVotes, cfg.TrailerSweepMinVotes)
 	}
 
 	t.Setenv("TRAILER_SWEEP_MIN_VOTES", "-1")
 	if _, err := Load(); err == nil {
 		t.Error("a negative floor was accepted")
+	}
+}
+
+// TestThePeopleSweepHasAFloorAndAPace: the sweep covers everyone a map
+// can show by default, at a quarter of the default TMDb budget, and a
+// pace that would stop it, or take the budget's cap away, is refused.
+func TestThePeopleSweepHasAFloorAndAPace(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("PEOPLE_SWEEP_MIN_VOTES", "")
+	t.Setenv("PEOPLE_SWEEP_RATE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PeopleSweepMinVotes != 0 || cfg.PeopleSweepRate != 5 {
+		t.Errorf("defaults = %d and %v, want 0 and 5", cfg.PeopleSweepMinVotes, cfg.PeopleSweepRate)
+	}
+
+	t.Setenv("PEOPLE_SWEEP_MIN_VOTES", "500")
+	t.Setenv("PEOPLE_SWEEP_RATE", "2.5")
+	if cfg, err = Load(); err != nil || cfg.PeopleSweepMinVotes != 500 || cfg.PeopleSweepRate != 2.5 {
+		t.Errorf("set = %d and %v (%v), want 500 and 2.5", cfg.PeopleSweepMinVotes, cfg.PeopleSweepRate, err)
+	}
+
+	t.Setenv("PEOPLE_SWEEP_MIN_VOTES", "-1")
+	if _, err := Load(); err == nil {
+		t.Error("a negative floor was accepted")
+	}
+	t.Setenv("PEOPLE_SWEEP_MIN_VOTES", "")
+	for _, bad := range []string{"0", "-1", "slow", "NaN", "Inf"} {
+		t.Setenv("PEOPLE_SWEEP_RATE", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("PEOPLE_SWEEP_RATE=%s was accepted", bad)
+		}
 	}
 }

@@ -39,10 +39,13 @@ const (
 // take the connections a reader needs.
 type Store struct {
 	pool *pgxpool.Pool
-	// Titles a reader tried to look at and found no picture for, or no
-	// synopsis, on their way to being written down. See wants.go.
+	// Titles a reader tried to look at and found no picture for, no
+	// synopsis, or no trailer, and people on a map with no photo answer,
+	// on their way to being written down. See wants.go.
 	wants     chan string
 	synWants  chan string
+	trWants   chan string
+	peWants   chan string
 	wantsDone chan struct{}
 	stop      chan struct{}
 	stopOnce  sync.Once
@@ -117,6 +120,8 @@ func open(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
 		pool:      pool,
 		wants:     make(chan string, wantQueue),
 		synWants:  make(chan string, wantQueue),
+		trWants:   make(chan string, wantQueue),
+		peWants:   make(chan string, wantQueue),
 		wantsDone: make(chan struct{}),
 		stop:      make(chan struct{}),
 	}

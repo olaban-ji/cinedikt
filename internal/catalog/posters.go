@@ -379,11 +379,12 @@ func (s *Store) writePosters(ctx context.Context, schema string, batch []Poster)
 		     AS u(tconst, url, released, status)
 		LEFT JOIN `+schema+`.ratings r ON r.tconst = u.tconst
 		ON CONFLICT (tconst) DO UPDATE
-		SET poster_url = EXCLUDED.poster_url,
-		    released   = EXCLUDED.released,
-		    status     = EXCLUDED.status,
-		    fetched_at = EXCLUDED.fetched_at,
-		    votes      = EXCLUDED.votes`,
+		SET poster_url    = EXCLUDED.poster_url,
+		    released      = EXCLUDED.released,
+		    released_tmdb = false,
+		    status        = EXCLUDED.status,
+		    fetched_at    = EXCLUDED.fetched_at,
+		    votes         = EXCLUDED.votes`,
 		ids, urls, dates, states)
 	if err != nil {
 		return fmt.Errorf("catalog: save %d posters: %w", len(batch), err)
@@ -432,10 +433,11 @@ func (s *Store) savePoster(ctx context.Context, p Poster) error {
 		INSERT INTO meta.posters (tconst, poster_url, released, status, fetched_at)
 		VALUES ($1, $2, $3, $4, now())
 		ON CONFLICT (tconst) DO UPDATE
-		SET poster_url = EXCLUDED.poster_url,
-		    released   = EXCLUDED.released,
-		    status     = EXCLUDED.status,
-		    fetched_at = EXCLUDED.fetched_at`,
+		SET poster_url    = EXCLUDED.poster_url,
+		    released      = EXCLUDED.released,
+		    released_tmdb = false,
+		    status        = EXCLUDED.status,
+		    fetched_at    = EXCLUDED.fetched_at`,
 		p.TConst, url, released, status)
 	if err != nil {
 		return fmt.Errorf("catalog: save poster %s: %w", p.TConst, err)

@@ -23,6 +23,11 @@ type Person struct {
 	Role      string `json:"role"` // "cast" or "director"
 	Character string `json:"character,omitempty"`
 	Order     int    `json:"order"`
+	// Photo is the address of the person's photo on TMDb's image host,
+	// from the people job's answer. Left out while there is no answer
+	// yet, when TMDb has no photo, and once the answer is past the 175
+	// days anything of TMDb's is kept.
+	Photo string `json:"photo,omitempty"`
 }
 
 // Movie is what a card says once its detail has arrived.
@@ -36,7 +41,10 @@ type Movie struct {
 	Released string   `json:"released,omitempty"`
 	// Synopsis is what the film is about, from OMDb or, where OMDb has
 	// none, TMDb. Empty when neither has one yet.
-	Synopsis string   `json:"synopsis,omitempty"`
+	Synopsis string `json:"synopsis,omitempty"`
+	// Genres are IMDb's, up to three, in the order IMDb lists them.
+	// Never Documentary: those films are left off maps.
+	Genres   []string `json:"genres,omitempty"`
 	People   []string `json:"people"`
 	IsAnchor bool     `json:"isAnchor"`
 }
@@ -90,13 +98,19 @@ func (s *Store) Grid(ctx context.Context, tconst string) (*Grid, error) {
 		s.wantSynopsis(tconst)
 	}
 
-	people, err := s.peopleOn(ctx, tconst)
+	people, unasked, err := s.peopleOn(ctx, tconst)
 	if err != nil {
 		return nil, err
 	}
 	if len(people) == 0 {
 		return nil, fmt.Errorf("catalog: %s has nobody billed: %w", tconst, ErrNotFound)
 	}
+	// The chip row is where a person's photo is drawn, so the people on
+	// it the people job has no answer for, or one that has come due, go
+	// to the front of its queue. Only a map being opened marks them:
+	// Films reads the same row for every batch of cards a reader
+	// scrolls to, and one mark a map is all the job needs.
+	s.WantPeople(unasked...)
 	// The anchor is a card like any other, and its card draws its
 	// people; a null there would be "not known yet" rather than "all of
 	// them", which is the opposite of the truth for this one.
@@ -125,7 +139,7 @@ func (s *Store) movie(ctx context.Context, tconst string) (m Movie, asked bool, 
 	var released *time.Time
 	var poster, synopsis *string
 	err = s.pool.QueryRow(ctx, `
-		SELECT t.tconst, t.primary_title, coalesce(t.start_year, 0),
+		SELECT t.tconst, t.primary_title, coalesce(t.start_year, 0), t.genres,
 		       r.average_rating, p.poster_url, p.released,
 		       sy.overview, sy.omdb_at IS NOT NULL
 		FROM `+Live+`.titles t
@@ -133,7 +147,7 @@ func (s *Store) movie(ctx context.Context, tconst string) (m Movie, asked bool, 
 		LEFT JOIN meta.posters p USING (tconst)
 		LEFT JOIN meta.synopses sy USING (tconst)
 		WHERE t.tconst = $1`, tconst).
-		Scan(&m.ID, &m.Title, &m.Year, &m.Rating, &poster, &released, &synopsis, &asked)
+		Scan(&m.ID, &m.Title, &m.Year, &m.Genres, &m.Rating, &poster, &released, &synopsis, &asked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Movie{}, false, fmt.Errorf("catalog: %s: %w", tconst, ErrNotFound)
 	}
@@ -156,7 +170,11 @@ func (s *Store) movie(ctx context.Context, tconst string) (m Movie, asked bool, 
 // peopleOn is the chip row: billed cast, then directors. A person who
 // both acted and directed is shown as a director, because that is the
 // larger claim on the film.
-func (s *Store) peopleOn(ctx context.Context, tconst string) ([]Person, error) {
+//
+// Each carries their photo, when the people job has one to show.
+// unasked is the people it has no answer for, or one that has come due.
+// Only Grid marks them; the other reads of the chip row leave them be.
+func (s *Store) peopleOn(ctx context.Context, tconst string) (people []Person, unasked []string, err error) {
 	rows, err := s.pool.Query(ctx, `
 		WITH credited AS (
 		    SELECT pr.nconst,
@@ -171,35 +189,45 @@ func (s *Store) peopleOn(ctx context.Context, tconst string) ([]Person, error) {
 		    SELECT d.nconst, 'director', -1000 + d.ordering, NULL
 		    FROM `+Live+`.directors d
 		    WHERE d.tconst = $1
+		), chips AS (
+		    SELECT c.nconst,
+		           coalesce(n.primary_name, '') AS name,
+		           CASE WHEN bool_or(c.role = 'director') THEN 'director' ELSE 'cast' END AS role,
+		           min(c.ord) AS ord,
+		           (array_agg(c.character) FILTER (WHERE c.character IS NOT NULL))[1] AS character
+		    FROM credited c
+		    JOIN `+Live+`.names n USING (nconst)
+		    GROUP BY c.nconst, n.primary_name
 		)
-		SELECT c.nconst,
-		       coalesce(n.primary_name, ''),
-		       CASE WHEN bool_or(c.role = 'director') THEN 'director' ELSE 'cast' END,
-		       min(c.ord),
-		       (array_agg(c.character) FILTER (WHERE c.character IS NOT NULL))[1]
-		FROM credited c
-		JOIN `+Live+`.names n USING (nconst)
-		GROUP BY c.nconst, n.primary_name
-		ORDER BY min(c.ord)`, tconst)
+		SELECT ch.nconst, ch.name, ch.role, ch.ord, ch.character,
+		       ph.profile_path,
+		       ph.nconst IS NULL OR `+photoDue("$3")+`
+		FROM chips ch
+		LEFT JOIN meta.people ph ON ph.nconst = ch.nconst AND `+photoServed("$2")+`
+		ORDER BY ch.ord`, tconst, tmdbForgetDays, tmdbRefreshDays)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: people on %s: %w", tconst, err)
+		return nil, nil, fmt.Errorf("catalog: people on %s: %w", tconst, err)
 	}
 	defer rows.Close()
 
-	var out []Person
 	for rows.Next() {
 		var p Person
-		var character *string
-		if err := rows.Scan(&p.ID, &p.Name, &p.Role, &p.Order, &character); err != nil {
-			return nil, fmt.Errorf("catalog: scan person: %w", err)
+		var character, photo *string
+		var ask bool
+		if err := rows.Scan(&p.ID, &p.Name, &p.Role, &p.Order, &character, &photo, &ask); err != nil {
+			return nil, nil, fmt.Errorf("catalog: scan person: %w", err)
 		}
 		if character != nil {
 			p.Character = *character
 		}
-		p.Order = len(out)
-		out = append(out, p)
+		p.Photo = photoURL(photo)
+		if ask {
+			unasked = append(unasked, p.ID)
+		}
+		p.Order = len(people)
+		people = append(people, p)
 	}
-	return out, rows.Err()
+	return people, unasked, rows.Err()
 }
 
 // MaxSpine bounds one map. A career is wider than a screen, and a
@@ -301,7 +329,7 @@ func (s *Store) Films(ctx context.Context, anchor string, ids []string) ([]Movie
 	defer cancel()
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.tconst, t.primary_title, coalesce(t.start_year, 0),
+		SELECT t.tconst, t.primary_title, coalesce(t.start_year, 0), t.genres,
 		       r.average_rating, p.poster_url, p.released,
 		       sy.overview, sy.omdb_at IS NOT NULL,
 		       coalesce(
@@ -331,7 +359,7 @@ func (s *Store) Films(ctx context.Context, anchor string, ids []string) ([]Movie
 		var poster, synopsis *string
 		var released *time.Time
 		var asked bool
-		if err := rows.Scan(&m.ID, &m.Title, &m.Year, &m.Rating, &poster, &released, &synopsis, &asked, &m.People); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Year, &m.Genres, &m.Rating, &poster, &released, &synopsis, &asked, &m.People); err != nil {
 			return nil, fmt.Errorf("catalog: scan film: %w", err)
 		}
 		if synopsis != nil {
@@ -376,7 +404,7 @@ func (s *Store) Films(ctx context.Context, anchor string, ids []string) ([]Movie
 // anchorPeople is the ids of the searched movie's people, which is what
 // a card's markers are drawn from.
 func (s *Store) anchorPeople(ctx context.Context, tconst string) []string {
-	people, err := s.peopleOn(ctx, tconst)
+	people, _, err := s.peopleOn(ctx, tconst)
 	if err != nil {
 		return nil
 	}

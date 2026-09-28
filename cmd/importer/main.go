@@ -95,6 +95,8 @@ func run() int {
 		TMDbLimiter:          tmdb.NewLimiter(cfg.TMDBRatePerSecond),
 		TMDbSweepMinVotes:    cfg.TMDbSweepMinVotes,
 		TrailerSweepMinVotes: cfg.TrailerSweepMinVotes,
+		PeopleSweepMinVotes:  cfg.PeopleSweepMinVotes,
+		PeopleSweepRate:      cfg.PeopleSweepRate,
 		Keep:                 *keep,
 		Notify:               sink,
 	}

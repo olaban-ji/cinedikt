@@ -100,15 +100,79 @@ poster pass answered before it kept plots (`omdb_at` is null), through
 the pass's own client, so the two share one rate limit and stop
 together on OMDb's daily limit. A title the pass has not answered yet
 is left to the pass. It takes the titles a reader has been shown first,
-then the films at or above `SYNOPSIS_SWEEP_MIN_VOTES`. TMDb's overview,
+then the films at or above `SYNOPSIS_SWEEP_MIN_VOTES` (default 0, so
+all of them), most voted first. It reads the queue again before every
+batch, so a film a reader has just been shown never waits on the rest
+of the sweep, and a spent daily limit pauses the sweep where it stands
+until the limit resets. TMDb's overview,
 which arrives free on the answers the TMDb jobs already save, fills in
 only where OMDb has no plot, never stops OMDb being asked, and is asked
 of OMDb again after 150 days.
 
-The trailer job fills `meta.trailers` for films with a TMDb id at or
-above `TRAILER_SWEEP_MIN_VOTES`, then re-asks a recent film's week-old
-"none", then anything older than 150 days. Whatever from TMDb is still
-there at 175 days, trailers and overviews alike, is deleted by a
-backstop that runs whatever credentials the runner has. The rest are looked up by
-`GET /api/trailers/{tconst}` the first time a reader opens the film.
-Both choose through `internal/trailer`, so either gives the same answer.
+The trailer job is the only thing that looks trailers up, through
+`internal/trailer`. `GET /api/trailers/{tconst}` only reads
+`meta.trailers`: a film with no answer yet is marked wanted
+(`meta.trailer_queue.wanted_at`, through the same buffer as the other
+marks), which sends `trailer_wanted` and wakes the job, and the reader is
+answered `{"key":null,"pending":true}`; a stored answer that has come
+due is served as it is and marked the same way. The job asks, in order,
+about the films readers have marked, newest first, whatever their votes;
+then every film the id matcher would match, at or above
+`TRAILER_SWEEP_MIN_VOTES` (default 0, so all of them), most voted first;
+then a recent film's week-old "none"; then anything older than 150 days
+for a film TMDb has a movie for. It looks at the marks before every
+round, and a mark that arrives in the middle of one stops the round at
+the next title. A film with a TMDb id is asked for its clips; one TMDb
+has no movie for is "none" at no cost; one nothing has matched yet is
+matched by the job itself, once, and the id and overview are kept the
+way the id matcher keeps them.
+
+## People's photos
+
+The people job is the only thing that looks a person's photo up, with
+TMDb's find by IMDb name id, and it keeps only the photo's path, in
+`meta.people`; a null path is "no photo", an answer like any other. A
+map and `GET /api/people/photos` only read it. `Grid` reads each
+chip's answer with the chip row (`peopleOn`, a primary-key lookup a
+person), shows the photo at w185 while the answer is younger than 175
+days, and marks the people with no answer, or one older than 150 days
+(`meta.people_queue.wanted_at`, through the same buffer as the other
+marks). `Films` reads the same chip row for every batch of cards and
+marks nobody. A mark is re-checked when it is written, a person
+already wanted keeps a mark less than a minute old, and
+`person_wanted` is sent only when a mark wanted somebody new or
+renewed an older one, so a map opened again straight away wakes
+nothing, and a person whose lookup failed is asked again the next
+time their map is opened rather than once the pass is over. The
+endpoint marks the same way and answers the unanswered as `pending`.
+
+The job asks, in order, about the people readers' maps have marked,
+newest first, whatever their votes; then everyone billed as cast or
+credited as director on a movie a map can show, whose best known such
+movie has at least `PEOPLE_SWEEP_MIN_VOTES` votes (default 0, so everyone), most
+voted first, the votes snapshotted when the queue is refilled (at most
+every rest interval, or after a publish); then anything older than 150
+days. The sweep and the re-asks wait on a pace of their own,
+`PEOPLE_SWEEP_RATE` (default 5 a second), before the process's TMDb
+limiter, so the rest of that budget stays free for readers; the marked
+people skip it, and a mark that arrives while the sweep waits is served
+at once.
+
+## TMDb's six months
+
+TMDb's terms ask that anything cached from it be refreshed within six
+months. Whatever keeps something of TMDb's asks again once it is 150
+days old, after everything else its job has to do: the synopsis job
+asks OMDb about a film showing TMDb's overview, the trailer job asks
+for the trailer again, the id matcher asks for a match in `meta.tmdb`
+again, for a film search can still offer (renewed in place, so search
+and the trailer job never find it missing), the people job asks for a
+person's photo again, and the poster fallback asks again about a backup
+poster, or about TMDb's "nothing" for a title that still has no picture
+(`meta.posters.tmdb_at`). What is still there at 175 days is taken away
+by a backstop that runs whatever credentials the runner has: trailers,
+overviews, id matches and people's photos are deleted, and a backup
+poster is set back to none, with its colour and any release
+date TMDb filled in where OMDb had none (`released_tmdb`), and its
+stamp is cleared, so the fallback can ask again. An address or date
+from OMDb, and its status, are never touched.

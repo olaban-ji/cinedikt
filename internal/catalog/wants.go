@@ -13,7 +13,9 @@ package catalog
 // a picture leaves a mark, and the TMDb job works through the marks.
 // What a reader has already tried to look at is the best evidence there
 // is of what is worth having. A card drawn with no synopsis row is
-// marked the same way, for the synopsis job.
+// marked the same way, for the synopsis job, a film opened before its
+// trailer has been looked up, for the trailer job, and the people on a
+// map opened before their photos have been, for the people job.
 
 import (
 	"context"
@@ -44,6 +46,19 @@ func (s *Store) wantPoster(ids ...string) { s.want(s.wants, ids) }
 // same rules as wantPoster.
 func (s *Store) wantSynopsis(ids ...string) { s.want(s.synWants, ids) }
 
+// WantTrailer records that a reader opened a film whose trailer has not
+// been looked up, or whose answer has come due, so the trailer job asks
+// about it before anything else. The same rules as wantPoster: the
+// reader is told the answer is on its way, and is not kept waiting on
+// the note that makes it so.
+func (s *Store) WantTrailer(tconst string) { s.want(s.trWants, []string{tconst}) }
+
+// WantPeople records that a reader opened a map whose people the people
+// job has no photo answer for, or one that has come due, so the job asks
+// about them before anybody the sweep has still to reach. The same rules
+// as wantPoster.
+func (s *Store) WantPeople(nconsts ...string) { s.want(s.peWants, nconsts) }
+
 func (s *Store) want(buffer chan string, ids []string) {
 	if buffer == nil {
 		return
@@ -72,10 +87,12 @@ func (s *Store) collectWants() {
 	defer close(s.wantsDone)
 	posters := make([]string, 0, wantBatch)
 	synopses := make([]string, 0, wantBatch)
+	trailers := make([]string, 0, wantBatch)
+	people := make([]string, 0, wantBatch)
 	timer := time.NewTimer(wantFlush)
 	defer timer.Stop()
 	flush := func() {
-		if len(posters) == 0 && len(synopses) == 0 {
+		if len(posters) == 0 && len(synopses) == 0 && len(trailers) == 0 && len(people) == 0 {
 			return
 		}
 		// Its own deadline: this outlives the request that caused it,
@@ -94,8 +111,24 @@ func (s *Store) collectWants() {
 				s.notify(ctx, NotifySynopsisWanted)
 			}
 		}
+		if len(trailers) > 0 {
+			if err := s.markTrailersWanted(ctx, trailers); err == nil {
+				s.notify(ctx, NotifyTrailerWanted)
+			}
+		}
+		// Every map a reader opens marks the people on it who have no
+		// answer yet, and opening it again marks the same people. Only a
+		// mark that wanted somebody new, or renewed a mark at least a
+		// minute old, wakes the job: a signal for marks that changed
+		// nothing would start a pass that asks again about the people it
+		// just failed on, as often as a reader reopens the map.
+		if len(people) > 0 {
+			if n, err := s.markPeopleWanted(ctx, people); err == nil && n > 0 {
+				s.notify(ctx, NotifyPersonWanted)
+			}
+		}
 		cancel()
-		posters, synopses = posters[:0], synopses[:0]
+		posters, synopses, trailers, people = posters[:0], synopses[:0], trailers[:0], people[:0]
 	}
 	for {
 		select {
@@ -109,6 +142,16 @@ func (s *Store) collectWants() {
 			if len(synopses) >= wantBatch {
 				flush()
 			}
+		case id := <-s.trWants:
+			trailers = append(trailers, id)
+			if len(trailers) >= wantBatch {
+				flush()
+			}
+		case id := <-s.peWants:
+			people = append(people, id)
+			if len(people) >= wantBatch {
+				flush()
+			}
 		case <-s.stop:
 			// Take what is already buffered with us: those are marks a
 			// reader has made and a shutdown is no reason to lose them.
@@ -119,6 +162,12 @@ func (s *Store) collectWants() {
 					continue
 				case id := <-s.synWants:
 					synopses = append(synopses, id)
+					continue
+				case id := <-s.trWants:
+					trailers = append(trailers, id)
+					continue
+				case id := <-s.peWants:
+					people = append(people, id)
 					continue
 				default:
 				}

@@ -176,6 +176,7 @@ func TestAPublishWakesEveryLoopThatWaitsForIt(t *testing.T) {
 		"tmdb posters":    wakes.Wanted,
 		"opening colours": wakes.Ready,
 		"trailers":        wakes.Trailers,
+		"people":          wakes.People,
 	}
 	woke := make(chan string, len(loops))
 	for name, wake := range loops {
@@ -218,10 +219,62 @@ func TestAReaderMeetingAFilmWithNoSynopsisWakesTheSynopsisJob(t *testing.T) {
 	for name, c := range map[string]chan struct{}{
 		"omdb posters": wakes.Published, "tmdb ids": wakes.PublishedIDs,
 		"tmdb posters": wakes.Wanted, "opening colours": wakes.Ready, "trailers": wakes.Trailers,
+		"trailer demand": wakes.TrailersWanted, "people": wakes.People, "people demand": wakes.PeopleWanted,
 	} {
 		select {
 		case <-c:
 			t.Errorf("a synopsis mark woke the %s loop", name)
+		default:
+		}
+	}
+}
+
+// TestAReaderOpeningAFilmWithNoTrailerWakesTheTrailerJob on its demand
+// channel, and nothing else: not even the trailer job's publish wake,
+// which would have it scan the catalog for one title.
+func TestAReaderOpeningAFilmWithNoTrailerWakesTheTrailerJob(t *testing.T) {
+	wakes := newWakes()
+	wakes.signal(NotifyTrailerWanted)
+	select {
+	case <-wakes.TrailersWanted:
+	default:
+		t.Fatal("the trailer job was not woken")
+	}
+	for name, c := range map[string]chan struct{}{
+		"omdb posters": wakes.Published, "tmdb ids": wakes.PublishedIDs,
+		"tmdb posters": wakes.Wanted, "opening colours": wakes.Ready,
+		"synopses": wakes.Synopses, "trailer publish": wakes.Trailers,
+		"people": wakes.People, "people demand": wakes.PeopleWanted,
+	} {
+		select {
+		case <-c:
+			t.Errorf("a trailer mark woke the %s loop", name)
+		default:
+		}
+	}
+}
+
+// TestAReaderOpeningAMapWithoutPhotosWakesThePeopleJob on its demand
+// channel, and nothing else: not even the people job's publish wake,
+// which would have it read every credit in the catalog for a handful of
+// people.
+func TestAReaderOpeningAMapWithoutPhotosWakesThePeopleJob(t *testing.T) {
+	wakes := newWakes()
+	wakes.signal(NotifyPersonWanted)
+	select {
+	case <-wakes.PeopleWanted:
+	default:
+		t.Fatal("the people job was not woken")
+	}
+	for name, c := range map[string]chan struct{}{
+		"omdb posters": wakes.Published, "tmdb ids": wakes.PublishedIDs,
+		"tmdb posters": wakes.Wanted, "opening colours": wakes.Ready,
+		"synopses": wakes.Synopses, "trailers": wakes.Trailers,
+		"trailer demand": wakes.TrailersWanted, "people publish": wakes.People,
+	} {
+		select {
+		case <-c:
+			t.Errorf("a people mark woke the %s loop", name)
 		default:
 		}
 	}

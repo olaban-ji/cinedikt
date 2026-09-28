@@ -1999,10 +1999,18 @@ button {
   font-size: 28px;
 }
 
+/* The genres follow the pill as plain text, not pills: on Cinedikt a
+   pill-shaped chip is a people filter, and these would look like
+   something to click. Where they do not fit beside the year and the
+   pill, on a phone most often, the list drops onto a second line as one
+   piece. A flex item wraps inside itself only when it is wider than the
+   whole line, so it needs no rule of its own. */
 .cd-sheet-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  row-gap: 5px;
   font-size: 13.5px;
   color: var(--t2);
   /* The year and the rating pill both inherit it. */
@@ -2897,10 +2905,17 @@ button {
   text-wrap: balance;
 }
 
+/* The genres follow the pill in the line's own size and colour. At the
+   preview's width they almost always fit beside it; a No rating pill
+   and three long names are what take them onto a second row, and
+   fitTrailer works from the box's measured height, so the trailer's
+   room allows for it. */
 .cd-preview-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  row-gap: 4px;
   font-size: 12.5px;
   color: var(--t2);
 }

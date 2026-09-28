@@ -62,13 +62,23 @@ export default defineRailway(() => {
       // an operational dial rather than a fact about the service, so
       // like the rest it is set in Railway and only named here.
       TMDB_SWEEP_MIN_VOTES: preserve(),
-      // How well known a film has to be before its trailer is looked up
-      // ahead of anybody opening it; unset takes 10000. An operational
-      // dial like the one above.
+      // How well known a film has to be for the trailer job's sweep to reach
+      // it; unset takes 0, every film. A film below a higher floor is looked
+      // up only once a reader opens it. An operational dial like the one
+      // above.
       TRAILER_SWEEP_MIN_VOTES: preserve(),
+      // How well known a person's best movie has to be for the people
+      // job's sweep to reach them; unset takes 0, everyone. A person below
+      // a higher floor is looked up only once a map with them on it is
+      // opened. An operational dial like the ones above.
+      PEOPLE_SWEEP_MIN_VOTES: preserve(),
+      // How many lookups a second that sweep may take out of
+      // TMDB_RATE_PER_SEC; unset takes 5, and 0 or less will not start.
+      PEOPLE_SWEEP_RATE: preserve(),
       OMDB_API_KEY: preserve(),
       // How well known a film has to be before OMDb is asked for a
-      // synopsis nobody has met yet; unset takes 1000.
+      // synopsis nobody has met yet; unset takes 0, every film. An
+      // operational dial like the ones above.
       SYNOPSIS_SWEEP_MIN_VOTES: preserve(),
       // The catalog. The importer writes it; the API only reads. The
       // value is the private URL of the Postgres service, kept out of

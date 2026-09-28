@@ -8,7 +8,7 @@ import {
   type MutableRefObject,
   type Ref,
 } from 'react';
-import { initialsFor, type GridFilm, type GridPayload, type GridPerson } from './grid';
+import { genreLine, initialsFor, type GridFilm, type GridPayload, type GridPerson } from './grid';
 import { stillNow } from './motion';
 import { personColour } from './personColour';
 import { PosterImage } from './PosterImage';
@@ -77,6 +77,7 @@ export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer, pla
   const play = isFor(player.play, 'panel', film.id) ? player.play : null;
   const playing = play != null;
   const synopsis = film.synopsis?.trim();
+  const genres = genreLine(film);
 
   const body = useRef<HTMLDivElement>(null);
   const synText = useRef<HTMLParagraphElement>(null);
@@ -89,15 +90,17 @@ export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer, pla
   const synView = synopsisView(syn, play, stillNow());
 
   // Measured once the panel is laid out and before it is painted, so it
-  // is never seen at any other length; again for another film, and when
-  // the screen class gives the panel another size.
+  // is never seen at any other length; again for another film, when the
+  // screen class gives the panel another size, and when the genre line
+  // changes, which can take the head to another line and move the
+  // synopsis down with it.
   useLayoutEffect(() => {
     const el = body.current;
     const p = synText.current;
     if (!el || !p) return;
     const m = measureSynopsis(el, p);
     setSyn((was) => measuredSyn(was, film.id, m));
-  }, [film.id, synopsis, screen.cls]);
+  }, [film.id, synopsis, genres, screen.cls]);
 
   useEffect(() => () => window.clearTimeout(synTimer.current), []);
 
@@ -248,6 +251,7 @@ export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer, pla
                 <span className="cd-sheet-pill">
                   {film.rating == null ? 'No rating' : film.rating.toFixed(1)}
                 </span>
+                {genres && <span className="cd-sheet-genres">{genres}</span>}
               </div>
             </div>
           </div>

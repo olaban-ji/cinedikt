@@ -12,7 +12,7 @@ import (
 var testPlace = place{env: "dev", commit: "d017008c9a4e"}
 
 var allJobs = []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobTMDbPosters, notify.JobTMDbIDs,
-	notify.JobSynopses, notify.JobTrailers}
+	notify.JobSynopses, notify.JobTrailers, notify.JobPeople}
 
 // quietDay is a process that took over this morning, published last
 // night's catalog, and has every job up to date.
@@ -33,6 +33,8 @@ func quietDay(t *testing.T) *policy {
 	p.note(notify.Event{Job: notify.JobSynopses, Kind: notify.Finished, Done: 1150, None: 54, Took: 3 * time.Minute})
 	p.note(notify.Event{Job: notify.JobTrailers, Kind: notify.Started, Total: 318})
 	p.note(notify.Event{Job: notify.JobTrailers, Kind: notify.Finished, Done: 301, None: 17, Took: time.Minute})
+	p.note(notify.Event{Job: notify.JobPeople, Kind: notify.Started, Total: 2140})
+	p.note(notify.Event{Job: notify.JobPeople, Kind: notify.Finished, Done: 1893, None: 247, Took: 7 * time.Minute})
 	p.note(notify.Event{Job: notify.JobColours, Kind: notify.Checked})
 	p.now = testNow
 	p.note(notify.Event{Job: notify.JobImport, Kind: notify.Checked, NextTry: p.now.Add(40 * time.Minute),
@@ -159,7 +161,19 @@ func boards(t *testing.T) map[string]*policy {
 		NextTry: keyAndBusy.now.Add(10 * time.Minute)})
 	keyAndBusy.note(notify.Event{Job: notify.JobTrailers, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "TMDb",
 		NextTry: keyAndBusy.now.Add(30 * time.Minute)})
+	keyAndBusy.note(notify.Event{Job: notify.JobPeople, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "TMDb",
+		NextTry: keyAndBusy.now.Add(30 * time.Minute)})
 	out["tmdb-key-refused"] = keyAndBusy
+
+	// The people sweep's first pass: over a million people at a pace of
+	// its own, counted in people rather than films.
+	faces := quietDay(t)
+	faces.now = testNow.Add(-3 * time.Hour)
+	faces.note(notify.Event{Job: notify.JobPeople, Kind: notify.Started, Total: 1332981})
+	faces.now = testNow
+	faces.note(notify.Event{Job: notify.JobPeople, Kind: notify.Progress, Total: 1332981,
+		Done: 54012, Share: 0.041, ETA: testNow.Add(71 * time.Hour)})
+	out["people-sweep-running"] = faces
 
 	return out
 }

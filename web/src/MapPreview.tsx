@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import type { GridFilm } from './grid';
+import { genreLine, type GridFilm } from './grid';
 import { stillNow } from './motion';
 import { hueOf } from './poster';
 import {
@@ -133,6 +133,7 @@ export function MapPreview({ film, place, player, bounds, plotH, onEnter, onLeav
     ['--h' as string]: hueOf(film.title),
   };
   const synopsis = film.synopsis?.trim();
+  const genres = genreLine(film);
   const synStyle: CSSProperties | undefined =
     folded == null
       ? undefined
@@ -159,6 +160,7 @@ export function MapPreview({ film, place, player, bounds, plotH, onEnter, onLeav
           <span className="cd-preview-pill">
             {film.rating == null ? 'No rating' : film.rating.toFixed(1)}
           </span>
+          {genres && <span className="cd-preview-genres">{genres}</span>}
         </span>
       </div>
       <p

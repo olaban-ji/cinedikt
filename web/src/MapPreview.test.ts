@@ -78,6 +78,21 @@ describe('the hover preview', () => {
     expect(preview(KEY, { rating: null })).toContain('<span class="cd-preview-pill">No rating</span>');
   });
 
+  it('follows the rating with the genres, as plain text, when IMDb lists some', () => {
+    expect(preview(KEY, { genres: ['Action', 'Sci-Fi'] })).toContain(
+      '<span class="cd-preview-meta"><span>1985</span><span class="cd-preview-pill">7.7</span><span class="cd-preview-genres">Action · Sci-Fi</span></span>',
+    );
+    expect(preview(KEY, { rating: null, genres: ['Adventure', 'Comedy', 'Family'] })).toContain(
+      '<span class="cd-preview-pill">No rating</span><span class="cd-preview-genres">Adventure · Comedy · Family</span></span>',
+    );
+    // With none, the line is the year and the rating alone.
+    for (const genres of [undefined, [], ['', ' ']]) {
+      const html = preview(KEY, { genres });
+      expect(html).toContain('<span class="cd-preview-meta"><span>1985</span><span class="cd-preview-pill">7.7</span></span>');
+      expect(html).not.toContain('cd-preview-genres');
+    }
+  });
+
   it('shows the synopsis, or says there is none yet', () => {
     expect(preview(KEY, { synopsis: SYNOPSIS })).toContain(`<p class="cd-preview-syn">${SYNOPSIS}</p>`);
     for (const synopsis of [undefined, '', '  ']) {

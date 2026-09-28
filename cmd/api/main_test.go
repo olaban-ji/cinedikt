@@ -387,9 +387,9 @@ func TestGenericPageStillHasAnAbsoluteURL(t *testing.T) {
 	}
 }
 
-// TestTheRequestPathWaitsOnTheProcessLimiter: the search fallback, the
-// poster stand-in and the trailer lookup share the client this builds,
-// and it has to draw on the same budget as the catalog jobs.
+// TestTheRequestPathWaitsOnTheProcessLimiter: the search fallback and the
+// poster stand-in share the client this builds, and it has to draw on
+// the same budget as the catalog jobs.
 func TestTheRequestPathWaitsOnTheProcessLimiter(t *testing.T) {
 	limiter := tmdb.NewLimiter(20)
 	cfg := config.Config{TMDBAPIKey: "k"}

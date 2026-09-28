@@ -43,6 +43,7 @@ import {
   xOf,
   footRoom,
   footWidth,
+  genreLine,
   MAX_MARKS,
   textWidth,
   AXIS_H,
@@ -1303,6 +1304,25 @@ describe('the spine', () => {
       once.cards.map((c) => [c.film.id, c.left, c.top]),
     );
     expect(once.cards.length).toBe(real.films.length);
+  });
+});
+
+describe('genreLine', () => {
+  it('joins IMDb’s genres with a middle dot, in the order they came', () => {
+    expect(genreLine({ genres: ['Action', 'Sci-Fi'] })).toBe('Action · Sci-Fi');
+    expect(genreLine({ genres: ['Crime', 'Drama', 'Film-Noir'] })).toBe('Crime \u00b7 Drama \u00b7 Film-Noir');
+    expect(genreLine({ genres: ['Drama'] })).toBe('Drama');
+  });
+
+  it('trims each genre and drops the empty ones', () => {
+    expect(genreLine({ genres: [' Action ', '', '  ', 'Sci-Fi'] })).toBe('Action · Sci-Fi');
+  });
+
+  it('is empty when IMDb lists none', () => {
+    expect(genreLine({})).toBe('');
+    expect(genreLine({ genres: undefined })).toBe('');
+    expect(genreLine({ genres: [] })).toBe('');
+    expect(genreLine({ genres: [' '] })).toBe('');
   });
 });
 

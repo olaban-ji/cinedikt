@@ -80,12 +80,22 @@ type Config struct {
 	// sweep. Zero sweeps every title.
 	TMDbSweepMinVotes int
 	// SynopsisSweepMinVotes is the vote floor for asking OMDb for a
-	// synopsis nobody has met yet. Zero sweeps every film.
+	// synopsis nobody has met yet. Zero, the default, sweeps every film;
+	// a film a reader has been shown is asked about whatever its votes.
 	SynopsisSweepMinVotes int
-	// TrailerSweepMinVotes is the vote floor for looking up a trailer
-	// before anybody opens the film. Zero sweeps every film with a TMDb
-	// id.
+	// TrailerSweepMinVotes is the vote floor for the trailer job's
+	// sweep. Zero, the default, sweeps every film; a film a reader opens
+	// is looked up whatever its votes.
 	TrailerSweepMinVotes int
+	// PeopleSweepMinVotes is the vote floor for the people job's sweep,
+	// on each person's best known film a map can show. Zero, the
+	// default, sweeps everyone; the people on a map a reader opens are
+	// looked up whatever their votes.
+	PeopleSweepMinVotes int
+	// PeopleSweepRate is how fast the people job's sweep and re-asks go,
+	// in lookups a second, inside the process's TMDb budget. The people
+	// on a map a reader opens skip it.
+	PeopleSweepRate float64
 
 	// TelegramBotToken and TelegramChatID turn on job notifications.
 	// Both empty leaves them off. The token is the bot's, from
@@ -167,15 +177,31 @@ const (
 	DefaultTMDbRatePerSecond = 20.0
 
 	// DefaultSynopsisSweepMinVotes is how well known a film has to be
-	// before OMDb is asked for a synopsis nobody has met yet. Below it
+	// before OMDb is asked for a synopsis nobody has met yet. Zero is
+	// every film, behind the ones readers have met. Below a higher floor
 	// a synopsis is asked for the first time a card for the film is
 	// drawn.
-	DefaultSynopsisSweepMinVotes = 1000
+	DefaultSynopsisSweepMinVotes = 0
 
 	// DefaultTrailerSweepMinVotes is how well known a film has to be
-	// before its trailer is looked up ahead of anybody opening it. The
-	// rest are looked up the first time a reader opens one.
-	DefaultTrailerSweepMinVotes = 10000
+	// for the trailer job's sweep to reach it. Zero is every film: the
+	// endpoint only reads, so a film the sweep leaves out is looked up
+	// only once a reader opens it, and that reader waits on the job.
+	DefaultTrailerSweepMinVotes = 0
+
+	// DefaultPeopleSweepMinVotes is how well known a person's best known
+	// film has to be for the people job's sweep to reach them. Zero is
+	// everyone a map can show: a photo is read, never looked up, when a
+	// map opens, so a person the sweep leaves out has none until the job
+	// has answered the mark that map left.
+	DefaultPeopleSweepMinVotes = 0
+
+	// DefaultPeopleSweepRate is the pace of the people job's sweep and
+	// re-asks: a quarter of the default TMDb budget. The sweep is over a
+	// million people long, and at the whole budget it would keep that
+	// budget spent for most of a day, with every reader's trailer and
+	// photos queued behind it.
+	DefaultPeopleSweepRate = 5.0
 )
 
 func Load() (Config, error) {
@@ -249,6 +275,20 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	peopleVotes, err := envIntOr("PEOPLE_SWEEP_MIN_VOTES", DefaultPeopleSweepMinVotes)
+	if err != nil {
+		return Config{}, err
+	}
+	peopleRate, err := envFloatOr("PEOPLE_SWEEP_RATE", DefaultPeopleSweepRate)
+	if err != nil {
+		return Config{}, err
+	}
+	// Zero would stop the sweep for good rather than turn a limit off,
+	// and an infinite rate would hand the sweep the whole TMDb budget
+	// this exists to keep it inside.
+	if math.IsNaN(peopleRate) || math.IsInf(peopleRate, 0) || peopleRate <= 0 {
+		return Config{}, fmt.Errorf("config: PEOPLE_SWEEP_RATE must be a number greater than 0, got %v", peopleRate)
+	}
 
 	env, err := environment()
 	if err != nil {
@@ -291,6 +331,8 @@ func Load() (Config, error) {
 
 		SynopsisSweepMinVotes: synopsisVotes,
 		TrailerSweepMinVotes:  trailerVotes,
+		PeopleSweepMinVotes:   peopleVotes,
+		PeopleSweepRate:       peopleRate,
 	}
 	// A catalog is all either process needs. TMDb and Neo4j belong to
 	// the crawling map that the catalog replaced, and requiring their

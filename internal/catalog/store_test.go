@@ -98,13 +98,20 @@ func resetLive(t *testing.T, s *Store) {
 }
 
 // loadFixture runs a whole import of the rows above into catalog_next.
-func loadFixture(t *testing.T, s *Store) Counts {
+// extra is more title.basics rows, for a test whose case the shared set
+// leaves out: one more film there would move every count the job tests
+// make of it.
+func loadFixture(t *testing.T, s *Store, extra ...string) Counts {
 	t.Helper()
 	ctx := context.Background()
 	if err := s.ResetStaging(ctx); err != nil {
 		t.Fatal(err)
 	}
-	kept, _, err := s.LoadTitles(ctx, quietLogger(), gzipped(t, basicsRows))
+	basics := basicsRows
+	for _, row := range extra {
+		basics += "\n" + row
+	}
+	kept, _, err := s.LoadTitles(ctx, quietLogger(), gzipped(t, basics))
 	if err != nil {
 		t.Fatal(err)
 	}

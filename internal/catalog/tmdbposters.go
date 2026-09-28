@@ -10,16 +10,22 @@ package catalog
 // thousand titles have no poster and fewer than fifteen hundred have as
 // many as a hundred votes: the tail is films nobody will ever open, and
 // a service with a rate limit should not spend a day on them. So this
-// job takes two kinds of work, in this order:
+// job takes three kinds of work, in this order:
 //
 //   - what a reader has already tried to look at (meta.posters.wanted_at,
-//     written by the read paths), and
+//     written by the read paths),
 //   - a sweep of the well-known titles, so the common case is repaired
-//     before anybody meets it.
+//     before anybody meets it, and
+//   - the answers that have come due.
 //
-// Each title is asked about once, ever: tmdb_at is stamped whatever the
-// answer, including "TMDb has nothing either". A second service having
-// nothing is still an answer.
+// tmdb_at is stamped whatever the answer, including "TMDb has nothing
+// either": a second service having nothing is still an answer. TMDb's
+// terms ask that anything cached from it be refreshed within six
+// months, so once an answer is tmdbRefreshDays old it is asked again,
+// after everything else: a picture of TMDb's, and TMDb's "nothing" for
+// a title that still has no picture. One still there at tmdbForgetDays
+// is cleared by the backstop in tmdbterms.go, which puts the title back
+// in the queue.
 
 import (
 	"context"
@@ -48,9 +54,10 @@ type PosterFinder interface {
 // having.
 //
 // Zero sweeps the whole catalog, which is a defensible thing to want:
-// it is a few hours of a rate-limited API once, and after it every
-// title TMDb has a picture for has one. Nothing else changes — a title
-// TMDb has nothing for is stamped either way and never asked again.
+// it is a few hours of a rate-limited API, and after it every title
+// TMDb has a picture for has one. Nothing else changes — a title TMDb
+// has nothing for is stamped either way, and asked again only when
+// that answer comes due, like every other.
 const TMDbSweepMinVotes = 100
 
 // TMDbBatch is how many titles are claimed per round.
@@ -71,7 +78,8 @@ type TMDbJob struct {
 	// MinVotes is the sweep's floor. Zero means every title, which is
 	// what it is set to when somebody wants the whole catalog filled.
 	// The demand queue ignores it either way: a reader looking at a
-	// film is a better reason than its vote count.
+	// film is a better reason than its vote count. So do the re-asks:
+	// an answer was worth having once, and is worth keeping.
 	MinVotes int
 	// Batch is how many are claimed per round; zero takes TMDbBatch.
 	Batch int
@@ -80,7 +88,9 @@ type TMDbJob struct {
 	Notify notify.Sink
 }
 
-// Run repairs what it can before ctx is done.
+// Run repairs what it can before ctx is done. The queue is looked at
+// again before every batch, so a title a reader wants never waits
+// behind the sweep or the re-asks for longer than a batch.
 //
 // It takes no schema. Everything it needs is on meta.posters, which
 // outlives every generation — so unlike the other jobs it does not
@@ -88,7 +98,8 @@ type TMDbJob struct {
 //
 // One title at a time on purpose. The client's own limiter is the pace,
 // and there is no burst worth chasing here: the whole queue after the
-// first sweep is a handful of titles a reader has just met.
+// first sweep is a handful of titles a reader has just met, and the
+// answers that come due a day at a time.
 func (j *TMDbJob) Run(ctx context.Context) error {
 	batch := j.Batch
 	if batch <= 0 {
@@ -131,11 +142,18 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		fresh := ids[:0:0]
-		for _, id := range ids {
-			if !tried[id] {
-				fresh = append(fresh, id)
+		fresh := untried(ids, tried)
+		if len(fresh) == 0 {
+			// Nothing wanted and nothing left to sweep, bar this pass's
+			// own failures. The answers that have come due are last.
+			ids, err = j.Store.tmdbPostersDue(ctx, batch)
+			if stopping(err) {
+				return nil
 			}
+			if err != nil {
+				return err
+			}
+			fresh = untried(ids, tried)
 		}
 		if len(fresh) == 0 {
 			if found+blank+failed > 0 {
@@ -164,7 +182,8 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 				return nil
 			case errors.Is(err, tmdb.ErrNotFound):
 				// TMDb does not have it either. That is an answer, and
-				// storing it is what stops the title coming round again.
+				// storing it is what stops the title coming round again
+				// until the answer comes due.
 				got = tmdb.Found{}
 				none = true
 			case refused(err):
@@ -218,16 +237,19 @@ func refused(err error) bool {
 }
 
 // tmdbOutstanding is how many titles this pass has to ask about. It is
-// the same set tmdbWanted hands out, counted once at the start so the
-// log can say how far through it the pass is.
+// the same sets tmdbWanted and tmdbPostersDue hand out, counted once at
+// the start so the log can say how far through them the pass is.
 func (s *Store) tmdbOutstanding(ctx context.Context, minVotes int) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM meta.posters
-		WHERE tmdb_at IS NULL
-		  AND (status = 'dead' OR poster_url IS NULL OR btrim(poster_url) = '')
-		  AND (wanted_at IS NOT NULL OR coalesce(votes, 0) >= $1)`, minVotes).Scan(&n)
+		SELECT
+		    (SELECT count(*)
+		     FROM meta.posters
+		     WHERE tmdb_at IS NULL
+		       AND (status = 'dead' OR poster_url IS NULL OR btrim(poster_url) = '')
+		       AND (wanted_at IS NOT NULL OR coalesce(votes, 0) >= $1))
+		  + (SELECT count(*) FROM meta.posters WHERE `+tmdbPosterDue("$2")+`)`,
+		minVotes, tmdbRefreshDays).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("catalog: count titles wanting a tmdb poster: %w", err)
 	}
@@ -250,7 +272,7 @@ func (s *Store) tmdbOutstanding(ctx context.Context, minVotes int) (int64, error
 // Never anything already asked about. tmdb_at is the whole of the
 // bookkeeping, which is why this query needs no start-of-pass guard the
 // way the OMDb backfill does: there is nothing here that can be handed
-// out twice.
+// out twice. An answer that has come due is tmdbPostersDue's.
 func (s *Store) tmdbWanted(ctx context.Context, limit, minVotes int) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT tconst
@@ -275,13 +297,43 @@ func (s *Store) tmdbWanted(ctx context.Context, limit, minVotes int) ([]string, 
 	return ids, rows.Err()
 }
 
+// tmdbPosterDue is true of a poster row whose TMDb answer is older than
+// days and still matters: a picture of TMDb's that is in use, or TMDb's
+// "nothing" for a title that still has no picture. TMDb's "nothing" for
+// a title whose own picture works is not asked again: that title is not
+// waiting on TMDb, and the backstop clears the stamp in time.
+func tmdbPosterDue(days string) string {
+	return `tmdb_at < now() - make_interval(days => ` + days + `)
+		  AND (source = 'tmdb' OR status = 'dead' OR poster_url IS NULL OR btrim(poster_url) = '')`
+}
+
+// tmdbPostersDue is the next answers to ask TMDb for again, oldest first.
+//
+// Asking again replaces the row in place: a new picture overwrites the
+// old address in the same statement, so a reader never meets the title
+// without one while it is refreshed. Only TMDb saying it has nothing
+// takes a picture of its own away.
+func (s *Store) tmdbPostersDue(ctx context.Context, limit int) ([]string, error) {
+	ids, err := s.tconsts(ctx, `
+		SELECT tconst
+		FROM meta.posters
+		WHERE `+tmdbPosterDue("$2")+`
+		ORDER BY tmdb_at, tconst
+		LIMIT $1`, limit, tmdbRefreshDays)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: tmdb posters due: %w", err)
+	}
+	return ids, nil
+}
+
 // KeepTMDbPoster records what TMDb had for a title whose picture just
 // failed to load.
 //
 // A picture replaces the address that failed. Nothing is still an
-// answer: the title is not asked again, and the address it already has
-// stays, so the card can try that one once more. The overview on the
-// same answer is kept where OMDb has given no plot.
+// answer: the title is not asked again until that answer comes due, and
+// an address of OMDb's it already has stays, so the card can try that
+// one once more. The overview on the same answer is kept where OMDb has
+// given no plot.
 func (s *Store) KeepTMDbPoster(ctx context.Context, tconst string, got tmdb.Found) error {
 	if err := s.saveTMDbPoster(ctx, tconst, got); err != nil {
 		return err
@@ -302,11 +354,31 @@ func (s *Store) KeepTMDbPoster(ctx context.Context, tconst string, got tmdb.Foun
 //
 // A found picture clears the demand mark and takes the row out of
 // `dead`: it has an address that answers again.
+//
+// TMDb answering that it has nothing takes away a picture of its own,
+// the one a re-ask was asking about: TMDb no longer stands behind it,
+// and its terms do not allow keeping it past its six months. An address
+// of OMDb's is kept.
+//
+// The opening screen's colour goes with a picture that changes or goes:
+// it was the average of the old one, and a frame the wrong colour is
+// worse than none. The colour job works the new one out.
+//
+// A release date is taken from TMDb only where OMDb gave none, and is
+// marked as TMDb's, so that a later answer replaces it and "nothing"
+// takes it away, as it does TMDb's picture. OMDb's date is never
+// touched.
 func (s *Store) saveTMDbPoster(ctx context.Context, tconst string, got tmdb.Found) error {
 	if got.Poster == "" {
 		_, err := s.pool.Exec(ctx, `
 			UPDATE meta.posters
-			SET tmdb_at = now(), wanted_at = NULL
+			SET tmdb_at       = now(),
+			    wanted_at     = NULL,
+			    poster_url    = CASE WHEN source = 'tmdb' THEN NULL ELSE poster_url END,
+			    colour        = CASE WHEN source = 'tmdb' THEN NULL ELSE colour END,
+			    source        = CASE WHEN source = 'tmdb' THEN NULL ELSE source END,
+			    released      = CASE WHEN released_tmdb THEN NULL ELSE released END,
+			    released_tmdb = false
 			WHERE tconst = $1`, tconst)
 		return err
 	}
@@ -316,13 +388,15 @@ func (s *Store) saveTMDbPoster(ctx context.Context, tconst string, got tmdb.Foun
 	}
 	_, err := s.pool.Exec(ctx, `
 		UPDATE meta.posters
-		SET poster_url = $2,
-		    released   = coalesce(released, $3::date),
-		    status     = 'ok',
-		    source     = 'tmdb',
-		    tmdb_at    = now(),
-		    wanted_at  = NULL,
-		    fetched_at = now()
+		SET poster_url    = $2,
+		    colour        = CASE WHEN poster_url IS DISTINCT FROM $2 THEN NULL ELSE colour END,
+		    released      = CASE WHEN released IS NULL OR released_tmdb THEN $3::date ELSE released END,
+		    released_tmdb = CASE WHEN released IS NULL OR released_tmdb THEN $3::date IS NOT NULL ELSE false END,
+		    status        = 'ok',
+		    source        = 'tmdb',
+		    tmdb_at       = now(),
+		    wanted_at     = NULL,
+		    fetched_at    = now()
 		WHERE tconst = $1`, tconst, got.Poster, released)
 	if err == nil {
 		s.notify(ctx, NotifyReady)

@@ -5,8 +5,15 @@ package catalog
 // Search results come back keyed by TMDb's own id. Learning which IMDb
 // title that is at search time is one request per hit, and a couple of
 // readers settling a new query in the same second is enough to step
-// over TMDb's ceiling. The id does not change, so it is learned here,
-// once, the way a poster is, and a search only has to look it up.
+// over TMDb's ceiling. So the id is learned here, ahead of time, and a
+// search only has to look it up.
+//
+// A match for a film search can still offer is asked again once it is
+// tmdbRefreshDays old, which TMDb's terms ask of anything cached from
+// it, after every title never asked. Any other match waits for the
+// backstop in tmdbterms.go, which deletes whatever is still unrenewed at
+// tmdbForgetDays, and the queue's next refill takes its title back in
+// if search can offer it again.
 
 import (
 	"context"
@@ -33,6 +40,11 @@ const tmdbIDFilm = `
 	AND NOT (t.genres @> ARRAY['Documentary'])
 	AND EXISTS (SELECT 1 FROM ` + Live + `.principals pr WHERE pr.tconst = t.tconst)`
 
+// tmdbIDRefillEvery is how long a pass of the id matcher runs before it
+// fills its queue again: the rest interval, which is how long a publish's
+// titles wait between passes too. Tests shorten it.
+var tmdbIDRefillEvery = TMDbRest
+
 // TMDbIDJob matches IMDb titles to TMDb ids.
 type TMDbIDJob struct {
 	Store  *Store
@@ -45,7 +57,9 @@ type TMDbIDJob struct {
 	Notify notify.Sink
 }
 
-// Run matches what it can before ctx is done.
+// Run matches what it can before ctx is done: every title the queue
+// holds, best known first, and then the matches that have come due,
+// oldest first. The queue is looked at again before every batch.
 func (j *TMDbIDJob) Run(ctx context.Context) error {
 	n, err := j.Store.tmdbIDsOutstanding(ctx)
 	if stopping(err) {
@@ -63,6 +77,12 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 		}
 		return err
 	}
+	// The queue is filled at the start of a pass. A pass that runs past
+	// tmdbIDRefillEvery, as the re-asks do when a whole sweep's matches
+	// come due together, fills it again as it goes, so the titles a
+	// publish brings wait that long at most rather than behind every
+	// re-ask.
+	refilled := time.Now()
 	batch := j.Batch
 	if batch <= 0 {
 		batch = TMDbBatch
@@ -81,20 +101,23 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 			j.Logger.Info("tmdb ids paused", "matched", matched, "none", none, "failed", failed)
 			return nil
 		}
-		ids, err := j.Store.tmdbIDBatch(ctx, batch)
+		if time.Since(refilled) >= tmdbIDRefillEvery {
+			if err := j.Store.refillTMDBQueue(ctx); err != nil {
+				if stopping(err) {
+					return nil
+				}
+				return err
+			}
+			refilled = time.Now()
+		}
+		ids, due, err := j.Store.tmdbIDBatch(ctx, batch, tried)
 		if stopping(err) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		var fresh []string
-		for _, id := range ids {
-			if !tried[id] {
-				fresh = append(fresh, id)
-			}
-		}
-		if len(fresh) == 0 {
+		if len(ids) == 0 {
 			if matched+none+failed > 0 {
 				track.done(matched + none + failed)
 				j.Logger.Info("tmdb ids caught up", "matched", matched, "none", none, "failed", failed)
@@ -108,22 +131,27 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 			return nil
 		}
 		run.start(n)
-		for _, id := range fresh {
+		for _, id := range ids {
 			if ctx.Err() != nil {
 				return nil
 			}
-			wanted, err := j.Store.tmdbIDWanted(ctx, id)
-			if stopping(err) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if !wanted {
-				if err := j.Store.dropTMDBQueue(ctx, id); err != nil && !stopping(err) {
-					j.Logger.Warn("tmdb id: queue", "tconst", id, "err", err)
+			// A queued title may have stopped being one search can offer
+			// since it was queued. A due match was chosen by that same
+			// test a moment ago, so it needs no second look.
+			if !due {
+				wanted, err := j.Store.tmdbIDWanted(ctx, id)
+				if stopping(err) {
+					return nil
 				}
-				continue
+				if err != nil {
+					return err
+				}
+				if !wanted {
+					if err := j.Store.dropTMDBQueue(ctx, id); err != nil && !stopping(err) {
+						j.Logger.Warn("tmdb id: queue", "tconst", id, "err", err)
+					}
+					continue
+				}
 			}
 			tried[id] = true
 			got, err := j.Client.FindByIMDb(ctx, id)
@@ -165,19 +193,33 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 	}
 }
 
-// tmdbIDsOutstanding is how many titles this pass still has to ask about.
+// tmdbIDsOutstanding is how many titles this pass still has to ask
+// about: the ones never asked, and the matches that have come due.
 func (s *Store) tmdbIDsOutstanding(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx, `
-		SELECT count(*)
-		FROM `+Live+`.titles t
-		WHERE `+tmdbIDFilm+`
-		  AND NOT EXISTS (SELECT 1 FROM meta.tmdb m WHERE m.tconst = t.tconst)`).Scan(&n)
+		SELECT
+		    (SELECT count(*)
+		     FROM `+Live+`.titles t
+		     WHERE `+tmdbIDFilm+`
+		       AND NOT EXISTS (SELECT 1 FROM meta.tmdb m WHERE m.tconst = t.tconst))
+		  + (SELECT count(*) `+tmdbIDsDue+`)`, tmdbRefreshDays).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("catalog: count titles wanting a tmdb id: %w", err)
 	}
 	return n, nil
 }
+
+// tmdbIDsDue is the matches old enough that TMDb's terms want them asked
+// again, as the FROM and WHERE that tmdbIDBatch and tmdbIDsOutstanding
+// share; $1 is tmdbRefreshDays. Only for a film search can still offer:
+// one that has left the catalog, or stopped being such a film, is left
+// to the backstop, and asked about afresh should it come back.
+const tmdbIDsDue = `
+		FROM meta.tmdb m
+		JOIN ` + Live + `.titles t ON t.tconst = m.tconst
+		WHERE m.asked_at < now() - make_interval(days => $1)
+		  AND ` + tmdbIDFilm
 
 // refillTMDBQueue puts every unmatched title into the queue the job
 // walks, best known first. Votes are copied onto the row: ordering the
@@ -189,6 +231,9 @@ func (s *Store) tmdbIDsOutstanding(ctx context.Context) (int64, error) {
 // The wake that says a publish happened is kept nowhere: one sent
 // while nobody was listening is lost, and the backstop pass is what
 // catches its titles. A pass with nothing new only reads.
+//
+// A match the backstop has deleted leaves its title unmatched, so it is
+// queued again here like a title new to the catalog.
 func (s *Store) refillTMDBQueue(ctx context.Context) error {
 	if _, err := s.pool.Exec(ctx, `
 		DELETE FROM meta.tmdb_queue q
@@ -202,7 +247,7 @@ func (s *Store) refillTMDBQueue(ctx context.Context) error {
 	// same numbers. A WHERE on the DO UPDATE is not enough on its own:
 	// Postgres still locks every row it declines to update, and a lock
 	// is a write to the row's page like any other.
-	_, err := s.pool.Exec(ctx, `
+	err := s.fillQueue(ctx, `
 		INSERT INTO meta.tmdb_queue (tconst, votes)
 		SELECT t.tconst, coalesce(r.num_votes, 0)
 		FROM `+Live+`.titles t
@@ -219,26 +264,67 @@ func (s *Store) refillTMDBQueue(ctx context.Context) error {
 	return nil
 }
 
-// tmdbIDBatch is the next titles to ask about, best known first.
-func (s *Store) tmdbIDBatch(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.pool.Query(ctx, `
+// fillQueue runs a queue refill's INSERT with nested loops turned off.
+//
+// Every refill leaves out what its queue already holds with a NOT EXISTS
+// on that same queue. Planned against a queue that is empty, as one is
+// before its first fill or once its job has caught up, that becomes a
+// nested loop reading the whole queue again for every candidate, the
+// rows the statement has just written included: hours for a sweep of
+// the whole catalog, where a hash or merge join takes seconds. The
+// setting and the INSERT share one transaction: as two statements on
+// the pool they could land on different connections, and SET LOCAL ends
+// with the transaction, so the setting reaches no other statement.
+func (s *Store) fillQueue(ctx context.Context, sql string, args ...any) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	if _, err := tx.Exec(ctx, `SET LOCAL enable_nestloop = off`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// tmdbIDBatch is the next titles to ask about, leaving out what this
+// pass has already tried: the queue's, best known first, and only once
+// the queue has nothing else to give, the matches that have come due,
+// oldest first. due says which of the two it is.
+func (s *Store) tmdbIDBatch(ctx context.Context, limit int, tried map[string]bool) (ids []string, due bool, err error) {
+	queued, err := s.tconsts(ctx, `
 		SELECT tconst
 		FROM meta.tmdb_queue
 		ORDER BY votes DESC, tconst
 		LIMIT $1`, limit)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: tmdb id queue: %w", err)
+		return nil, false, fmt.Errorf("catalog: tmdb id queue: %w", err)
 	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+	if fresh := untried(queued, tried); len(fresh) > 0 {
+		return fresh, false, nil
+	}
+	stale, err := s.tconsts(ctx, `
+		SELECT m.tconst `+tmdbIDsDue+`
+		ORDER BY m.asked_at, m.tconst
+		LIMIT $2`, tmdbRefreshDays, limit)
+	if err != nil {
+		return nil, false, fmt.Errorf("catalog: tmdb ids due: %w", err)
+	}
+	return untried(stale, tried), true, nil
+}
+
+// untried is ids without the ones this pass has already asked about.
+func untried(ids []string, tried map[string]bool) []string {
+	var fresh []string
+	for _, id := range ids {
+		if !tried[id] {
+			fresh = append(fresh, id)
 		}
-		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	return fresh
 }
 
 // tmdbIDWanted reports whether this title is still worth a request: a
@@ -275,24 +361,29 @@ func (s *Store) dropTMDBQueue(ctx context.Context, tconst string) error {
 
 // rememberTMDB records TMDb's id for a title, or that TMDb has none.
 // A zero id is that second answer. Either way the title leaves the queue.
+//
+// An answer for a title already matched replaces its row in place, and
+// is stamped afresh: that is how a match that has come due is renewed,
+// and search and the trailer job, which read the id, never find the row
+// missing while it is.
 func (s *Store) rememberTMDB(ctx context.Context, tconst string, tmdbID int) error {
 	var id any
 	if tmdbID > 0 {
 		id = tmdbID
 	}
-	_, err := s.pool.Exec(ctx, `
+	const upsert = `
 		INSERT INTO meta.tmdb (tconst, tmdb_id, asked_at)
 		VALUES ($1, $2, now())
-		ON CONFLICT (tconst) DO NOTHING`, tconst, id)
+		ON CONFLICT (tconst) DO UPDATE
+		SET tmdb_id  = EXCLUDED.tmdb_id,
+		    asked_at = EXCLUDED.asked_at`
+	_, err := s.pool.Exec(ctx, upsert, tconst, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && tmdbID > 0 {
 			// Another IMDb title already owns this TMDb id. This one was
 			// still asked, and has to be recorded as such or it comes back.
-			_, err = s.pool.Exec(ctx, `
-				INSERT INTO meta.tmdb (tconst, tmdb_id, asked_at)
-				VALUES ($1, NULL, now())
-				ON CONFLICT (tconst) DO NOTHING`, tconst)
+			_, err = s.pool.Exec(ctx, upsert, tconst, nil)
 		}
 		if err != nil {
 			return fmt.Errorf("catalog: remember tmdb id %s: %w", tconst, err)

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -197,6 +198,148 @@ func TestTMDbIDsAreNotAskedForTitlesSearchCanNoLongerOffer(t *testing.T) {
 	if id := tmdbID(t, s, "tt0234215"); id != 604 {
 		t.Errorf("reloaded tmdb id = %d", id)
 	}
+}
+
+// TestTMDbIDsAreAskedAgainOnceTheyComeDue is TMDb's six months for the
+// id map: a match older than 150 days is asked again, after every title
+// never asked, oldest first, and its row is renewed in place. One inside
+// the 150 days is left alone, and so is a due match for a title search
+// cannot offer, which is left to the backstop.
+func TestTMDbIDsAreAskedAgainOnceTheyComeDue(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	for _, stmt := range []string{
+		`DELETE FROM meta.tmdb`,
+		`DELETE FROM meta.tmdb_queue`,
+		`INSERT INTO meta.tmdb (tconst, tmdb_id, asked_at) VALUES ('tt0111161', 278, now() - interval '151 days')`,
+		`INSERT INTO meta.tmdb (tconst, tmdb_id, asked_at) VALUES ('tt0234215', NULL, now() - interval '160 days')`,
+		`INSERT INTO meta.tmdb (tconst, tmdb_id, asked_at) VALUES ('tt0133093', 603, now() - interval '149 days')`,
+		`INSERT INTO meta.tmdb (tconst, tmdb_id, asked_at) VALUES ('tt0000002', 99, now() - interval '170 days')`,
+	} {
+		if _, err := s.pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	find := &fakeFinder{answers: map[string]tmdb.Found{
+		"tt0000001": {ID: 1},
+		// Since they were asked, TMDb has renumbered Shawshank and found
+		// a movie for Reloaded.
+		"tt0111161": {ID: 2780},
+		"tt0234215": {ID: 604},
+		"tt0133093": {ID: 603},
+	}}
+	// One title a batch, so the order is the whole of what is checked.
+	job := &TMDbIDJob{Store: s, Client: find, Logger: quietLogger(), Batch: 1}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// The unrated film has never been asked, so it goes first. Then the
+	// due matches, oldest first. The documentary is not a film search
+	// can offer, so its match waits for the backstop.
+	if want := []string{"tt0000001", "tt0234215", "tt0111161"}; !reflect.DeepEqual(find.askedFor(), want) {
+		t.Fatalf("asked %v, want %v", find.askedFor(), want)
+	}
+	for id, want := range map[string]int{"tt0111161": 2780, "tt0234215": 604, "tt0133093": 603, "tt0000002": 99} {
+		if got := tmdbID(t, s, id); got != want {
+			t.Errorf("%s tmdb id = %d, want %d", id, got, want)
+		}
+	}
+	for id, fresh := range map[string]bool{"tt0111161": true, "tt0234215": true, "tt0133093": false, "tt0000002": false} {
+		if got := tmdbAskedToday(t, s, id); got != fresh {
+			t.Errorf("%s asked today = %v, want %v", id, got, fresh)
+		}
+	}
+
+	// Caught up: a renewed match is not due again for another 150 days.
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if more := find.askedFor(); len(more) != 3 {
+		t.Fatalf("caught up, but asked %v", more[3:])
+	}
+}
+
+// TestANewTitleIsMatchedAheadOfTheReasksStillToCome: the re-asks of a
+// whole sweep's matches can run for hours, and a publish in the middle
+// of them must not wait for the end. A pass refills its queue once it
+// has run for tmdbIDRefillEvery, and a title the refill brings goes
+// ahead of the re-asks still to come.
+func TestANewTitleIsMatchedAheadOfTheReasksStillToCome(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s)
+	was := tmdbIDRefillEvery
+	tmdbIDRefillEvery = 0
+	t.Cleanup(func() { tmdbIDRefillEvery = was })
+	for _, stmt := range []string{
+		`DELETE FROM meta.tmdb`,
+		`DELETE FROM meta.tmdb_queue`,
+		`INSERT INTO meta.tmdb (tconst, tmdb_id, asked_at) VALUES
+		     ('tt0111161', 278, now() - interval '160 days'),
+		     ('tt0133093', 603, now() - interval '155 days'),
+		     ('tt0234215', 604, now() - interval '151 days'),
+		     ('tt0000001', 1, now() - interval '10 days')`,
+	} {
+		if _, err := s.pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// While Shawshank is asked about again, a publish brings a new film.
+	find := &hookedFinder{
+		fakeFinder: &fakeFinder{answers: map[string]tmdb.Found{
+			"tt0111161": {ID: 278}, "tt0133093": {ID: 603}, "tt0234215": {ID: 604}, "tt0000010": {ID: 10},
+		}},
+		on: map[string]func(){"tt0111161": func() {
+			for _, stmt := range []string{
+				`INSERT INTO ` + Live + `.titles (tconst, primary_title, original_title, is_adult, start_year, genres)
+				 VALUES ('tt0000010', 'A New Film', 'A New Film', false, 2026, ARRAY['Drama'])`,
+				`INSERT INTO ` + Live + `.principals (tconst, ordering, nconst, category) VALUES ('tt0000010', 1, 'nm0000209', 'actor')`,
+			} {
+				if _, err := s.pool.Exec(ctx, stmt); err != nil {
+					t.Error(err)
+				}
+			}
+		}},
+	}
+	job := &TMDbIDJob{Store: s, Client: find, Logger: quietLogger(), Batch: 1}
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"tt0111161", "tt0000010", "tt0133093", "tt0234215"}; !reflect.DeepEqual(find.askedFor(), want) {
+		t.Fatalf("asked %v, want %v", find.askedFor(), want)
+	}
+	if id := tmdbID(t, s, "tt0000010"); id != 10 {
+		t.Errorf("new film tmdb id = %d", id)
+	}
+}
+
+// hookedFinder is fakeFinder with something that happens as a title is
+// asked about.
+type hookedFinder struct {
+	*fakeFinder
+	on map[string]func()
+}
+
+func (f *hookedFinder) FindByIMDb(ctx context.Context, id string) (tmdb.Found, error) {
+	if hook := f.on[id]; hook != nil {
+		hook()
+	}
+	return f.fakeFinder.FindByIMDb(ctx, id)
+}
+
+// tmdbAskedToday reports whether a title's match was stamped in the
+// last day.
+func tmdbAskedToday(t *testing.T, s *Store, tconst string) bool {
+	t.Helper()
+	var today bool
+	err := s.pool.QueryRow(context.Background(), `
+		SELECT asked_at > now() - interval '1 day' FROM meta.tmdb WHERE tconst = $1`, tconst).Scan(&today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return today
 }
 
 // queueRow is one row of the TMDb queue with the system columns that

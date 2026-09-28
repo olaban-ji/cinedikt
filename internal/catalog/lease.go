@@ -67,6 +67,8 @@ const (
 	NotifyWanted         = "poster_wanted"
 	NotifyReady          = "poster_ready"
 	NotifySynopsisWanted = "synopsis_wanted"
+	NotifyTrailerWanted  = "trailer_wanted"
+	NotifyPersonWanted   = "person_wanted"
 )
 
 // Wakes is what a job loop waits on: one channel per loop that reacts
@@ -91,8 +93,21 @@ type Wakes struct {
 	// job. A new generation is not news to it: the poster pass keeps
 	// the plot of every title it brings.
 	Synopses chan struct{}
-	// A new generation, for the trailer job.
+	// A new generation, for the trailer job, which queues its films.
 	Trailers chan struct{}
+	// A reader opened a film whose trailer has not been looked up, or
+	// whose answer has come due, for the same job. Its own channel, so
+	// the job can tell a reader waiting on one title from a publish that
+	// brings a catalog's worth, and so a pass already running can hear
+	// it between titles.
+	TrailersWanted chan struct{}
+	// A new generation, for the people job, which queues everyone a map
+	// can show.
+	People chan struct{}
+	// A reader opened a map with people the job has no photo answer for,
+	// or one that has come due, for the same job. Its own channel for
+	// the reasons TrailersWanted has one.
+	PeopleWanted chan struct{}
 }
 
 func newWakes() *Wakes {
@@ -102,12 +117,15 @@ func newWakes() *Wakes {
 		// returns", not "start a second pass". OMDb saving five
 		// hundred posters a second must not start five hundred colour
 		// runs.
-		Published:    make(chan struct{}, 1),
-		PublishedIDs: make(chan struct{}, 1),
-		Wanted:       make(chan struct{}, 1),
-		Ready:        make(chan struct{}, 1),
-		Synopses:     make(chan struct{}, 1),
-		Trailers:     make(chan struct{}, 1),
+		Published:      make(chan struct{}, 1),
+		PublishedIDs:   make(chan struct{}, 1),
+		Wanted:         make(chan struct{}, 1),
+		Ready:          make(chan struct{}, 1),
+		Synopses:       make(chan struct{}, 1),
+		Trailers:       make(chan struct{}, 1),
+		TrailersWanted: make(chan struct{}, 1),
+		People:         make(chan struct{}, 1),
+		PeopleWanted:   make(chan struct{}, 1),
 	}
 }
 
@@ -118,19 +136,24 @@ func (w *Wakes) signal(channel string) {
 	switch channel {
 	case NotifyPublished:
 		// A new generation brings new titles, which need TMDb ids,
-		// posters and trailers, and posters need colours. Their
-		// synopses come with their posters.
+		// posters and trailers, and new people, who need photos.
+		// Posters need colours, and synopses come with their posters.
 		poke(w.Published)
 		poke(w.PublishedIDs)
 		poke(w.Wanted)
 		poke(w.Ready)
 		poke(w.Trailers)
+		poke(w.People)
 	case NotifyWanted:
 		poke(w.Wanted)
 	case NotifyReady:
 		poke(w.Ready)
 	case NotifySynopsisWanted:
 		poke(w.Synopses)
+	case NotifyTrailerWanted:
+		poke(w.TrailersWanted)
+	case NotifyPersonWanted:
+		poke(w.PeopleWanted)
 	}
 }
 
@@ -278,7 +301,7 @@ func (w *leaseWatch) reached(got bool) {
 // listen turns notifications into wakes until the connection fails or
 // the context ends. Its error is why the lease ended.
 func listen(ctx context.Context, conn *pgx.Conn, wakes *Wakes) error {
-	for _, channel := range []string{NotifyPublished, NotifyWanted, NotifyReady, NotifySynopsisWanted} {
+	for _, channel := range []string{NotifyPublished, NotifyWanted, NotifyReady, NotifySynopsisWanted, NotifyTrailerWanted, NotifyPersonWanted} {
 		if _, err := conn.Exec(ctx, "LISTEN "+channel); err != nil {
 			return err
 		}

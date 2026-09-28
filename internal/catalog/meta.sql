@@ -1,7 +1,7 @@
 -- meta is never renamed by the daily swap. It holds what must outlive a
 -- generation: the stamps that gate the next import, and the poster
--- addresses, release dates, synopses and trailers that cost an API call
--- to learn.
+-- addresses, release dates, synopses, trailers and people's photos that
+-- cost an API call to learn.
 
 CREATE SCHEMA IF NOT EXISTS meta;
 
@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS meta.posters (
     tconst     text PRIMARY KEY,
     poster_url text,
     released   date,
+    -- Whether that date is TMDb's, filled in where OMDb had none. It is
+    -- part of TMDb's answer, so it goes when the rest of that answer
+    -- does: at a re-ask, or at the six-month backstop. OMDb's date stays.
+    released_tmdb boolean NOT NULL DEFAULT false,
     -- ok once OMDb has answered, even when it had nothing to give;
     -- missing only when the lookup itself failed and is worth retrying;
     -- dead once the address it gave has been seen to 404.
@@ -66,6 +70,7 @@ ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS tmdb_at timestamptz;
 ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS wanted_at timestamptz;
 ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS colour char(7);
 ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS votes int;
+ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS released_tmdb boolean NOT NULL DEFAULT false;
 -- Widening the status check, once. Guarded because this file runs on
 -- every process start, and ADD CONSTRAINT is not free: it validates
 -- every row and holds ACCESS EXCLUSIVE while it does. On this table
@@ -103,6 +108,12 @@ CREATE INDEX IF NOT EXISTS posters_tmdb_queue
 
 DROP INDEX IF EXISTS meta.posters_want_tmdb;
 
+-- TMDb's answers in the order they come due: the fallback's re-asks read
+-- it oldest first, and the backstop clears what is past its time. Partial,
+-- so it holds only the rows TMDb has been asked about.
+CREATE INDEX IF NOT EXISTS posters_tmdb_asked
+    ON meta.posters (tmdb_at) WHERE tmdb_at IS NOT NULL;
+
 -- Fill the snapshot in for rows written before the column existed.
 --
 -- Guarded twice over, because this file runs on every process start:
@@ -138,11 +149,15 @@ END $$;
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA meta;
 
 -- TMDb's id for an IMDb title. Search speaks TMDb's ids; the catalog
--- speaks tconsts. This is the join, learned once per title and kept
--- across generations, the same way a poster is.
+-- speaks tconsts. This is the join, learned ahead of time and kept
+-- across generations, the same way a poster is. Like everything cached
+-- from TMDb it is asked again after 150 days if search can still offer
+-- its film, replacing the row in place, and one still unrenewed at 175
+-- days is deleted.
 --
 -- A row with a null tmdb_id is still an answer: TMDb was asked and has
--- no movie for that title, and asking again will not change it.
+-- no movie for that title, and it is not asked again until that answer
+-- comes due.
 CREATE TABLE IF NOT EXISTS meta.tmdb (
     tconst   text PRIMARY KEY,
     tmdb_id  int,
@@ -151,6 +166,9 @@ CREATE TABLE IF NOT EXISTS meta.tmdb (
 
 CREATE UNIQUE INDEX IF NOT EXISTS tmdb_id_key
     ON meta.tmdb (tmdb_id) WHERE tmdb_id IS NOT NULL;
+
+-- The matcher's re-asks, oldest first, and the backstop's deletes.
+CREATE INDEX IF NOT EXISTS tmdb_asked ON meta.tmdb (asked_at);
 
 -- The order the matcher walks titles it has not asked about yet.
 -- Votes live here rather than in a join: the live catalog is renamed
@@ -207,9 +225,10 @@ CREATE INDEX IF NOT EXISTS synopsis_queue_order
     ON meta.synopsis_queue (wanted_at DESC NULLS LAST, votes DESC, tconst);
 
 -- The YouTube trailer a film plays in place, learned from TMDb's list of
--- clips and checked against YouTube's oEmbed. Asked once and kept: the
--- job fills it ahead of readers for the best known films, and the
--- endpoint asks for the rest the first time somebody opens one.
+-- clips and checked against YouTube's oEmbed, and asked again after 150
+-- days. The trailer job is the only thing that asks: it fills this for
+-- every film, a film a reader has opened first, and the endpoint only
+-- reads it.
 CREATE TABLE IF NOT EXISTS meta.trailers (
     tconst      text PRIMARY KEY,
     youtube_key text,          -- null: TMDb has no trailer that can be embedded
@@ -219,15 +238,74 @@ CREATE TABLE IF NOT EXISTS meta.trailers (
 -- The trailer job's re-asks, oldest first.
 CREATE INDEX IF NOT EXISTS trailers_asked ON meta.trailers (asked_at);
 
--- The titles with a TMDb id that have not been asked for a trailer yet,
--- in the order the trailer job walks them.
+-- The titles the trailer job has still to ask about: the ones a reader
+-- has opened (wanted_at), newest first, then every film never asked,
+-- most voted first. Votes are copied here for the same reason
+-- tmdb_queue copies them. A wanted title may already have an answer,
+-- one that has come due; it stays wanted until it is asked again.
 CREATE TABLE IF NOT EXISTS meta.trailer_queue (
-    tconst text PRIMARY KEY,
-    votes  int NOT NULL
+    tconst    text PRIMARY KEY,
+    votes     int NOT NULL,
+    wanted_at timestamptz
 );
 
+-- A database that made the table before the column. A no-op on a fresh
+-- one, so both paths end at the same shape.
+ALTER TABLE meta.trailer_queue ADD COLUMN IF NOT EXISTS wanted_at timestamptz;
+
+-- The sweep's order.
 CREATE INDEX IF NOT EXISTS trailer_queue_order
     ON meta.trailer_queue (votes DESC, tconst);
+
+-- And what readers are waiting on, which the job reads before every
+-- batch. Partial, so it holds only the handful of rows that are wanted
+-- rather than every film the sweep has still to reach.
+CREATE INDEX IF NOT EXISTS trailer_queue_wanted
+    ON meta.trailer_queue (wanted_at DESC, tconst) WHERE wanted_at IS NOT NULL;
+
+-- A person's photo, learned from TMDb's find by IMDb name id. Only the
+-- path on TMDb's image host is kept; the page loads the picture from
+-- there, the way it loads a backup poster. The people job is the only
+-- thing that asks: it fills this for everyone a map can show, the
+-- people on a map a reader has opened first, and a read only ever
+-- looks it up. Like everything cached from TMDb it is asked again after
+-- 150 days, replacing the row in place, and one still unrenewed at 175
+-- days is deleted.
+--
+-- A null profile_path is an answer: TMDb has no photo for the person,
+-- or no person for the id (tmdb_id null too), and it is not asked
+-- again until that answer comes due.
+CREATE TABLE IF NOT EXISTS meta.people (
+    nconst       text PRIMARY KEY,
+    tmdb_id      int,
+    profile_path text,
+    asked_at     timestamptz NOT NULL
+);
+
+-- The people job's re-asks, oldest first, and the backstop's deletes.
+CREATE INDEX IF NOT EXISTS people_asked ON meta.people (asked_at);
+
+-- The people the job has still to ask about: the ones on a map a reader
+-- has opened (wanted_at), newest first, then everyone never asked, by
+-- the votes of the best known film of theirs a map can show, most first.
+-- Votes are copied here for the same reason tmdb_queue copies them. A
+-- wanted person may already have an answer, one that has come due; they
+-- stay wanted until they are asked again.
+CREATE TABLE IF NOT EXISTS meta.people_queue (
+    nconst    text PRIMARY KEY,
+    votes     int NOT NULL DEFAULT 0,
+    wanted_at timestamptz
+);
+
+-- The sweep's order.
+CREATE INDEX IF NOT EXISTS people_queue_order
+    ON meta.people_queue (votes DESC, nconst);
+
+-- And what readers are waiting on, read before every batch. Partial, so
+-- it holds only the people who are wanted rather than everyone the
+-- sweep has still to reach.
+CREATE INDEX IF NOT EXISTS people_queue_wanted
+    ON meta.people_queue (wanted_at DESC, nconst) WHERE wanted_at IS NOT NULL;
 
 -- The share card for one movie, rendered once and kept. Rendering is
 -- fonts, a poster fetch and a scale; a link pasted into a busy channel

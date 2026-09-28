@@ -366,6 +366,17 @@ describe('the preview as the stylesheet draws it', () => {
     expect(decls('.cd-preview-trailer-open', false).get('transition')).toContain(`top ${TRAILER_OPEN_MS}ms var(--ease-glide)`);
   });
 
+  it('lets the genres take the year and rating line onto a second row, in its own type', () => {
+    const meta = decls('.cd-preview-meta', false);
+    expect(meta.get('flex-wrap')).toBe('wrap');
+    expect(px(meta.get('gap'))).toBe(8);
+    expect(px(meta.get('row-gap'))).toBe(4);
+    expect(px(meta.get('font-size'))).toBe(12.5);
+    expect(meta.get('color')).toBe('var(--t2)');
+    // They inherit the line's size and colour, with no rule of their own.
+    expect(decls('.cd-preview-genres').size).toBe(0);
+  });
+
   it('draws the synopsis in the lines it is folded by', () => {
     const syn = decls('.cd-preview-syn', false);
     expect(px(syn.get('font-size')) * Number(syn.get('line-height'))).toBe(SYN_LINE_H);
