@@ -63,9 +63,10 @@ const shutdownFlush = 3 * time.Second
 // about it; the rest intervals are only a backstop for a notification
 // that went missing while nobody was connected.
 const (
-	NotifyPublished = "catalog_published"
-	NotifyWanted    = "poster_wanted"
-	NotifyReady     = "poster_ready"
+	NotifyPublished      = "catalog_published"
+	NotifyWanted         = "poster_wanted"
+	NotifyReady          = "poster_ready"
+	NotifySynopsisWanted = "synopsis_wanted"
 )
 
 // Wakes is what a job loop waits on: one channel per loop that reacts
@@ -86,6 +87,12 @@ type Wakes struct {
 	Wanted chan struct{}
 	// A poster landed, for the opening screen's colours.
 	Ready chan struct{}
+	// A reader met a film OMDb has not answered for, for the synopsis
+	// job. A new generation is not news to it: the poster pass keeps
+	// the plot of every title it brings.
+	Synopses chan struct{}
+	// A new generation, for the trailer job.
+	Trailers chan struct{}
 }
 
 func newWakes() *Wakes {
@@ -99,6 +106,8 @@ func newWakes() *Wakes {
 		PublishedIDs: make(chan struct{}, 1),
 		Wanted:       make(chan struct{}, 1),
 		Ready:        make(chan struct{}, 1),
+		Synopses:     make(chan struct{}, 1),
+		Trailers:     make(chan struct{}, 1),
 	}
 }
 
@@ -108,16 +117,20 @@ func newWakes() *Wakes {
 func (w *Wakes) signal(channel string) {
 	switch channel {
 	case NotifyPublished:
-		// A new generation brings new titles, which need TMDb ids and
-		// posters, which need colours.
+		// A new generation brings new titles, which need TMDb ids,
+		// posters and trailers, and posters need colours. Their
+		// synopses come with their posters.
 		poke(w.Published)
 		poke(w.PublishedIDs)
 		poke(w.Wanted)
 		poke(w.Ready)
+		poke(w.Trailers)
 	case NotifyWanted:
 		poke(w.Wanted)
 	case NotifyReady:
 		poke(w.Ready)
+	case NotifySynopsisWanted:
+		poke(w.Synopses)
 	}
 }
 
@@ -265,7 +278,7 @@ func (w *leaseWatch) reached(got bool) {
 // listen turns notifications into wakes until the connection fails or
 // the context ends. Its error is why the lease ended.
 func listen(ctx context.Context, conn *pgx.Conn, wakes *Wakes) error {
-	for _, channel := range []string{NotifyPublished, NotifyWanted, NotifyReady} {
+	for _, channel := range []string{NotifyPublished, NotifyWanted, NotifyReady, NotifySynopsisWanted} {
 		if _, err := conn.Exec(ctx, "LISTEN "+channel); err != nil {
 			return err
 		}

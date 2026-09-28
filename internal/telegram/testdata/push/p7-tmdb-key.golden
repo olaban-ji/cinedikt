@@ -1,4 +1,4 @@
 🔴 <b>TMDb turned down our key</b>
 <b>To fix:</b> check TMDB_ACCESS_TOKEN (or TMDB_API_KEY) under Variables in Railway, then redeploy.
-Backup posters and search matching have stopped. Films OMDb has no poster for stay blank until this is fixed.
+Backup posters, search matching and trailers have stopped. Films OMDb has no poster for stay blank until this is fixed.
 <blockquote expandable>Details: tmdb: HTTP 401: Invalid API key: You must be granted a valid key.</blockquote>

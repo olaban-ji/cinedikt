@@ -14,8 +14,6 @@ import (
 	"cinedikt/internal/omdb"
 	"cinedikt/internal/rediscache"
 	"cinedikt/internal/tmdb"
-
-	"golang.org/x/time/rate"
 )
 
 // App holds the built components.
@@ -49,10 +47,9 @@ const omdbCacheTTL = 30 * 24 * time.Hour
 // New builds everything, connects to Neo4j and ensures its schema.
 func New(ctx context.Context, cfg config.Config, concurrency, maxPeoplePerMovie int, logger *slog.Logger) (*App, error) {
 	a := &App{}
-	var tmdbOpts []tmdb.Option
-	if cfg.TMDBRatePerSecond > 0 {
-		tmdbOpts = append(tmdbOpts, tmdb.WithRateLimit(rate.Limit(cfg.TMDBRatePerSecond), int(2*cfg.TMDBRatePerSecond)+1))
-	}
+	// The one TMDb client this path has, on the same budget every other
+	// process gets: TMDB_RATE_PER_SEC with a small fixed burst.
+	tmdbOpts := []tmdb.Option{tmdb.WithLimiter(tmdb.NewLimiter(cfg.TMDBRatePerSecond))}
 	if cfg.RedisURL == "" {
 		logger.Info("REDIS_URL not set; TMDb/OMDb responses will not be cached")
 	} else {

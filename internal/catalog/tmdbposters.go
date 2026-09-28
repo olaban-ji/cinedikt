@@ -56,11 +56,11 @@ const TMDbSweepMinVotes = 100
 // TMDbBatch is how many titles are claimed per round.
 //
 // Small, now that the queue has an index that returns a page in its
-// own order: fifty at forty requests a second is about a second, so a
-// title a reader asks for waits about that long rather than behind a
-// thousand nobody asked for. The page used to be a thousand only to
-// amortise a sort of the entire remaining queue, which is the thing
-// posters_tmdb_queue removed.
+// own order: fifty at the default twenty requests a second is a few
+// seconds, so a title a reader asks for waits about that long rather
+// than behind a thousand nobody asked for. The page used to be a
+// thousand only to amortise a sort of the entire remaining queue, which
+// is the thing posters_tmdb_queue removed.
 const TMDbBatch = 50
 
 // TMDbJob fills in pictures OMDb could not.
@@ -197,6 +197,10 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 					j.Logger.Warn("tmdb id", "tconst", id, "err", err)
 				}
 			}
+			// And the overview, where OMDb has given no plot.
+			if err := j.Store.keepTMDbOverview(ctx, id, got.Overview); err != nil && !stopping(err) {
+				j.Logger.Warn("tmdb overview", "tconst", id, "err", err)
+			}
 			if got.Poster != "" {
 				found++
 			} else {
@@ -276,7 +280,8 @@ func (s *Store) tmdbWanted(ctx context.Context, limit, minVotes int) ([]string, 
 //
 // A picture replaces the address that failed. Nothing is still an
 // answer: the title is not asked again, and the address it already has
-// stays, so the card can try that one once more.
+// stays, so the card can try that one once more. The overview on the
+// same answer is kept where OMDb has given no plot.
 func (s *Store) KeepTMDbPoster(ctx context.Context, tconst string, got tmdb.Found) error {
 	if err := s.saveTMDbPoster(ctx, tconst, got); err != nil {
 		return err
@@ -286,7 +291,7 @@ func (s *Store) KeepTMDbPoster(ctx context.Context, tconst string, got tmdb.Foun
 			return err
 		}
 	}
-	return nil
+	return s.keepTMDbOverview(ctx, tconst, got.Overview)
 }
 
 // saveTMDbPoster writes what TMDb had, or the fact that it had nothing.

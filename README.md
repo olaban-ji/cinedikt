@@ -7,10 +7,10 @@ The searched film sits on a grid. **Y is the year. X is the rating**, low on the
 ```
 IMDb datasets --> Go importer --> Postgres --> Go API --> React grid (web/)
                       |                ^
-                      +-- OMDb / TMDb -+   posters, dates, colours, id matches
+                      +-- OMDb / TMDb -+   posters, dates, synopses, trailers, colours, id matches
 ```
 
-A reader's request never crawls, never calls TMDb to build the map, and never writes the tables it reads. Pictures, full release dates, poster colours, and the IMDb-to-TMDb id map are filled in beside the catalog, into a `meta` schema that survives every daily swap. The map is computed live from the tables, so a poster learned an hour ago is on the next read.
+A reader's request never crawls, never calls TMDb to build the map, and never writes the tables it reads. Pictures, full release dates, synopses, trailers, poster colours, and the IMDb-to-TMDb id map are filled in beside the catalog, into a `meta` schema that survives every daily swap. The map is computed live from the tables, so a poster learned an hour ago is on the next read.
 
 The whole movie catalog is a local copy of the [IMDb non-commercial datasets](https://developer.imdb.com/non-commercial-datasets/). Those five files are the source. Postgres is the only dependency the current app needs.
 
@@ -158,7 +158,7 @@ cp .env.example .env
 createdb cinedikt
 ```
 
-`OMDB_API_KEY` (free at [omdbapi.com](https://www.omdbapi.com/)) is what puts pictures and full dates on the cards. Without it the catalog still serves: cards have no posters, and order inside a year falls back to the title id because every month-day is 0. `TMDB_API_KEY` or `TMDB_ACCESS_TOKEN` is the second chance for pictures OMDb does not have, and the thing an empty search asks. Either credential is enough; the access token is preferred when both are set.
+`OMDB_API_KEY` (free at [omdbapi.com](https://www.omdbapi.com/)) is what puts pictures, full dates and synopses on the cards. Without it the catalog still serves: cards have no posters, and order inside a year falls back to the title id because every month-day is 0. `TMDB_API_KEY` or `TMDB_ACCESS_TOKEN` is the second chance for pictures OMDb does not have, the thing an empty search asks, and where trailers are found. Either credential is enough; the access token is preferred when both are set.
 
 ## Run
 
@@ -180,7 +180,7 @@ go run ./cmd/importer -dir /tmp/imdb -keep
 | Flag | What it does |
 | --- | --- |
 | `-once` | one attempt, then exit. A decision not to import is a success: most hours are |
-| `-posters-only` | fill posters and release dates against the live catalog, then the TMDb fallback, and do not import |
+| `-posters-only` | fill posters, release dates and synopses against the live catalog, then the TMDb fallback, and do not import |
 | `-keep` | leave the downloaded files on disk, for a development re-run |
 | `-dir` | where to put them. The default is a temp directory |
 
@@ -244,20 +244,28 @@ A catalog older than 36 hours is logged every hour. On Telegram, if that is conf
 
 ### Posters, dates, colours, ids
 
-The dump has no pictures and no month or day. One OMDb lookup per title stores the poster's address and the full date. The browser loads the image from Amazon. The key never leaves the server.
+The dump has no pictures and no month or day. One OMDb lookup per title stores the poster's address, the full date and the plot. The browser loads the image from Amazon. The key never leaves the server.
 
 That job is not part of an import. A full first pass is about 27 minutes at the default 500 requests a second across 256 workers, measured nearer 466 a second. Nothing waits on it. A poster appears the moment it lands, and the films anyone would actually search are done in the first minute, because the job takes the most voted first. It picks up where it left off. `meta` is never renamed by the daily swap, so what it learns survives every future generation.
 
 A lookup that came back empty is still an answer, and is not asked again. Only a lookup that failed is retried: after a day, and never twice in the same run. An address that has been seen to 404 is `dead`. Image edges replay a miss for about five minutes and then serve the picture again, so the first 404 only keeps a film off the draw that saw it. A second, after that window, is the picture actually being gone, and it is written down so the next cold screen does not ask and the TMDb job has something to repair. A host that does not answer at all is neither: Amazon being briefly unreachable never empties the opening screen and never queues a live poster for replacement.
 
-OMDb has a poster for about 59% of the catalog. TMDb has one for roughly three-quarters of what is left. Without TMDb credentials those movies simply have no picture. With them, two jobs share one rate-limited client, so they do not each spend TMDb's ceiling:
+OMDb has a poster for about 59% of the catalog. TMDb has one for roughly three-quarters of what is left. Without TMDb credentials those movies simply have no picture. With them, TMDb is asked by three jobs and by three things a reader can do (an empty search, a poster stand-in, a trailer nobody has looked up yet). TMDb counts about 40 requests a second per address, not per key, so every one of those waits on one limiter per process. `TMDB_RATE_PER_SEC` is the total for the process: 20 a second by default, half of TMDb's ceiling, with a burst of 5. A rate below 1 is refused at startup.
 
-- **Posters.** A movie is fetched when a reader has opened one with no picture (`wanted_at`), and otherwise only when it has at least `TMDB_SWEEP_MIN_VOTES` votes. The default is 100. Around 310,000 titles have no poster and about 1,300 of them have a hundred votes, so the default sweep is half a minute, and the rest are repaired the moment somebody meets them. Set the floor to 0 to ask about every title with no picture: about 300,000 lookups, roughly two hours at 40 a second, once. The well-known end of that queue yields a poster about 77% of the time. The zero-vote tail yields one about 8% of the time. The default TMDb rate is 40 requests a second, which is TMDb's own ceiling.
+- **Posters.** A movie is fetched when a reader has opened one with no picture (`wanted_at`), and otherwise only when it has at least `TMDB_SWEEP_MIN_VOTES` votes. The default is 100. Around 310,000 titles have no poster and about 1,300 of them have a hundred votes, so the default sweep is about a minute, and the rest are repaired the moment somebody meets them. Set the floor to 0 to ask about every title with no picture: about 300,000 lookups, roughly four hours at 20 a second, once. The well-known end of that queue yields a poster about 77% of the time. The zero-vote tail yields one about 8% of the time.
 - **Ids.** `meta.tmdb` maps a TMDb movie id to a `tconst`, filled ahead of time. An empty catalog search asks TMDb for ids and keeps a hit only when that map already has it. The search does not ask TMDb, live, which IMDb title an id is. A row with a null id is "asked, and it is not a movie we can map."
+
+### Synopses and trailers
+
+A film's synopsis comes from OMDb. The poster pass asks for the full plot (`plot=full`) and keeps it with every answer it saves, so a title reached from here on costs no extra request. The titles it reached before it kept plots are asked again by the synopsis job, through the same OMDb client: the two share one rate limit, and when OMDb reports the day's limit both stop until it resets. The synopsis job asks only about titles the poster pass has answered. One the pass has not reached yet, or is waiting to retry, is left to the pass, so no title costs two requests. It asks first about titles a reader has been shown that OMDb has not answered for (a card's detail marks them, the way a missing picture is marked), then about films with at least `SYNOPSIS_SWEEP_MIN_VOTES` votes (default 1,000), most voted first, which it looks for every 20 minutes. Below the floor, a synopsis is asked for only once somebody has met the film.
+
+TMDb's overview arrives free on the answers the TMDb jobs and the poster stand-in already save. It is kept only where OMDb has no plot, and never replaces one. It is not OMDb's answer either: a film showing TMDb's text is still asked of OMDb, and OMDb's plot replaces it. A synopsis from TMDb is asked of OMDb again after 150 days, which TMDb's terms ask of anything cached from it; if OMDb still has nothing, TMDb's text is dropped, and one still there at 175 days, because that re-ask keeps failing, is deleted all the same. A synopsis from OMDb is kept. `meta.synopses` says which source each row came from and when OMDb last answered (`omdb_at`), and a null overview means nobody has one.
+
+A film's trailer is a YouTube video TMDb lists for it (`/movie/{id}/videos`): trailers before teasers, then the studio's own, then English, then the newest. Each candidate is checked with YouTube's oEmbed, which needs no key and answers 400, 401, 403 or 404 for a video that may not be embedded; the first that passes is the trailer. Those checks have their own limiter, 5 a second, apart from TMDb's. The answer, a key or "none", is kept in `meta.trailers`. The trailer job fills it ahead of readers for films with a TMDb id and at least `TRAILER_SWEEP_MIN_VOTES` votes (default 10,000), most voted first. It then asks again about a "none" for a film that came out in the last twelve months once that answer is a week old, since trailers are often added after release, and last about any answer older than 150 days. An answer still there at 175 days, because its re-ask keeps failing, its film has left the catalog, or there are no TMDb credentials to ask with, is deleted, and looked up again the next time somebody opens the film. Every other film is looked up the first time a reader opens it.
 
 The colour job needs no credentials. It downloads posters that are already public and stores what they average to, as `#rrggbb`, for the frames on the opening screen. It colours the pool, not the eight somebody happened to see: the next visit draws a different eight.
 
-`cmd/importer -posters-only` runs the OMDb pass and then the TMDb poster pass, and does not import.
+`cmd/importer -posters-only` runs the OMDb pass and then the TMDb poster pass, and does not import. The synopsis and trailer jobs run only in the long-running runner.
 
 ### Cold screen pool
 
@@ -297,8 +305,9 @@ Catalog routes, as the process sees them. In the browser they are the same paths
 | `GET /search/movies?q=matrix` | Up to ten movies. `q` must be at least two characters, or 400. 503 while the catalog has never been published. Body is `{"results":[{id,title,year,poster?,c?}]}` |
 | `GET /` | The cold screen. One film per era that has a live poster, a different set each visit. A database error here is an empty list and a log line, not an error page: an empty opening is better than a failure on the way in |
 | `GET /grid/{tconst}` | The whole map: anchor, people, spine, and `og_v`. 400 if the id is not `tt` plus digits. 404 if the catalog has no such title, or the title has nobody billed. 503 if the catalog is not published yet |
-| `GET /grid/{tconst}/films?ids=tt1,tt2` | What the mounted cards say. `ids` is required, comma-separated, at most 200, each a `tconst`. Cards with no poster are queued for the TMDb job |
+| `GET /grid/{tconst}/films?ids=tt1,tt2` | What the mounted cards say. `ids` is required, comma-separated, at most 200, each a `tconst`. Cards with no poster are queued for the TMDb job, and cards no source has been asked about for a synopsis are queued for the synopsis job |
 | `GET /posters/{tconst}` | `{"poster":"<url>"}` when a picture the browser could not load has a TMDb stand-in. The stand-in is written back, so the next read does not ask again. 404 when there is nothing, or TMDb is not configured. 502 when the lookup failed |
+| `GET /trailers/{tconst}` | `{"key":"vKQi3bBA1y8"}`, the YouTube id of the film's trailer, or `{"key":null}` when there is none that can be embedded. A stored answer is used; otherwise TMDb is asked once, with a four second budget, and the answer is kept. A stored null for a film released in the last twelve months is asked again once it is a week old. 400 if the id is not a `tconst`. 502 when the lookup failed, and nothing is kept |
 | `GET /og/movie/{tconst}.png` | The share card. Not under `/api`. Its own, shorter budget |
 
 `c` on a search or cold-screen hit is the poster colour, present only once it has been worked out. A wrong colour is worse than none; the client has its own fallback.
@@ -313,6 +322,7 @@ Catalog routes, as the process sees them. In the browser they are the same paths
     "md": 331,
     "poster": "https://m.media-amazon.com/images/M/….jpg",
     "released": "1999-03-31",
+    "synopsis": "When a beautiful stranger leads computer hacker Neo to a forbidding underworld, he discovers the shocking truth…",
     "people": ["nm0000206", "nm0905154"],
     "isAnchor": true
   },
@@ -341,7 +351,7 @@ Catalog routes, as the process sees them. In the browser they are the same paths
 
 `films[n]` is `[id, year, rating or null, MMDD, people indexes]`. `rating` is IMDb's average, one decimal, over the vote count stored beside it and not sent on the spine. `md` is March 31 as `331` and October 16 as `1016`.
 
-`GET /grid/tt0133093/films?ids=tt0133093,tt2911666` answers `{"films":[…]}` with the same movie object the anchor uses, `people` as name ids rather than indexes, because a card looks each person up to draw a marker.
+`GET /grid/tt0133093/films?ids=tt0133093,tt2911666` answers `{"films":[…]}` with the same movie object the anchor uses, `people` as name ids rather than indexes, because a card looks each person up to draw a marker. `synopsis` is left out when no source has one.
 
 Reads are bounded at five seconds. A map is two indexed joins; anything slower is a problem to see rather than to wait through.
 
@@ -357,7 +367,7 @@ React 19 and TypeScript, bundled with Vite 6. There is no router and no state li
 | `GridMap.tsx` | The scroller, the cards, the reveal, recenter |
 | `grid.ts` | Layout, what is lit, lane packing, the rating domain. Pure: a payload, a width, and the settings go in, and positions come out |
 | `trail.ts` | Which filters belong to this history entry, and which preferences belong to the reader |
-| `api.ts` | `/api` client. Sends PostHog's distinct id and session id once analytics is up |
+| `api.ts` | `/api` client. Sends PostHog's distinct id and session id once analytics is up. `fetchTrailer` asks `/api/trailers/{id}` once per film and keeps the answer for the visit |
 | `movieParam.ts` | `/movie/{tconst}-{slug}`, the tab title, the slug rules the server's `og:url` is kept in step with |
 | `firstRun.ts` | How many cold-screen tiles fit |
 | `PeopleChips.tsx`, `GridSheet.tsx`, `ViewPanel.tsx` | The chip row, the film sheet, the View panel |
@@ -384,12 +394,14 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 | `EMBEDDED_IMPORTER` | `true` | Run the catalog jobs inside the API. `false` leaves them to `cmd/importer` |
 | `CATALOG_API_MAX_CONNS` | 10 | The pool that serves reads |
 | `CATALOG_IMPORTER_MAX_CONNS` | 4 | The pool the jobs write through. Kept apart so a bulk `COPY` cannot take the connections a search is waiting for |
-| `OMDB_API_KEY` | | Posters and release dates |
+| `OMDB_API_KEY` | | Posters, release dates and synopses |
 | `OMDB_BACKFILL_RATE` | 500 | OMDb requests a second. This bounds open sockets and how fast rows arrive, not a quota |
 | `POSTER_WORKERS` | 256 | Lookups in flight. A round trip is about 400ms, so 256 in flight is about 600/s: enough that the rate stays in charge. Writes are batched, 500 titles to a statement |
-| `TMDB_API_KEY`, `TMDB_ACCESS_TOKEN` | | Poster fallback, id matching, empty-search fallback |
-| `TMDB_RATE_PER_SEC` | 40 | |
+| `TMDB_API_KEY`, `TMDB_ACCESS_TOKEN` | | Poster fallback, id matching, empty-search fallback, trailers |
+| `TMDB_RATE_PER_SEC` | 20 | TMDb requests a second for the whole process: every client and job waits on one limiter, burst 5. At least 1 |
 | `TMDB_SWEEP_MIN_VOTES` | 100 | Vote floor for fetching a poster nobody has asked for yet. `0` sweeps every title with no picture. An explicit 0 is kept |
+| `SYNOPSIS_SWEEP_MIN_VOTES` | 1000 | Vote floor for asking OMDb for a synopsis nobody has met yet. Below it, only films a reader has been shown are asked about. An explicit 0 is kept |
+| `TRAILER_SWEEP_MIN_VOTES` | 10000 | Vote floor for looking up a trailer before anybody opens the film. The rest are looked up on first open. An explicit 0 is kept |
 | `TMDB_CACHE_TTL` | `168h` | Redis TTL for TMDb search responses, when `REDIS_URL` is set. Without it, those responses are not cached |
 | `REDIS_URL` | | Optional cache for that fallback only, prefix `cinedikt:tmdb` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | Job notifications, described below. Both empty, and nothing is sent. The token is from BotFather. The chat id is `message.chat.id` from `getUpdates` after Start — positive for a private chat, negative for a group. In a group the bot needs permission to pin messages |
@@ -403,11 +415,19 @@ If `DATABASE_URL` is empty, startup requires a TMDb credential and `NEO4J_PASSWO
 
 ### Telegram
 
-The process that runs the catalog jobs keeps one pinned message in the chat: a headline that says whether anything needs you, then one line for each of the five jobs (Catalog, Posters, Backup posters, Search matching, Opening colours), and a footer with the next catalog check and the deploy. It is edited in place, at most once a minute while something is running and at least once an hour, and an edit never makes a sound. A next check already in the past, or an "updated" time more than an hour old, means the process is stuck.
+The process that runs the catalog jobs keeps one pinned message in the chat: a headline that says whether anything needs you, then one line for each of the seven jobs (Catalog, Posters, Backup posters, Search matching, Synopses, Trailers, Opening colours), and a footer with the next catalog check and the deploy. It is edited in place, at most once a minute while something is running and at least once an hour, and an edit never makes a sound. A next check already in the past, or an "updated" time more than an hour old, means the process is stuck.
 
 A new message is sent only when there is news, and its second line says whether anything is needed of you, so a lock screen shows the answer before the explanation. Good news is quiet: a new catalog going live, a failure that is over, a pass that ran for half an hour or more. It lands in the notification list without a sound. A sound is kept for what has lasted or needs you: a failure that has repeated for about an hour (at once for a refused API key, at the second attempt for an error of no known kind), the database unreachable for two minutes, the catalog at 72 hours old (and at 36 while its updates are failing; late only because IMDb has published nothing, it is said at 36 without a sound), and a reminder for anything still failing a day later. The opening colours are cosmetic and never make a sound. Each is said once. What has been said lives in `meta.notify`, so a deploy does not repeat it. Only the process that holds the jobs writes the board: a container waiting for the lease never touches it, and one that loses the lease stops, except to say the database is unreachable while nobody can hold it.
 
 A one-off `cmd/importer -once` or `-posters-only` sends one quiet summary when it ends and leaves the board alone.
+
+## Credits
+
+This product uses the TMDB API but is not endorsed or certified by TMDB. Backup posters, the list of trailers and the fallback synopses come from [TMDB](https://www.themoviedb.org).
+
+Synopses, posters and release dates come from [OMDb](https://www.omdbapi.com/), whose data is licensed [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+
+Trailers play from YouTube.
 
 ## Logs
 
@@ -435,7 +455,7 @@ The [Dockerfile](Dockerfile) builds the map with Node 22, the API with Go 1.26 (
 
 The restart policy is left at Railway's default, `ON_FAILURE`, and the service is not allowed to sleep. Declaring either would leave `config plan` permanently dirty, because the platform stores a default as null. Both matter: the importer runs between requests, and a sleeping machine would drop that work.
 
-Variables to set on the service: `DATABASE_URL`, and, for pictures and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` and `MIXPANEL_PROJECT_TOKEN` if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `WEB_DIR` only if it should differ from the path the image already sets.
+Variables to set on the service: `DATABASE_URL`, and, for pictures, synopses, trailers and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` and `MIXPANEL_PROJECT_TOKEN` if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `WEB_DIR` only if it should differ from the path the image already sets.
 
 ## Tests
 

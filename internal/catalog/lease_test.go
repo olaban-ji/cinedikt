@@ -175,6 +175,7 @@ func TestAPublishWakesEveryLoopThatWaitsForIt(t *testing.T) {
 		"tmdb ids":        wakes.PublishedIDs,
 		"tmdb posters":    wakes.Wanted,
 		"opening colours": wakes.Ready,
+		"trailers":        wakes.Trailers,
 	}
 	woke := make(chan string, len(loops))
 	for name, wake := range loops {
@@ -200,6 +201,28 @@ func TestAPublishWakesEveryLoopThatWaitsForIt(t *testing.T) {
 				}
 			}
 			return
+		}
+	}
+}
+
+// TestAReaderMeetingAFilmWithNoSynopsisWakesTheSynopsisJob, and nothing
+// else: the poster fallback has its own signal for its own demand.
+func TestAReaderMeetingAFilmWithNoSynopsisWakesTheSynopsisJob(t *testing.T) {
+	wakes := newWakes()
+	wakes.signal(NotifySynopsisWanted)
+	select {
+	case <-wakes.Synopses:
+	default:
+		t.Fatal("the synopsis job was not woken")
+	}
+	for name, c := range map[string]chan struct{}{
+		"omdb posters": wakes.Published, "tmdb ids": wakes.PublishedIDs,
+		"tmdb posters": wakes.Wanted, "opening colours": wakes.Ready, "trailers": wakes.Trailers,
+	} {
+		select {
+		case <-c:
+			t.Errorf("a synopsis mark woke the %s loop", name)
+		default:
 		}
 	}
 }

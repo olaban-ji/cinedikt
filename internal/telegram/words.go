@@ -49,7 +49,7 @@ func markFor(sev int) string {
 }
 
 // jobInfo is how a job is named. The same names are used on the board
-// and in every push, so a person learns five words and no more.
+// and in every push, so a person learns one name per job and no more.
 type jobInfo struct {
 	id    string
 	label string
@@ -65,6 +65,8 @@ var jobList = []jobInfo{
 	{notify.JobPosters, "Posters", "Posters", "no OMDb key"},
 	{notify.JobTMDbPosters, "Backup posters", "Backup posters", "no TMDb key"},
 	{notify.JobTMDbIDs, "Search matching", "Search matching", "no TMDb key"},
+	{notify.JobSynopses, "Synopses", "Synopses", "no OMDb key"},
+	{notify.JobTrailers, "Trailers", "Trailers", "no TMDb key"},
 	{notify.JobColours, "Opening colours", "Opening colours", ""},
 }
 
@@ -256,6 +258,10 @@ func impactSentence(id string) string {
 		return "Films OMDb has no poster for stay blank for now; the site still works."
 	case notify.JobTMDbIDs:
 		return "Search still works for films already matched."
+	case notify.JobSynopses:
+		return "Films without a synopsis stay without one for now; the site still works."
+	case notify.JobTrailers:
+		return "Trailers not found yet are looked up when someone opens the film; the site still works."
 	case notify.JobColours:
 		return "New films on the opening screen show without their placeholder colour; nothing else is affected."
 	default:
@@ -275,9 +281,9 @@ func keyVar(p string) string {
 // meanwhile, so "stopped" is not read as pictures vanishing.
 func keyImpact(p string) string {
 	if p == "TMDb" {
-		return "Backup posters and search matching have stopped. Films OMDb has no poster for stay blank until this is fixed."
+		return "Backup posters, search matching and trailers have stopped. Films OMDb has no poster for stay blank until this is fixed."
 	}
-	return "Poster lookups have stopped. Posters already saved still show; new films will have none until this is fixed."
+	return "Poster and synopsis lookups have stopped. Posters already saved still show; new films will have none until this is fixed."
 }
 
 // keyAction is what fixes a refused key.
@@ -528,6 +534,19 @@ func (w writer) longPass(id string, e notify.Event, fixed string) part {
 		head = "Backup posters done: " + count(e.Done) + " found"
 		if e.None > 0 {
 			body += " " + count(e.None) + " films have no poster on TMDb either."
+		}
+	case notify.JobSynopses:
+		head = "Synopses done: " + count(e.Done) + " saved"
+		if e.None > 0 {
+			body += " " + count(e.None) + " films have no synopsis on OMDb."
+		}
+		if e.Errors > 0 {
+			body += " " + count(e.Errors) + " lookups failed and will be retried."
+		}
+	case notify.JobTrailers:
+		head = "Trailers done: " + count(e.Done) + " found"
+		if e.None > 0 {
+			body += " " + count(e.None) + " films have no trailer that can play here."
 		}
 	default:
 		head = info(id).label + " done: " + count(e.Done) + " coloured"

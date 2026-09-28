@@ -261,3 +261,61 @@ func TestARefusedKeyIsErrKey(t *testing.T) {
 		t.Errorf("IMDbRating gave %v, want ErrKey", err)
 	}
 }
+
+func TestLookupAsksForTheFullPlotAndTrimsIt(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("plot"); got != "full" {
+			t.Errorf("plot = %q, want full", got)
+		}
+		w.Write([]byte(`{"Response":"True","Poster":"N/A","Released":"31 Mar 1999","Plot":"  When a beautiful stranger leads computer hacker Neo to a forbidding underworld, he discovers the shocking truth.\n"}`))
+	})
+	got, err := c.Lookup(context.Background(), "tt0133093")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "When a beautiful stranger leads computer hacker Neo to a forbidding underworld, he discovers the shocking truth."; got.Plot != want {
+		t.Errorf("plot = %q, want %q", got.Plot, want)
+	}
+}
+
+func TestParsePlot(t *testing.T) {
+	for raw, want := range map[string]string{
+		"N/A":              "",
+		" N/A ":            "",
+		"":                 "",
+		"   ":              "",
+		" A plot. ":        "A plot.",
+		"N/A is not alone": "N/A is not alone",
+	} {
+		if got := ParsePlot(raw); got != want {
+			t.Errorf("ParsePlot(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
+// TestAShortPlotCachedEarlierIsNotServedAsTheFullOne is why the cache key
+// changed with the question: a body kept before lookups asked for the
+// whole plot holds the one-line summary.
+func TestAShortPlotCachedEarlierIsNotServedAsTheFullOne(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Write([]byte(`{"Response":"True","Poster":"N/A","Released":"N/A","Plot":"The whole plot, every sentence of it."}`))
+	}))
+	defer srv.Close()
+	cache := newMemCache()
+	_ = cache.Set("t:tt0133093", []byte(`{"Response":"True","Poster":"N/A","Released":"N/A","Plot":"Short."}`))
+	c := New("key", WithBaseURL(srv.URL), WithRateLimit(1000, 1000), WithCache(cache))
+	for i := 0; i < 2; i++ {
+		got, err := c.Lookup(context.Background(), "tt0133093")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Plot != "The whole plot, every sentence of it." {
+			t.Fatalf("lookup %d read %q", i, got.Plot)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("OMDb was asked %d times; the full answer should be cached after the first", calls)
+	}
+}

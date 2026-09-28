@@ -12,7 +12,8 @@ package catalog
 // So the map itself is the queue. Every read that draws a card without
 // a picture leaves a mark, and the TMDb job works through the marks.
 // What a reader has already tried to look at is the best evidence there
-// is of what is worth having.
+// is of what is worth having. A card drawn with no synopsis row is
+// marked the same way, for the synopsis job.
 
 import (
 	"context"
@@ -36,8 +37,15 @@ const wantBatch = 128
 // Never blocks and never fails: it is called from read paths, and a
 // reader waiting on a bookkeeping write would be the opposite of the
 // point. A full buffer drops the mark.
-func (s *Store) wantPoster(ids ...string) {
-	if s.wants == nil {
+func (s *Store) wantPoster(ids ...string) { s.want(s.wants, ids) }
+
+// wantSynopsis records that a title was shown with no synopsis row, so
+// the synopsis job asks about it before the titles nobody has met. The
+// same rules as wantPoster.
+func (s *Store) wantSynopsis(ids ...string) { s.want(s.synWants, ids) }
+
+func (s *Store) want(buffer chan string, ids []string) {
+	if buffer == nil {
 		return
 	}
 	for _, id := range ids {
@@ -51,7 +59,7 @@ func (s *Store) wantPoster(ids ...string) {
 		default:
 		}
 		select {
-		case s.wants <- id:
+		case buffer <- id:
 		default:
 			return
 		}
@@ -59,33 +67,46 @@ func (s *Store) wantPoster(ids ...string) {
 }
 
 // collectWants writes the marks away in batches until the store closes.
-// One statement per batch, off the read path entirely.
+// One statement per batch of each kind, off the read path entirely.
 func (s *Store) collectWants() {
 	defer close(s.wantsDone)
-	pending := make([]string, 0, wantBatch)
+	posters := make([]string, 0, wantBatch)
+	synopses := make([]string, 0, wantBatch)
 	timer := time.NewTimer(wantFlush)
 	defer timer.Stop()
 	flush := func() {
-		if len(pending) == 0 {
+		if len(posters) == 0 && len(synopses) == 0 {
 			return
 		}
 		// Its own deadline: this outlives the request that caused it,
 		// and the request's context is long gone.
 		ctx, cancel := context.WithTimeout(context.Background(), ReadTimeout)
-		if err := s.markWanted(ctx, pending); err == nil {
-			// One signal for the batch, not one per mark. The reader
-			// pool writes these and the runner's pool does the work,
-			// so the news has to travel through the database.
-			s.notify(ctx, NotifyWanted)
+		// One signal for each batch, not one per mark. The reader pool
+		// writes these and the runner's pool does the work, so the news
+		// has to travel through the database.
+		if len(posters) > 0 {
+			if err := s.markWanted(ctx, posters); err == nil {
+				s.notify(ctx, NotifyWanted)
+			}
+		}
+		if len(synopses) > 0 {
+			if err := s.markSynopsesWanted(ctx, synopses); err == nil {
+				s.notify(ctx, NotifySynopsisWanted)
+			}
 		}
 		cancel()
-		pending = pending[:0]
+		posters, synopses = posters[:0], synopses[:0]
 	}
 	for {
 		select {
 		case id := <-s.wants:
-			pending = append(pending, id)
-			if len(pending) >= wantBatch {
+			posters = append(posters, id)
+			if len(posters) >= wantBatch {
+				flush()
+			}
+		case id := <-s.synWants:
+			synopses = append(synopses, id)
+			if len(synopses) >= wantBatch {
 				flush()
 			}
 		case <-s.stop:
@@ -94,7 +115,10 @@ func (s *Store) collectWants() {
 			for {
 				select {
 				case id := <-s.wants:
-					pending = append(pending, id)
+					posters = append(posters, id)
+					continue
+				case id := <-s.synWants:
+					synopses = append(synopses, id)
 					continue
 				default:
 				}

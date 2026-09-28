@@ -11,6 +11,7 @@ import (
 
 	"cinedikt/internal/catalog"
 	"cinedikt/internal/tmdb"
+	"cinedikt/internal/trailer"
 )
 
 // CatalogReader is what the API needs from the catalog. Everything here
@@ -40,6 +41,13 @@ type CatalogServer struct {
 	// keeper writes a stand-in down so the next read does not ask again.
 	keeper PosterKeeper
 	flight singleflight.Group
+	// trailers is TMDb for a trailer nobody has looked up yet; nil when
+	// there are no credentials. trailerStore holds the answers, and
+	// oembed is YouTube's word on whether one can be embedded.
+	trailers      TrailerLookup
+	trailerStore  TrailerStore
+	oembed        trailer.Checker
+	trailerFlight singleflight.Group
 }
 
 // PosterLookup is TMDb's mapping from an IMDb title to a picture.

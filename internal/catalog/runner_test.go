@@ -35,7 +35,7 @@ func lazyStore(t *testing.T) *Store {
 func TestAStoppedImportSaysNothing(t *testing.T) {
 	var sink recordingSink
 	r := &Runner{Store: lazyStore(t), Logger: quietLogger(), Notify: &sink}
-	im, _ := r.build()
+	im, _, _ := r.build()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if r.attempt(ctx, im) {
@@ -51,7 +51,7 @@ func TestAStoppedImportSaysNothing(t *testing.T) {
 func TestAFailedImportSaysWhy(t *testing.T) {
 	var sink recordingSink
 	r := &Runner{Store: lazyStore(t), Logger: quietLogger(), Notify: &sink}
-	im, _ := r.build()
+	im, _, _ := r.build()
 	before := time.Now()
 	if r.attempt(context.Background(), im) {
 		t.Fatal("an attempt against no database reported success")

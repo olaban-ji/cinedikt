@@ -53,6 +53,8 @@ export default defineRailway(() => {
     env: {
       TMDB_API_KEY: preserve(),
       TMDB_ACCESS_TOKEN: preserve(),
+      // TMDb requests a second for the whole process, every client and
+      // job together; unset takes 20, and below 1 will not start.
       TMDB_RATE_PER_SEC: preserve(),
       // How well known a movie has to be before TMDb is asked for a
       // poster nobody has wanted yet. 0 fetches one for every title
@@ -60,7 +62,14 @@ export default defineRailway(() => {
       // an operational dial rather than a fact about the service, so
       // like the rest it is set in Railway and only named here.
       TMDB_SWEEP_MIN_VOTES: preserve(),
+      // How well known a film has to be before its trailer is looked up
+      // ahead of anybody opening it; unset takes 10000. An operational
+      // dial like the one above.
+      TRAILER_SWEEP_MIN_VOTES: preserve(),
       OMDB_API_KEY: preserve(),
+      // How well known a film has to be before OMDb is asked for a
+      // synopsis nobody has met yet; unset takes 1000.
+      SYNOPSIS_SWEEP_MIN_VOTES: preserve(),
       // The catalog. The importer writes it; the API only reads. The
       // value is the private URL of the Postgres service, kept out of
       // the repo the same way the other credentials are.

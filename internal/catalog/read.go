@@ -34,6 +34,9 @@ type Movie struct {
 	MD       int      `json:"md"`
 	Poster   string   `json:"poster,omitempty"`
 	Released string   `json:"released,omitempty"`
+	// Synopsis is what the film is about, from OMDb or, where OMDb has
+	// none, TMDb. Empty when neither has one yet.
+	Synopsis string   `json:"synopsis,omitempty"`
 	People   []string `json:"people"`
 	IsAnchor bool     `json:"isAnchor"`
 }
@@ -76,11 +79,16 @@ func (s *Store) Grid(ctx context.Context, tconst string) (*Grid, error) {
 	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
 
-	anchor, err := s.movie(ctx, tconst)
+	anchor, asked, err := s.movie(ctx, tconst)
 	if err != nil {
 		return nil, err
 	}
 	anchor.IsAnchor = true
+	// The searched film's panel is the one most often opened, so a
+	// synopsis OMDb has not been asked for is worth asking for now.
+	if !asked {
+		s.wantSynopsis(tconst)
+	}
 
 	people, err := s.peopleOn(ctx, tconst)
 	if err != nil {
@@ -109,24 +117,28 @@ func (s *Store) Grid(ctx context.Context, tconst string) (*Grid, error) {
 	}, nil
 }
 
-// movie reads one row, with its poster and date.
-func (s *Store) movie(ctx context.Context, tconst string) (Movie, error) {
-	var m Movie
+// movie reads one row, with its poster, date and synopsis. asked is
+// whether OMDb has answered for it, which is not the same as having a
+// synopsis: nobody may have one, and TMDb's may be showing while OMDb,
+// the better source, is still to be asked.
+func (s *Store) movie(ctx context.Context, tconst string) (m Movie, asked bool, err error) {
 	var released *time.Time
-	var poster *string
-	err := s.pool.QueryRow(ctx, `
+	var poster, synopsis *string
+	err = s.pool.QueryRow(ctx, `
 		SELECT t.tconst, t.primary_title, coalesce(t.start_year, 0),
-		       r.average_rating, p.poster_url, p.released
+		       r.average_rating, p.poster_url, p.released,
+		       sy.overview, sy.omdb_at IS NOT NULL
 		FROM `+Live+`.titles t
 		LEFT JOIN `+Live+`.ratings r USING (tconst)
 		LEFT JOIN meta.posters p USING (tconst)
+		LEFT JOIN meta.synopses sy USING (tconst)
 		WHERE t.tconst = $1`, tconst).
-		Scan(&m.ID, &m.Title, &m.Year, &m.Rating, &poster, &released)
+		Scan(&m.ID, &m.Title, &m.Year, &m.Rating, &poster, &released, &synopsis, &asked)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Movie{}, fmt.Errorf("catalog: %s: %w", tconst, ErrNotFound)
+		return Movie{}, false, fmt.Errorf("catalog: %s: %w", tconst, ErrNotFound)
 	}
 	if err != nil {
-		return Movie{}, fmt.Errorf("catalog: read %s: %w", tconst, err)
+		return Movie{}, false, fmt.Errorf("catalog: read %s: %w", tconst, err)
 	}
 	if poster != nil {
 		m.Poster = *poster
@@ -135,7 +147,10 @@ func (s *Store) movie(ctx context.Context, tconst string) (Movie, error) {
 		m.Released = released.Format("2006-01-02")
 		m.MD = int(released.Month())*100 + released.Day()
 	}
-	return m, nil
+	if synopsis != nil {
+		m.Synopsis = *synopsis
+	}
+	return m, asked, nil
 }
 
 // peopleOn is the chip row: billed cast, then directors. A person who
@@ -288,6 +303,7 @@ func (s *Store) Films(ctx context.Context, anchor string, ids []string) ([]Movie
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.tconst, t.primary_title, coalesce(t.start_year, 0),
 		       r.average_rating, p.poster_url, p.released,
+		       sy.overview, sy.omdb_at IS NOT NULL,
 		       coalesce(
 		           (SELECT array_agg(DISTINCT who.nconst)
 		            FROM (
@@ -301,6 +317,7 @@ func (s *Store) Films(ctx context.Context, anchor string, ids []string) ([]Movie
 		FROM `+Live+`.titles t
 		LEFT JOIN `+Live+`.ratings r USING (tconst)
 		LEFT JOIN meta.posters p USING (tconst)
+		LEFT JOIN meta.synopses sy USING (tconst)
 		WHERE t.tconst = ANY($1)`, ids, s.anchorPeople(ctx, anchor))
 	if err != nil {
 		return nil, fmt.Errorf("catalog: films: %w", err)
@@ -308,12 +325,20 @@ func (s *Store) Films(ctx context.Context, anchor string, ids []string) ([]Movie
 	defer rows.Close()
 
 	out := make([]Movie, 0, len(ids))
+	var unasked []string
 	for rows.Next() {
 		var m Movie
-		var poster *string
+		var poster, synopsis *string
 		var released *time.Time
-		if err := rows.Scan(&m.ID, &m.Title, &m.Year, &m.Rating, &poster, &released, &m.People); err != nil {
+		var asked bool
+		if err := rows.Scan(&m.ID, &m.Title, &m.Year, &m.Rating, &poster, &released, &synopsis, &asked, &m.People); err != nil {
 			return nil, fmt.Errorf("catalog: scan film: %w", err)
+		}
+		if synopsis != nil {
+			m.Synopsis = *synopsis
+		}
+		if !asked {
+			unasked = append(unasked, m.ID)
 		}
 		if m.People == nil {
 			m.People = []string{}
@@ -342,6 +367,9 @@ func (s *Store) Films(ctx context.Context, anchor string, ids []string) ([]Movie
 		}
 	}
 	s.wantPoster(blank...)
+	// And the ones OMDb has not answered for go to the front of the
+	// synopsis job's queue, the same way.
+	s.wantSynopsis(unasked...)
 	return out, nil
 }
 

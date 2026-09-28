@@ -224,3 +224,59 @@ func TestSweepFloorKeepsAnExplicitZero(t *testing.T) {
 		t.Errorf("an explicit 0 came back as %d; the whole catalog cannot be asked for", cfg.TMDbSweepMinVotes)
 	}
 }
+
+// TestTheTMDbRateIsTheProcessBudget: unset takes half of TMDb's per-address
+// ceiling, and anything below one a second is refused rather than left
+// to stall every lookup a reader waits on.
+func TestTheTMDbRateIsTheProcessBudget(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+
+	t.Setenv("TMDB_RATE_PER_SEC", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TMDBRatePerSecond != DefaultTMDbRatePerSecond || DefaultTMDbRatePerSecond != 20 {
+		t.Errorf("unset = %v, want 20", cfg.TMDBRatePerSecond)
+	}
+
+	t.Setenv("TMDB_RATE_PER_SEC", "1")
+	if cfg, err = Load(); err != nil || cfg.TMDBRatePerSecond != 1 {
+		t.Errorf("1 gave %v, %v", cfg.TMDBRatePerSecond, err)
+	}
+
+	for _, bad := range []string{"0", "0.5", "-3", "fast", "NaN", "Inf"} {
+		t.Setenv("TMDB_RATE_PER_SEC", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("TMDB_RATE_PER_SEC=%s was accepted", bad)
+		}
+	}
+}
+
+func TestTheSynopsisAndTrailerFloorsHaveDefaults(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("SYNOPSIS_SWEEP_MIN_VOTES", "")
+	t.Setenv("TRAILER_SWEEP_MIN_VOTES", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SynopsisSweepMinVotes != 1000 || cfg.TrailerSweepMinVotes != 10000 {
+		t.Errorf("defaults = %d and %d, want 1000 and 10000", cfg.SynopsisSweepMinVotes, cfg.TrailerSweepMinVotes)
+	}
+
+	t.Setenv("SYNOPSIS_SWEEP_MIN_VOTES", "0")
+	t.Setenv("TRAILER_SWEEP_MIN_VOTES", "250")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SynopsisSweepMinVotes != 0 || cfg.TrailerSweepMinVotes != 250 {
+		t.Errorf("set = %d and %d, want 0 and 250", cfg.SynopsisSweepMinVotes, cfg.TrailerSweepMinVotes)
+	}
+
+	t.Setenv("TRAILER_SWEEP_MIN_VOTES", "-1")
+	if _, err := Load(); err == nil {
+		t.Error("a negative floor was accepted")
+	}
+}

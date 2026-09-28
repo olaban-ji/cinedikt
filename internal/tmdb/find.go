@@ -1,7 +1,7 @@
 package tmdb
 
-// Finding a movie by its IMDb id. This is the whole of what the poster
-// fallback needs from TMDb: the catalog is keyed by tconst, and TMDb
+// Finding a movie by its IMDb id. This is what the poster fallback and
+// the id matcher need from TMDb: the catalog is keyed by tconst, and TMDb
 // will map one to its own record in a single call.
 
 import (
@@ -34,6 +34,10 @@ type Found struct {
 	// Released is TMDb's release date, which is sometimes known where
 	// OMDb's is not.
 	Released time.Time
+	// Overview is TMDb's synopsis, trimmed. Empty when it has none. It
+	// arrives on the same answer as the id, so keeping it costs no
+	// request of its own.
+	Overview string
 }
 
 // FindByIMDb maps an IMDb title id to TMDb's own record.
@@ -49,6 +53,7 @@ func (c *Client) FindByIMDb(ctx context.Context, imdbID string) (Found, error) {
 			ID          int    `json:"id"`
 			PosterPath  string `json:"poster_path"`
 			ReleaseDate string `json:"release_date"`
+			Overview    string `json:"overview"`
 		} `json:"movie_results"`
 	}
 	q := url.Values{"external_source": {"imdb_id"}}
@@ -69,6 +74,7 @@ func (c *Client) FindByIMDb(ctx context.Context, imdbID string) (Found, error) {
 	if when, err := time.Parse("2006-01-02", found.ReleaseDate); err == nil {
 		out.Released = when
 	}
+	out.Overview = strings.TrimSpace(found.Overview)
 	return out, nil
 }
 

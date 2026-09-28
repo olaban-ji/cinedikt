@@ -50,6 +50,8 @@ const (
 	JobPosters     = "posters"
 	JobTMDbPosters = "tmdb-posters"
 	JobTMDbIDs     = "tmdb-ids"
+	JobSynopses    = "synopses"
+	JobTrailers    = "trailers"
 	JobColours     = "colours"
 	JobSystem      = "system"
 	JobDatabase    = "database"

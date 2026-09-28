@@ -11,7 +11,8 @@ import (
 
 var testPlace = place{env: "dev", commit: "d017008c9a4e"}
 
-var allJobs = []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobTMDbPosters, notify.JobTMDbIDs}
+var allJobs = []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobTMDbPosters, notify.JobTMDbIDs,
+	notify.JobSynopses, notify.JobTrailers}
 
 // quietDay is a process that took over this morning, published last
 // night's catalog, and has every job up to date.
@@ -28,6 +29,10 @@ func quietDay(t *testing.T) *policy {
 	p.note(notify.Event{Job: notify.JobTMDbPosters, Kind: notify.Finished, Done: 37, None: 4, Took: time.Minute})
 	p.note(notify.Event{Job: notify.JobTMDbIDs, Kind: notify.Started, Total: 1300})
 	p.note(notify.Event{Job: notify.JobTMDbIDs, Kind: notify.Finished, Done: 1288, None: 12, Took: 2 * time.Minute})
+	p.note(notify.Event{Job: notify.JobSynopses, Kind: notify.Started, Total: 1204})
+	p.note(notify.Event{Job: notify.JobSynopses, Kind: notify.Finished, Done: 1150, None: 54, Took: 3 * time.Minute})
+	p.note(notify.Event{Job: notify.JobTrailers, Kind: notify.Started, Total: 318})
+	p.note(notify.Event{Job: notify.JobTrailers, Kind: notify.Finished, Done: 301, None: 17, Took: time.Minute})
 	p.note(notify.Event{Job: notify.JobColours, Kind: notify.Checked})
 	p.now = testNow
 	p.note(notify.Event{Job: notify.JobImport, Kind: notify.Checked, NextTry: p.now.Add(40 * time.Minute),
@@ -75,6 +80,11 @@ func boards(t *testing.T) map[string]*policy {
 	backfill.note(notify.Event{Job: notify.JobPosters, Kind: notify.Started, Total: 757802})
 	backfill.after(40 * time.Minute).note(notify.Event{Job: notify.JobPosters, Kind: notify.Paused, Cause: notify.DailyLimit,
 		Done: 402113, Errors: 311, NextTry: testNow.Add(50 * time.Minute)})
+	// The synopsis job shares the poster pass's OMDb client, so the one
+	// limit pauses both.
+	backfill.note(notify.Event{Job: notify.JobSynopses, Kind: notify.Started, Total: 38000})
+	backfill.note(notify.Event{Job: notify.JobSynopses, Kind: notify.Paused, Cause: notify.DailyLimit,
+		Done: 9120, NextTry: testNow.Add(50 * time.Minute)})
 	backfill.note(notify.Event{Job: notify.JobTMDbIDs, Kind: notify.Started, Total: 180422})
 	backfill.now = testNow
 	backfill.note(notify.Event{Job: notify.JobTMDbIDs, Kind: notify.Progress, Total: 180422, Done: 75777, Share: 0.42,
@@ -99,7 +109,7 @@ func boards(t *testing.T) map[string]*policy {
 
 	first := newPolicy(t)
 	first.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver,
-		Jobs: []string{notify.JobImport, notify.JobColours, notify.JobPosters}})
+		Jobs: []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobSynopses}})
 	first.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4, Phase: notify.PhaseDownload})
 	out["first-start-no-catalog"] = first
 
@@ -147,6 +157,8 @@ func boards(t *testing.T) map[string]*policy {
 		NextTry: keyAndBusy.now.Add(10 * time.Minute)})
 	keyAndBusy.note(notify.Event{Job: notify.JobTMDbIDs, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "TMDb",
 		NextTry: keyAndBusy.now.Add(10 * time.Minute)})
+	keyAndBusy.note(notify.Event{Job: notify.JobTrailers, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "TMDb",
+		NextTry: keyAndBusy.now.Add(30 * time.Minute)})
 	out["tmdb-key-refused"] = keyAndBusy
 
 	return out

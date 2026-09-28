@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"cinedikt/internal/catalog"
+	"cinedikt/internal/config"
+	"cinedikt/internal/tmdb"
 )
 
 func TestWebCacheHeaders(t *testing.T) {
@@ -382,5 +384,26 @@ func TestGenericPageStillHasAnAbsoluteURL(t *testing.T) {
 		if head := fetchHead(t, srv, path); !strings.Contains(head, `<meta property="og:url" content="https://cinedikt.com/" />`) {
 			t.Errorf("GET %s left og:url relative", path)
 		}
+	}
+}
+
+// TestTheRequestPathWaitsOnTheProcessLimiter: the search fallback, the
+// poster stand-in and the trailer lookup share the client this builds,
+// and it has to draw on the same budget as the catalog jobs.
+func TestTheRequestPathWaitsOnTheProcessLimiter(t *testing.T) {
+	limiter := tmdb.NewLimiter(20)
+	cfg := config.Config{TMDBAPIKey: "k"}
+	client, closer, err := searchFallback(context.Background(), cfg, limiter, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer != nil {
+		t.Cleanup(func() { closer.Close() })
+	}
+	if client == nil || client.Limiter() != limiter {
+		t.Error("the request-path TMDb client has a limiter of its own")
+	}
+	if c, _, _ := searchFallback(context.Background(), config.Config{}, limiter, slog.New(slog.NewTextHandler(io.Discard, nil))); c != nil {
+		t.Error("a client was built without credentials")
 	}
 }

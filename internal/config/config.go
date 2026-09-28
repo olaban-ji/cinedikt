@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -33,7 +34,9 @@ type Config struct {
 	TMDBAccessToken string
 	// TMDBCacheTTL is the Redis TTL for raw TMDb responses.
 	TMDBCacheTTL time.Duration
-	// TMDBRatePerSecond caps outgoing TMDb requests; 0 means the client default.
+	// TMDBRatePerSecond is the whole process's TMDb budget, in requests
+	// a second: every client in the process waits on one limiter at this
+	// rate. TMDb counts about 40 a second per address, not per key.
 	TMDBRatePerSecond float64
 	// OMDBAPIKey enables IMDb rating lookups; empty disables them.
 	OMDBAPIKey string
@@ -76,6 +79,13 @@ type Config struct {
 	// TMDbSweepMinVotes is the vote floor for the TMDb poster fallback's
 	// sweep. Zero sweeps every title.
 	TMDbSweepMinVotes int
+	// SynopsisSweepMinVotes is the vote floor for asking OMDb for a
+	// synopsis nobody has met yet. Zero sweeps every film.
+	SynopsisSweepMinVotes int
+	// TrailerSweepMinVotes is the vote floor for looking up a trailer
+	// before anybody opens the film. Zero sweeps every film with a TMDb
+	// id.
+	TrailerSweepMinVotes int
 
 	// TelegramBotToken and TelegramChatID turn on job notifications.
 	// Both empty leaves them off. The token is the bot's, from
@@ -149,6 +159,23 @@ const (
 	// TMDb has one for. That is a few hours of a rate-limited API,
 	// once.
 	DefaultTMDbSweepMinVotes = 100
+
+	// DefaultTMDbRatePerSecond is the process's TMDb budget: half of the
+	// roughly 40 a second TMDb takes from one address, which leaves room
+	// for the second container during a deploy. It is the total for
+	// every client in the process, not each one's.
+	DefaultTMDbRatePerSecond = 20.0
+
+	// DefaultSynopsisSweepMinVotes is how well known a film has to be
+	// before OMDb is asked for a synopsis nobody has met yet. Below it
+	// a synopsis is asked for the first time a card for the film is
+	// drawn.
+	DefaultSynopsisSweepMinVotes = 1000
+
+	// DefaultTrailerSweepMinVotes is how well known a film has to be
+	// before its trailer is looked up ahead of anybody opening it. The
+	// rest are looked up the first time a reader opens one.
+	DefaultTrailerSweepMinVotes = 10000
 )
 
 func Load() (Config, error) {
@@ -160,9 +187,16 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: TMDB_CACHE_TTL: %w", err)
 	}
 
-	tmdbRate, err := envFloat("TMDB_RATE_PER_SEC")
+	tmdbRate, err := envFloatOr("TMDB_RATE_PER_SEC", DefaultTMDbRatePerSecond)
 	if err != nil {
 		return Config{}, err
+	}
+	// Below one a second is not a budget but a stall: every lookup a
+	// reader waits on would queue behind the jobs for seconds. NaN and
+	// infinity parse as numbers but pass no comparison, and an infinite
+	// rate would take the process's TMDb limit away altogether.
+	if math.IsNaN(tmdbRate) || math.IsInf(tmdbRate, 0) || tmdbRate < 1 {
+		return Config{}, fmt.Errorf("config: TMDB_RATE_PER_SEC must be a number of at least 1, got %v", tmdbRate)
 	}
 	base, err := envFloat("CRAWL_THRESHOLD_BASE")
 	if err != nil {
@@ -207,6 +241,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	synopsisVotes, err := envIntOr("SYNOPSIS_SWEEP_MIN_VOTES", DefaultSynopsisSweepMinVotes)
+	if err != nil {
+		return Config{}, err
+	}
+	trailerVotes, err := envIntOr("TRAILER_SWEEP_MIN_VOTES", DefaultTrailerSweepMinVotes)
+	if err != nil {
+		return Config{}, err
+	}
 
 	env, err := environment()
 	if err != nil {
@@ -246,6 +288,9 @@ func Load() (Config, error) {
 		CrawlOrderPenalty:  penalty,
 
 		MaxColdCrawls: coldCrawls,
+
+		SynopsisSweepMinVotes: synopsisVotes,
+		TrailerSweepMinVotes:  trailerVotes,
 	}
 	// A catalog is all either process needs. TMDb and Neo4j belong to
 	// the crawling map that the catalog replaced, and requiring their

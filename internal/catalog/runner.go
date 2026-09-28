@@ -15,11 +15,12 @@ import (
 	"cinedikt/internal/notify"
 	"cinedikt/internal/omdb"
 	"cinedikt/internal/tmdb"
+	"cinedikt/internal/trailer"
 )
 
 // Runner keeps a catalog up to date: it imports one if there is none,
-// checks hourly for a new generation, and fills in posters continuously
-// beside both.
+// checks hourly for a new generation, and fills in posters, synopses and
+// trailers continuously beside both.
 //
 // It is the whole of what the importer does, in one place, because the
 // API can run it too. Starting the app on an empty database should
@@ -38,21 +39,37 @@ type Runner struct {
 	Logger      *slog.Logger
 	// Dir is where the downloads are kept. Empty means a temp directory.
 	Dir string
-	// OMDbKey enables posters and release dates. Empty leaves the
-	// catalog working, without pictures.
+	// OMDbKey enables posters, release dates and synopses. Empty leaves
+	// the catalog working, without pictures.
 	OMDbKey       string
 	BackfillRate  float64
 	PosterWorkers int
+	// SynopsisSweepMinVotes is how well known a title has to be for its
+	// synopsis to be asked for before a reader meets it. Zero sweeps the
+	// whole catalog.
+	SynopsisSweepMinVotes int
 	// TMDbAuth turns on the second-chance poster fetch for titles OMDb
 	// has no picture for, and for addresses that have stopped
-	// answering. Empty leaves those titles without one.
+	// answering, the id matcher and the trailer job. Empty leaves all
+	// of those off.
 	TMDbAuth tmdb.Auth
-	// TMDbRate caps it; zero takes the client's own default, which is
-	// already under TMDb's ceiling.
-	TMDbRate float64
+	// TMDbLimiter is the process's one TMDb budget, the same limiter
+	// the request-path client waits on. TMDb counts requests per
+	// address, so the jobs and a reader's lookups have to add up to one
+	// rate between them. Nil gives the jobs a limiter of their own at
+	// tmdb.DefaultRatePerSecond, which is right only for a process that
+	// makes no other TMDb calls.
+	TMDbLimiter *rate.Limiter
 	// TMDbSweepMinVotes is how well known a title has to be to be
 	// fetched ahead of anybody asking. Zero sweeps the whole catalog.
 	TMDbSweepMinVotes int
+	// TrailerSweepMinVotes is how well known a film has to be for its
+	// trailer to be looked up before anybody opens it.
+	TrailerSweepMinVotes int
+	// OEmbed is the YouTube check a trailer has to pass, shared with the
+	// endpoint so the two keep to one budget. Nil builds one for the
+	// runner alone.
+	OEmbed trailer.Checker
 	// Keep leaves the downloaded files on disk, for development.
 	Keep bool
 	// Notify is told what every job is doing: when an import starts,
@@ -106,14 +123,14 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	// The notifier owns the board from here, and reads back what it had
 	// already said, so this process does not say it again.
 	notify.Attach(r.Notify, r.Store)
-	im, posters := r.build()
+	im, posters, synopses := r.build()
 	client := r.tmdbClient()
 	enabled := []string{notify.JobImport, notify.JobColours}
 	if posters != nil {
-		enabled = append(enabled, notify.JobPosters)
+		enabled = append(enabled, notify.JobPosters, notify.JobSynopses)
 	}
 	if client != nil {
-		enabled = append(enabled, notify.JobTMDbPosters, notify.JobTMDbIDs)
+		enabled = append(enabled, notify.JobTMDbPosters, notify.JobTMDbIDs, notify.JobTrailers)
 	}
 	report(r.Notify, notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: enabled})
 	var wg sync.WaitGroup
@@ -128,8 +145,20 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	if posters != nil {
 		start(func() { fillPosters(ctx, posters, r.Logger, wakes) })
 	}
-	// One client between the two TMDb jobs, so they share one rate
-	// limit. Each with its own would be twice TMDb's ceiling.
+	if synopses != nil {
+		start(func() { fillSynopses(ctx, synopses, r.Logger, wakes) })
+	}
+	// Whatever was learned from TMDb goes before its six months are up,
+	// whether or not the jobs that re-ask it are running or succeeding.
+	overviewDays := tmdbForgetDays
+	if synopses == nil {
+		// Nothing asks OMDb to replace a TMDb overview, so each is
+		// dropped the day it comes due instead.
+		overviewDays = tmdbRefreshDays
+	}
+	start(func() { forgetTMDbDataWhenDue(ctx, r.Store, r.Logger, overviewDays) })
+	// One client between the TMDb jobs, waiting on the process's one
+	// limiter, so the jobs and a reader's lookups share one budget.
 	if client != nil {
 		start(func() {
 			fillFromTMDb(ctx, &TMDbJob{
@@ -148,8 +177,18 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 				Notify: r.Notify,
 			}, r.Logger, wakes)
 		})
+		start(func() {
+			fillTrailers(ctx, &TrailerJob{
+				Store:    r.Store,
+				Videos:   client,
+				Check:    r.oembed(),
+				Logger:   r.Logger.With("job", "trailers"),
+				MinVotes: r.TrailerSweepMinVotes,
+				Notify:   r.Notify,
+			}, r.Logger, wakes)
+		})
 	} else {
-		r.Logger.Info("no TMDb credentials; movies OMDb has no poster for will have none, and an empty search stays empty")
+		r.Logger.Info("no TMDb credentials; movies OMDb has no poster for will have none, an empty search stays empty, and no trailers are found ahead of readers")
 	}
 	// And the colours the opening screen fills its frames with. It
 	// needs no credentials — the posters are public — so it runs
@@ -185,13 +224,13 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 // Once runs a single attempt and reports whether it ended well. A run
 // that decided not to import is a success: most hours are.
 func (r *Runner) Once(ctx context.Context) bool {
-	im, _ := r.build()
+	im, _, _ := r.build()
 	return r.attempt(ctx, im)
 }
 
 // Posters fills in what it can and returns. Nothing else runs.
 func (r *Runner) Posters(ctx context.Context) error {
-	_, job := r.build()
+	_, job, _ := r.build()
 	if job == nil {
 		return nil
 	}
@@ -214,7 +253,12 @@ func reportRun(ctx context.Context, sink notify.Sink, job string, err error, nex
 	report(sink, notify.Event{Job: job, Kind: notify.Checked})
 }
 
-func (r *Runner) build() (*Importer, *PosterJob) {
+// build makes the import and the two OMDb jobs. The poster pass and the
+// synopsis job are handed one client, the same value, so they share its
+// rate limit and its daily-quota pause: when OMDb says the day's
+// requests are spent, both stop until it resets. Without an OMDb key
+// both are nil.
+func (r *Runner) build() (*Importer, *PosterJob, *SynopsisJob) {
 	dir := r.Dir
 	if dir == "" {
 		dir = os.TempDir() + "/cinedikt-catalog"
@@ -230,24 +274,33 @@ func (r *Runner) build() (*Importer, *PosterJob) {
 		Notify: r.Notify,
 	}
 	if r.OMDbKey == "" {
-		r.Logger.Warn("OMDB_API_KEY is not set; posters and release dates will be missing")
-		return im, nil
+		r.Logger.Warn("OMDB_API_KEY is not set; posters, release dates and synopses will be missing")
+		return im, nil, nil
 	}
 	workers := r.PosterWorkers
 	if workers <= 0 {
 		workers = DefaultPosterWorkers
 	}
-	return im, &PosterJob{
-		Store: r.Store,
-		Client: omdb.New(r.OMDbKey,
-			omdb.WithRateLimit(r.BackfillRate, int(r.BackfillRate)),
-			omdb.WithHTTPTimeout(15*time.Second),
-			omdb.WithConnections(workers)),
+	client := omdb.New(r.OMDbKey,
+		omdb.WithRateLimit(r.BackfillRate, int(r.BackfillRate)),
+		omdb.WithHTTPTimeout(15*time.Second),
+		omdb.WithConnections(workers))
+	posters := &PosterJob{
+		Store:   r.Store,
+		Client:  client,
 		Logger:  r.Logger,
 		Batch:   DefaultPosterBatch,
 		Workers: workers,
 		Notify:  r.Notify,
 	}
+	synopses := &SynopsisJob{
+		Store:    r.Store,
+		Client:   client,
+		Logger:   r.Logger.With("job", "synopses"),
+		MinVotes: r.SynopsisSweepMinVotes,
+		Notify:   r.Notify,
+	}
+	return im, posters, synopses
 }
 
 // TMDbPosters fills in what OMDb could not and returns. Nothing else
@@ -262,17 +315,23 @@ func (r *Runner) TMDbPosters(ctx context.Context) error {
 	return err
 }
 
-// tmdbClient is the one TMDb client the runner's jobs share. Nil when
-// there are no credentials: both jobs then have nothing to do.
+// tmdbClient is the one TMDb client the runner's jobs share, waiting on
+// the process's limiter. Nil when there are no credentials: the TMDb
+// jobs then have nothing to do.
 func (r *Runner) tmdbClient() *tmdb.Client {
 	if r.TMDbAuth.APIKey == "" && r.TMDbAuth.AccessToken == "" {
 		return nil
 	}
-	opts := []tmdb.Option{}
-	if r.TMDbRate > 0 {
-		opts = append(opts, tmdb.WithRateLimit(rate.Limit(r.TMDbRate), int(r.TMDbRate)))
+	return tmdb.New(r.TMDbAuth, tmdb.WithLimiter(r.TMDbLimiter))
+}
+
+// oembed is the YouTube check the trailer job uses: the one the process
+// shares, or one of the runner's own.
+func (r *Runner) oembed() trailer.Checker {
+	if r.OEmbed != nil {
+		return r.OEmbed
 	}
-	return tmdb.New(r.TMDbAuth, opts...)
+	return trailer.NewOEmbed()
 }
 
 // buildTMDb is the poster fallback, or nil when there are no TMDb

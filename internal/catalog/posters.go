@@ -18,7 +18,10 @@ type Poster struct {
 	TConst   string
 	URL      string
 	Released time.Time
-	OK       bool
+	// Plot is OMDb's synopsis, empty when it has none. It rides along on
+	// the same answer, so storing it costs no request of its own.
+	Plot string
+	OK   bool
 }
 
 // PosterFiller looks up a title. The importer owns the client, so the
@@ -210,7 +213,7 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 						lastErr.Store(&err)
 						answers <- Poster{TConst: id}
 					default:
-						answers <- Poster{TConst: id, URL: got.Poster, Released: got.Released, OK: true}
+						answers <- Poster{TConst: id, URL: got.Poster, Released: got.Released, Plot: got.Plot, OK: true}
 					}
 				}
 			}()
@@ -384,6 +387,21 @@ func (s *Store) writePosters(ctx context.Context, schema string, batch []Poster)
 		ids, urls, dates, states)
 	if err != nil {
 		return fmt.Errorf("catalog: save %d posters: %w", len(batch), err)
+	}
+	// And the plot each answer carried. Only answers: a lookup that
+	// failed says nothing about the synopsis either, and writing it down
+	// as "none" would keep the synopsis job from ever asking.
+	var answered []string
+	var plots []*string
+	for _, p := range batch {
+		if !p.OK {
+			continue
+		}
+		answered = append(answered, p.TConst)
+		plots = append(plots, textOrNull(p.Plot))
+	}
+	if err := s.writeOMDbSynopses(ctx, answered, plots); err != nil {
+		return err
 	}
 	// One signal per batch. A poster that arrived for a film on the
 	// opening screen is a colour waiting to be worked out; five hundred

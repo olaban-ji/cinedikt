@@ -150,6 +150,11 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 				track.step(matched + none + failed)
 				continue
 			}
+			// The overview came on the same answer. It is kept only
+			// where OMDb has given no plot.
+			if err := j.Store.keepTMDbOverview(ctx, id, got.Overview); err != nil && !stopping(err) {
+				j.Logger.Warn("tmdb id: overview", "tconst", id, "err", err)
+			}
 			if got.ID > 0 {
 				matched++
 			} else {
@@ -300,8 +305,9 @@ func (s *Store) rememberTMDB(ctx context.Context, tconst string, tmdbID int) err
 }
 
 // fillTMDbIDs keeps the matcher running for as long as the process
-// does. It shares the poster job's client, so the two together stay
-// inside one rate limit instead of each spending a full one.
+// does. It shares the runner's TMDb client, and with it the process's
+// one limiter, so it and every other TMDb caller stay inside one budget
+// instead of each spending a full one.
 func fillTMDbIDs(ctx context.Context, job *TMDbIDJob, logger *slog.Logger, wakes *Wakes) {
 	waited := false
 	for {

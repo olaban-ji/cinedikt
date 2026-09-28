@@ -3,8 +3,8 @@
 The map is read from a local copy of the [IMDb non-commercial
 datasets](https://developer.imdb.com/non-commercial-datasets/). Those
 five files are the whole source. A reader's request never crawls, never
-calls TMDb, and never writes the tables it reads — which is what stops a
-first search from returning a half-built map.
+calls TMDb to build a map, and never writes the tables it reads — which
+is what stops a first search from returning a half-built map.
 
 ## Running it
 
@@ -19,7 +19,7 @@ DATABASE_URL=postgres://user:pass@host:5432/cinedikt go run ./cmd/api
 | Flag | What it does |
 | --- | --- |
 | `-once` | one attempt, then exit. Without it the importer polls hourly |
-| `-posters-only` | fill posters and release dates against the live catalog, without importing |
+| `-posters-only` | fill posters, release dates and synopses against the live catalog, without importing |
 | `-keep` | leave the downloaded files on disk, for a development re-run |
 | `-dir` | where to put them |
 
@@ -77,8 +77,8 @@ catalog serving, which is the right way to lose.
 ## Posters and release dates
 
 The dump has no pictures and no month or day. One OMDb lookup per title
-stores the poster's address and the full date; the browser loads the
-image from Amazon, and the key never leaves the server.
+stores the poster's address, the full date and the plot; the browser
+loads the image from Amazon, and the key never leaves the server.
 
 That job is not part of an import. There are about 757,000 movies, so a
 full first pass takes hours at any polite rate and the catalog would
@@ -91,3 +91,24 @@ survives every future generation.
 A lookup that came back empty is still an answer, and is not asked
 again. Only a lookup that *failed* is retried, and not within the same
 run.
+
+## Synopses and trailers
+
+The poster pass asks OMDb for the full plot and keeps it with every
+answer, in `meta.synopses`. The synopsis job asks for the titles the
+poster pass answered before it kept plots (`omdb_at` is null), through
+the pass's own client, so the two share one rate limit and stop
+together on OMDb's daily limit. A title the pass has not answered yet
+is left to the pass. It takes the titles a reader has been shown first,
+then the films at or above `SYNOPSIS_SWEEP_MIN_VOTES`. TMDb's overview,
+which arrives free on the answers the TMDb jobs already save, fills in
+only where OMDb has no plot, never stops OMDb being asked, and is asked
+of OMDb again after 150 days.
+
+The trailer job fills `meta.trailers` for films with a TMDb id at or
+above `TRAILER_SWEEP_MIN_VOTES`, then re-asks a recent film's week-old
+"none", then anything older than 150 days. Whatever from TMDb is still
+there at 175 days, trailers and overviews alike, is deleted by a
+backstop that runs whatever credentials the runner has. The rest are looked up by
+`GET /api/trailers/{tconst}` the first time a reader opens the film.
+Both choose through `internal/trailer`, so either gives the same answer.

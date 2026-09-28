@@ -1,6 +1,7 @@
 -- meta is never renamed by the daily swap. It holds what must outlive a
 -- generation: the stamps that gate the next import, and the poster
--- addresses and release dates that cost an API call to learn.
+-- addresses, release dates, synopses and trailers that cost an API call
+-- to learn.
 
 CREATE SCHEMA IF NOT EXISTS meta;
 
@@ -162,6 +163,71 @@ CREATE TABLE IF NOT EXISTS meta.tmdb_queue (
 
 CREATE INDEX IF NOT EXISTS tmdb_queue_order
     ON meta.tmdb_queue (votes DESC, tconst);
+
+-- What a film is about, for the preview and the film panel. OMDb is the
+-- source: the poster pass stores the plot with every answer it saves, and
+-- the synopsis job asks for the titles that pass reached before it kept
+-- plots. TMDb's overview arrives free on answers other jobs already save,
+-- and fills in only where OMDb has nothing.
+--
+-- A null overview is an answer: nobody has a synopsis for that title. A
+-- 'tmdb' row is refreshed or dropped after 150 days, which TMDb's terms
+-- ask of anything cached from it; an 'omdb' row is kept.
+--
+-- omdb_at is when OMDb last answered for the title, whichever text is
+-- shown; null until it has been asked. It is what the synopsis job goes
+-- by, so an overview of TMDb's that arrived first never stops OMDb, the
+-- better source, from being asked.
+CREATE TABLE IF NOT EXISTS meta.synopses (
+    tconst     text PRIMARY KEY,
+    overview   text,
+    source     text NOT NULL CHECK (source IN ('omdb', 'tmdb')),
+    fetched_at timestamptz NOT NULL,
+    omdb_at    timestamptz
+);
+
+-- A database that made the table before the column. A no-op on a fresh
+-- one, so both paths end at the same shape.
+ALTER TABLE meta.synopses ADD COLUMN IF NOT EXISTS omdb_at timestamptz;
+
+-- The 'tmdb' rows in the order they come due.
+CREATE INDEX IF NOT EXISTS synopses_tmdb_age
+    ON meta.synopses (fetched_at) WHERE source = 'tmdb';
+
+-- The titles the synopsis job has still to ask OMDb about: the ones a
+-- reader has met (wanted_at), then the best known. Votes are copied here
+-- for the same reason tmdb_queue copies them.
+CREATE TABLE IF NOT EXISTS meta.synopsis_queue (
+    tconst    text PRIMARY KEY,
+    votes     int NOT NULL,
+    wanted_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS synopsis_queue_order
+    ON meta.synopsis_queue (wanted_at DESC NULLS LAST, votes DESC, tconst);
+
+-- The YouTube trailer a film plays in place, learned from TMDb's list of
+-- clips and checked against YouTube's oEmbed. Asked once and kept: the
+-- job fills it ahead of readers for the best known films, and the
+-- endpoint asks for the rest the first time somebody opens one.
+CREATE TABLE IF NOT EXISTS meta.trailers (
+    tconst      text PRIMARY KEY,
+    youtube_key text,          -- null: TMDb has no trailer that can be embedded
+    asked_at    timestamptz NOT NULL
+);
+
+-- The trailer job's re-asks, oldest first.
+CREATE INDEX IF NOT EXISTS trailers_asked ON meta.trailers (asked_at);
+
+-- The titles with a TMDb id that have not been asked for a trailer yet,
+-- in the order the trailer job walks them.
+CREATE TABLE IF NOT EXISTS meta.trailer_queue (
+    tconst text PRIMARY KEY,
+    votes  int NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS trailer_queue_order
+    ON meta.trailer_queue (votes DESC, tconst);
 
 -- The share card for one movie, rendered once and kept. Rendering is
 -- fonts, a poster fetch and a scale; a link pasted into a busy channel

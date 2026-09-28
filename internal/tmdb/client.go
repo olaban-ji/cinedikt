@@ -62,23 +62,55 @@ func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h
 // WithCache stores successful responses in cache and serves repeats from it.
 func WithCache(cache Cache) Option { return func(c *Client) { c.cache = cache } }
 
-// DefaultRatePerSecond is well under TMDb's stated ceiling of about 50
-// requests per second (the old 40-per-10-seconds limit was retired in
-// 2019); a crawl of a dozen calls completes in well under a second.
-const DefaultRatePerSecond = 40
+// DefaultRatePerSecond is half of what TMDb takes from one address.
+// TMDb counts about 40 requests a second per IP, not per key, so this is
+// the budget for every client in a process together: they share one
+// limiter (NewLimiter, WithLimiter) rather than each spending a full one.
+// The other half is room for a deploy, when the container being replaced
+// and its successor both run for a few seconds, and for retries.
+const DefaultRatePerSecond = 20
 
-// WithRateLimit overrides the default request rate.
+// DefaultBurst is how many requests may go at once after a quiet spell.
+// Small and fixed rather than a multiple of the rate, so a process that
+// has been quiet sends at most five requests at once, well inside what
+// TMDb takes from one address.
+const DefaultBurst = 5
+
+// NewLimiter is the one limiter a process hands every TMDb client, so
+// the search fallback, the poster stand-in, the trailer lookup and every
+// background job draw on the same budget. A rate of zero or less takes
+// DefaultRatePerSecond.
+func NewLimiter(perSecond float64) *rate.Limiter {
+	if perSecond <= 0 {
+		perSecond = DefaultRatePerSecond
+	}
+	return rate.NewLimiter(rate.Limit(perSecond), DefaultBurst)
+}
+
+// WithLimiter makes the client wait on l, which other clients may share.
+// A nil l leaves the client's own.
+func WithLimiter(l *rate.Limiter) Option {
+	return func(c *Client) {
+		if l != nil {
+			c.limiter = l
+		}
+	}
+}
+
+// WithRateLimit gives the client a limiter of its own at this rate.
 func WithRateLimit(limit rate.Limit, burst int) Option {
 	return func(c *Client) { c.limiter = rate.NewLimiter(limit, burst) }
 }
 
-// New returns a client limited to DefaultRatePerSecond.
+// New returns a client with a limiter of its own at DefaultRatePerSecond.
+// A process with more than one client gives them all one limiter with
+// WithLimiter instead.
 func New(auth Auth, opts ...Option) *Client {
 	c := &Client{
 		http:    &http.Client{Timeout: 30 * time.Second},
 		baseURL: defaultBaseURL,
 		auth:    auth,
-		limiter: rate.NewLimiter(DefaultRatePerSecond, 2*DefaultRatePerSecond),
+		limiter: rate.NewLimiter(DefaultRatePerSecond, DefaultBurst),
 		cache:   noCache{},
 		sleep:   sleepCtx,
 	}
@@ -87,6 +119,10 @@ func New(auth Auth, opts ...Option) *Client {
 	}
 	return c
 }
+
+// Limiter is the budget this client waits on. It is exposed so a process
+// can check that every client it built draws on the same one.
+func (c *Client) Limiter() *rate.Limiter { return c.limiter }
 
 // Movie fetches a movie together with its full cast in one request.
 func (c *Client) Movie(ctx context.Context, id int) (*Movie, error) {

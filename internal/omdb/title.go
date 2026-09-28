@@ -10,26 +10,38 @@ import (
 )
 
 // Title is what OMDb knows that the IMDb datasets do not: the address of
-// a poster, and the day a film opened. The dump carries only a year.
+// a poster, the day a film opened, and what it is about. The dump carries
+// only a year.
 type Title struct {
 	Poster string
 	// Released is the full date. Zero when OMDb has only a year, or
 	// nothing at all.
 	Released time.Time
+	// Plot is the full synopsis, trimmed. Empty when OMDb has none.
+	Plot string
 }
 
-// Lookup reads the poster address and release date for an IMDb id.
+// titleCacheKey is where a lookup's body is kept. It names the plot
+// length asked for: a body cached before lookups asked for the full plot
+// holds the short one, and must not be served as the answer to this.
+func titleCacheKey(imdbID string) string { return "tf:" + imdbID }
+
+// Lookup reads the poster address, release date and full plot for an
+// IMDb id.
 //
-// It returns a Title and no error when OMDb answered but had neither: a
-// film with no poster is a fact worth storing, or it would be asked for
-// again every night forever.
+// It returns a Title and no error when OMDb answered but had none of
+// them: a film with no poster is a fact worth storing, or it would be
+// asked for again every night forever.
 func (c *Client) Lookup(ctx context.Context, imdbID string) (Title, error) {
 	if c.paused() {
 		return Title{}, ErrQuota
 	}
-	body, ok := c.cache.Get("t:" + imdbID)
+	key := titleCacheKey(imdbID)
+	body, ok := c.cache.Get(key)
 	if !ok {
-		fetched, err := c.get(ctx, url.Values{"i": {imdbID}}, imdbID)
+		// The whole plot, not the one-line summary: the film panel shows
+		// all of it, and the preview clamps it to six lines itself.
+		fetched, err := c.get(ctx, url.Values{"i": {imdbID}, "plot": {"full"}}, imdbID)
 		if err != nil {
 			return Title{}, err
 		}
@@ -43,11 +55,21 @@ func (c *Client) Lookup(ctx context.Context, imdbID string) (Title, error) {
 		return Title{}, err
 	}
 	if !ok {
-		if cerr := c.cache.Set("t:"+imdbID, body); cerr != nil {
+		if cerr := c.cache.Set(key, body); cerr != nil {
 			return t, nil // a cache that will not write is not a lookup failure
 		}
 	}
 	return t, nil
+}
+
+// ParsePlot reads OMDb's plot. "N/A" and an empty value are both no
+// synopsis at all.
+func ParsePlot(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "N/A" {
+		return ""
+	}
+	return raw
 }
 
 // posterIsSafe rejects any address that carries a key. OMDb also serves
@@ -87,6 +109,7 @@ func parseTitle(body []byte, asked string) (Title, error) {
 		Error    string `json:"Error"`
 		Poster   string `json:"Poster"`
 		Released string `json:"Released"`
+		Plot     string `json:"Plot"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return Title{}, fmt.Errorf("omdb: decode: %w", err)
@@ -110,6 +133,7 @@ func parseTitle(body []byte, asked string) (Title, error) {
 	if when, ok := ParseReleased(payload.Released); ok {
 		t.Released = when
 	}
+	t.Plot = ParsePlot(payload.Plot)
 	return t, nil
 }
 

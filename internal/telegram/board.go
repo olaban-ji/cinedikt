@@ -148,6 +148,10 @@ func busyHeadline(id string) string {
 		return "Checking backup posters"
 	case notify.JobTMDbIDs:
 		return "Matching films for search"
+	case notify.JobSynopses:
+		return "Filling in synopses"
+	case notify.JobTrailers:
+		return "Finding trailers"
 	default:
 		return "Colouring the opening screen"
 	}
@@ -306,6 +310,10 @@ func runningText(id string, j *job, w writer) string {
 		return "checking " + total + " films"
 	case notify.JobTMDbIDs:
 		return total + " films to match"
+	case notify.JobSynopses:
+		return total + " films to look up"
+	case notify.JobTrailers:
+		return "checking " + total + " films"
 	default:
 		return total + " films to colour"
 	}
@@ -335,6 +343,10 @@ func idleText(id string, j *job, w writer) string {
 		text += lately("found")
 	case notify.JobTMDbIDs:
 		text += lately("matched")
+	case notify.JobSynopses:
+		text += lately("added")
+	case notify.JobTrailers:
+		text += lately("found")
 	case notify.JobColours:
 		if j.LastErrors > 0 {
 			text += " · " + count(j.LastErrors) + " left without a colour"

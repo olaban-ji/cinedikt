@@ -239,3 +239,97 @@ func (c *memCache) Set(key string, body []byte) error {
 	c.m[key] = append([]byte(nil), body...)
 	return nil
 }
+
+func TestFindByIMDbKeepsTheOverviewTrimmed(t *testing.T) {
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"movie_results":[{"id":603,"overview":"  A hacker learns the truth.\n "}]}`))
+	})
+	got, err := c.FindByIMDb(context.Background(), "tt0133093")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Overview != "A hacker learns the truth." {
+		t.Errorf("overview = %q", got.Overview)
+	}
+}
+
+func TestVideosReadsEveryClip(t *testing.T) {
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/movie/603/videos" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		w.Write([]byte(`{"id":603,"results":[
+			{"key":"vKQi3bBA1y8","site":"YouTube","type":"Trailer","official":true,"iso_639_1":"EN","published_at":"2014-10-02T19:00:25.000Z","name":"Trailer"},
+			{"key":"abc","site":"Vimeo","type":"Teaser","official":false,"iso_639_1":"fr","published_at":"","name":"Teaser"}
+		]}`))
+	})
+	got, err := c.Videos(context.Background(), 603)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("videos = %+v", got)
+	}
+	first := got[0]
+	if first.Key != "vKQi3bBA1y8" || first.Site != "YouTube" || first.Type != "Trailer" || !first.Official || first.Language != "en" {
+		t.Errorf("first = %+v", first)
+	}
+	if want := time.Date(2014, 10, 2, 19, 0, 25, 0, time.UTC); !first.Published.Equal(want) {
+		t.Errorf("published = %v, want %v", first.Published, want)
+	}
+	if !got[1].Published.IsZero() {
+		t.Errorf("an empty date was read as %v", got[1].Published)
+	}
+	if _, err := c.Videos(context.Background(), 0); err == nil {
+		t.Error("a zero id was sent to TMDb")
+	}
+}
+
+// TestClientsGivenOneLimiterShareIt is the rule every process now keeps:
+// TMDb counts requests per address, so two clients with a limiter each
+// would spend twice the budget between them. With one limiter, what one
+// client spends the other cannot.
+func TestClientsGivenOneLimiterShareIt(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(`{"movie_results":[{"id":603}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	// Two tokens, and the next one an hour away.
+	shared := rate.NewLimiter(rate.Every(time.Hour), 2)
+	a := New(Auth{APIKey: "k"}, WithBaseURL(srv.URL), WithLimiter(shared))
+	b := New(Auth{APIKey: "k"}, WithBaseURL(srv.URL), WithLimiter(shared))
+	if a.Limiter() != shared || b.Limiter() != shared {
+		t.Fatal("a client did not keep the limiter it was given")
+	}
+	if _, err := a.FindByIMDb(context.Background(), "tt0133093"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.FindByIMDb(context.Background(), "tt0234215"); err != nil {
+		t.Fatal(err)
+	}
+	// Both tokens are spent, by two different clients. A third call from
+	// either has to wait an hour, which the deadline refuses at once.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := a.FindByIMDb(ctx, "tt0111161"); err == nil {
+		t.Error("the first client still had a budget of its own")
+	}
+	if hits.Load() != 2 {
+		t.Errorf("TMDb was asked %d times, want 2", hits.Load())
+	}
+}
+
+func TestTheDefaultLimiterIsTheProcessBudget(t *testing.T) {
+	l := NewLimiter(0)
+	if l.Limit() != DefaultRatePerSecond || l.Burst() != DefaultBurst {
+		t.Errorf("default limiter = %v/s burst %d, want %v/s burst %d", l.Limit(), l.Burst(), DefaultRatePerSecond, DefaultBurst)
+	}
+	if l := NewLimiter(7); l.Limit() != 7 || l.Burst() != DefaultBurst {
+		t.Errorf("limiter = %v/s burst %d, want 7/s burst %d", l.Limit(), l.Burst(), DefaultBurst)
+	}
+	if c := New(Auth{APIKey: "k"}, WithLimiter(nil)); c.Limiter() == nil {
+		t.Error("a nil limiter took the client's own away")
+	}
+}

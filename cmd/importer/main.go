@@ -34,7 +34,7 @@ func main() {
 // its last message before the process ends.
 func run() int {
 	once := flag.Bool("once", false, "run a single attempt and exit")
-	postersOnly := flag.Bool("posters-only", false, "fill in posters and release dates against the live catalog, and do not import")
+	postersOnly := flag.Bool("posters-only", false, "fill in posters, release dates and synopses against the live catalog, and do not import")
 	dir := flag.String("dir", "", "where to keep the downloaded files (default: a temp directory)")
 	keep := flag.Bool("keep", false, "leave the downloaded files on disk (for development)")
 	flag.Parse()
@@ -78,21 +78,25 @@ func run() int {
 		// Its own pool already, opened above at ImporterMaxConns. The
 		// URL is still needed: the lease lives on a connection of its
 		// own, outside any pool.
-		Store:         store,
-		DatabaseURL:   cfg.DatabaseURL,
-		Logger:        logger,
-		Dir:           *dir,
-		OMDbKey:       cfg.OMDBAPIKey,
-		BackfillRate:  cfg.OMDbBackfillRate,
-		PosterWorkers: cfg.PosterWorkers,
+		Store:                 store,
+		DatabaseURL:           cfg.DatabaseURL,
+		Logger:                logger,
+		Dir:                   *dir,
+		OMDbKey:               cfg.OMDBAPIKey,
+		BackfillRate:          cfg.OMDbBackfillRate,
+		PosterWorkers:         cfg.PosterWorkers,
+		SynopsisSweepMinVotes: cfg.SynopsisSweepMinVotes,
 		TMDbAuth: tmdb.Auth{
 			APIKey:      cfg.TMDBAPIKey,
 			AccessToken: cfg.TMDBAccessToken,
 		},
-		TMDbRate:          cfg.TMDBRatePerSecond,
-		TMDbSweepMinVotes: cfg.TMDbSweepMinVotes,
-		Keep:              *keep,
-		Notify:            sink,
+		// This process's one TMDb budget. The runner's jobs are its
+		// only TMDb callers, and they all wait on it.
+		TMDbLimiter:          tmdb.NewLimiter(cfg.TMDBRatePerSecond),
+		TMDbSweepMinVotes:    cfg.TMDbSweepMinVotes,
+		TrailerSweepMinVotes: cfg.TrailerSweepMinVotes,
+		Keep:                 *keep,
+		Notify:               sink,
 	}
 
 	switch {
