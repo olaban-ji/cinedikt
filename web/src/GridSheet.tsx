@@ -11,6 +11,7 @@ import {
 import { genreLine, initialsFor, type GridFilm, type GridPayload, type GridPerson } from './grid';
 import { stillNow } from './motion';
 import { personColour } from './personColour';
+import { PersonFace } from './PersonFace';
 import { PosterImage } from './PosterImage';
 import { hueOf, posterFallback, sheetPosterPx } from './poster';
 import { useScreen } from './screen';
@@ -33,6 +34,9 @@ import { TRAILER_OPEN_MS, escapeCloses, isFor, videoHeight, type Play } from './
 interface Props {
   film: GridFilm;
   payload: GridPayload;
+  /** A person's photo, from the payload or asked for since; undefined
+   *  while there is none to show. */
+  photoOf: (p: GridPerson) => string | undefined;
   onOnly: (personId: string) => void;
   onRemap: (film: GridFilm) => void;
   onClose: () => void;
@@ -52,7 +56,7 @@ interface Props {
  *  It arrives and leaves under its own power. Whatever it was asked to
  *  do — narrow the map, map another film — waits until it is gone, so
  *  nothing ever changes underneath a sheet that is still on the way out. */
-export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer, player }: Props) {
+export function GridSheet({ film, payload, photoOf, onOnly, onRemap, onClose, closer, player }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const screen = useScreen();
   const { phone } = screen;
@@ -295,9 +299,7 @@ export function GridSheet({ film, payload, onOnly, onRemap, onClose, closer, pla
                   {/* Round whatever the role: the line beside it already
                       says who directed, so only the swatches, which have
                       no words next to them, need the shape to say it. */}
-                  <span className="cd-sheet-initials" aria-hidden="true">
-                    {codes.get(p.id) ?? '?'}
-                  </span>
+                  <PersonFace photo={photoOf(p)} code={codes.get(p.id) ?? '?'} size="sheet" square={false} />
                   <span className="cd-sheet-person-text">
                     <span className="cd-sheet-name">{p.name}</span>
                     <span className="cd-sheet-role">{roleLine(p, payload.anchor.title)}</span>
@@ -558,7 +560,7 @@ export function SheetSynopsis({
 }
 
 /** Whose map this is. The searched film is not connected to itself. */
-export function headingFor(film: GridFilm, anchorTitle: string): string {
+export function headingFor(film: Pick<GridFilm, 'isAnchor'>, anchorTitle: string): string {
   return film.isAnchor ? 'Its cast and directors' : `Connected to ${anchorTitle} through`;
 }
 

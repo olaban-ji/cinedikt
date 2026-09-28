@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import css from './grid.css?raw';
 import {
   PREVIEW_EDGE,
+  PREVIEW_FLOAT_CLEAR,
+  PREVIEW_FLOAT_CLEAR_TOUCH,
   PREVIEW_GAP,
   PREVIEW_LEAVE_MS,
   PREVIEW_LEAVE_PLAYING_MS,
@@ -22,10 +24,12 @@ import {
   leaveDelay,
   placePreview,
   previewBounds,
+  previewFloatClear,
   restDelay,
   type MapView,
   type PreviewNow,
 } from './preview';
+import { screenOf } from './screen';
 import { PLAYER, TRAILER_CLOSE_MS, TRAILER_OPEN_MS, videoHeight, wellHeight } from './trailer';
 
 /** The declarations of every rule with exactly this selector, @media
@@ -55,7 +59,11 @@ const PLOT_H = 20000;
  *  under the 114px header. */
 const wide: MapView = { scrollLeft: 0, scrollTop: 1000, clientWidth: 1440, clientHeight: 786 };
 const RAIL = 72;
-const at = (view: MapView, loose = false) => previewBounds(view, RAIL, 0, 0, loose);
+const at = (view: MapView, loose = false) => previewBounds(view, RAIL, 0, 0, PREVIEW_FLOAT_CLEAR, loose);
+/** The same on a screen sized for a finger, whose floating buttons are
+ *  46px tall. */
+const atTouch = (view: MapView, loose = false) =>
+  previewBounds(view, RAIL, 0, 0, PREVIEW_FLOAT_CLEAR_TOUCH, loose);
 
 describe('the room a preview has', () => {
   it('starts past the year rail and stops short of the right edge', () => {
@@ -65,11 +73,38 @@ describe('the room a preview has', () => {
     expect(at({ ...wide, scrollLeft: 300 }).x0).toBe(300 + RAIL + 4);
   });
 
-  it('keeps below the pinned rating axis and above the bottom edge', () => {
+  it('keeps below the pinned rating axis and above the strip View and Recenter float in', () => {
     const b = at(wide);
     expect(PREVIEW_TOP).toBe(26 + 8);
     expect(b.vt).toBe(1000 + 34);
-    expect(b.vb).toBe(1000 + 786 - 12);
+    expect(b.vb).toBe(1000 + 786 - 68);
+  });
+
+  it('takes the strip as the buttons’ 16px offset, their height and 10px clear', () => {
+    expect(PREVIEW_FLOAT_CLEAR).toBe(16 + 42 + 10);
+    expect(PREVIEW_FLOAT_CLEAR_TOUCH).toBe(16 + 46 + 10);
+    expect(previewFloatClear(false)).toBe(68);
+    expect(previewFloatClear(true)).toBe(72);
+  });
+
+  it('takes the taller strip wherever the buttons are a finger’s size', () => {
+    // A desktop with a mouse has 42px buttons; a tablet with a trackpad,
+    // and a desktop-wide screen with a coarse pointer, have 46px ones.
+    expect(previewFloatClear(screenOf(1440, 900).touch)).toBe(68);
+    expect(previewFloatClear(screenOf(1366, 768).touch)).toBe(68);
+    expect(previewFloatClear(screenOf(1180, 820).touch)).toBe(68);
+    expect(previewFloatClear(screenOf(1023, 768).touch)).toBe(72);
+    expect(previewFloatClear(screenOf(1366, 1024, true).touch)).toBe(72);
+    expect(previewFloatClear(screenOf(1280, 480).touch)).toBe(72);
+    expect(atTouch(wide).vb).toBe(1000 + 786 - 72);
+  });
+
+  it('keeps its sides where they were: the strip is only along the bottom', () => {
+    for (const b of [at(wide), atTouch(wide)]) {
+      expect(b.x0).toBe(RAIL + PREVIEW_RAIL_GAP);
+      expect(b.x1).toBe(1440 - PREVIEW_EDGE);
+      expect(b.vt).toBe(1000 + PREVIEW_TOP);
+    }
   });
 
   it('may rise over the axis once a trailer needs the room', () => {
@@ -81,12 +116,12 @@ describe('the room a preview has', () => {
   it('keeps below a header lying over the map while it shows, and not once it has gone up', () => {
     // A phone's plot starts 116px down the scroller, under the header.
     const phone: MapView = { scrollLeft: 0, scrollTop: 1000, clientWidth: 390, clientHeight: 844 };
-    const shown = previewBounds(phone, 52, 116, 116);
-    const away = previewBounds(phone, 52, 116, 0);
+    const shown = previewBounds(phone, 52, 116, 116, PREVIEW_FLOAT_CLEAR_TOUCH);
+    const away = previewBounds(phone, 52, 116, 0, PREVIEW_FLOAT_CLEAR_TOUCH);
     // On screen: 34 below the header's foot, or 34 below the top.
     expect(shown.vt - (1000 - 116)).toBe(116 + 34);
     expect(away.vt - (1000 - 116)).toBe(34);
-    expect(shown.vb).toBe(1000 - 116 + 844 - 12);
+    expect(shown.vb).toBe(1000 - 116 + 844 - 72);
   });
 });
 
@@ -147,8 +182,9 @@ describe('which way a preview grows', () => {
   });
 
   it('grows down in a short window when there is more room below than above', () => {
-    // 924×540: the scroller is 418 tall under the header.
-    const short = at({ ...wide, clientWidth: 924, clientHeight: 418 });
+    // 924×600: the scroller is 478 tall under the header, and the
+    // floating buttons are a finger's size.
+    const short = atTouch({ ...wide, clientWidth: 924, clientHeight: 478 });
     const high = placePreview({ left: 300, top: 1000 + 150 }, CARD, short, PLOT_H);
     expect(high.top).toBe(1150);
     const low = placePreview({ left: 300, top: 1000 + 220 }, CARD, short, PLOT_H);
@@ -160,7 +196,7 @@ describe('which way a preview grows', () => {
     expect(p.top).toBe(b.vt);
   });
 
-  it('keeps its bottom above the edge for a card partly below it', () => {
+  it('keeps its bottom above the floating buttons’ strip for a card reaching into it', () => {
     const p = placePreview({ left: 648, top: b.vb - 40 }, CARD, b, PLOT_H);
     expect(p.bottom).toBe(PLOT_H - b.vb);
   });
@@ -176,7 +212,7 @@ describe('holdInside', () => {
     expect(holdInside(up, 200, b, PLOT_H)).toBe(up);
   });
 
-  it('moves one growing down past the bottom edge back up, no higher than the axis allows', () => {
+  it('moves one growing down into the floating buttons’ strip back up, no higher than the axis allows', () => {
     const p = holdInside({ x: 0, side: 1, top: b.vt + 150, bottom: null }, 264.1875, b, PLOT_H);
     expect(p.top).toBe(Math.floor(b.vb - 264.1875));
     expect(p.top! + 264.1875).toBeLessThanOrEqual(b.vb);
@@ -197,10 +233,11 @@ describe('fitTrailer', () => {
   // The preview at 1440 with a three-line synopsis, and with six.
   const THREE = 203.4375;
   const SIX = THREE + 3 * SYN_LINE_H;
-  /** A scroller `h` tall, scrolled to 1000. */
+  /** A tablet's scroller `h` tall, scrolled to 1000, whose floating
+   *  buttons are a finger's size. */
   const room = (h: number) => {
     const view = { ...wide, clientWidth: 924, clientHeight: h };
-    return [at(view), at(view, true)] as const;
+    return [atTouch(view), atTouch(view, true)] as const;
   };
   const now = (height: number, y0: number, synH: number | null = height - THREE + 3 * SYN_LINE_H): PreviewNow => ({
     y0,
@@ -219,7 +256,7 @@ describe('fitTrailer', () => {
   });
 
   it('first glides its top up, just far enough', () => {
-    // 1180×820: room for the grown box, but not from where it is.
+    // 924×828: room for the grown box, but not from where it is.
     const [strict, loose] = room(706);
     const fit = fitTrailer(now(THREE, 1400), strict, loose);
     expect(fit.synLines).toBeNull();
@@ -228,9 +265,11 @@ describe('fitTrailer', () => {
   });
 
   it('then rises over the pinned axis, in a short window', () => {
-    // 924×540: 372 between the axis and the bottom edge is too little
-    // for the grown box; 398 from 8px down is enough.
-    const [strict, loose] = room(418);
+    // 924×600: 372 between the axis and the floating buttons' strip is
+    // too little for the grown box; 398 from 8px down is enough.
+    const [strict, loose] = room(478);
+    expect(strict.vb - strict.vt).toBe(372);
+    expect(strict.vb - loose.vt).toBe(398);
     expect(strict.vb - strict.vt).toBeLessThan(THREE + GROW);
     expect(strict.vb - loose.vt).toBeGreaterThanOrEqual(THREE + GROW);
     const fit = fitTrailer(now(THREE, 1164), strict, loose);
@@ -241,8 +280,8 @@ describe('fitTrailer', () => {
   });
 
   it('then folds the synopsis to as many whole lines as fit', () => {
-    // Six lines do not fit even over the axis at 924×540; three do.
-    const [strict, loose] = room(418);
+    // Six lines do not fit even over the axis at 924×600; three do.
+    const [strict, loose] = room(478);
     const fit = fitTrailer(now(SIX, 1164, SYN_LINES * SYN_LINE_H), strict, loose);
     expect(fit.synLines).toBe(3);
     const grown = SIX - SYN_LINES * SYN_LINE_H + 3 * SYN_LINE_H + GROW;
@@ -251,7 +290,7 @@ describe('fitTrailer', () => {
   });
 
   it('then folds it away entirely, taking back the gap it sat in', () => {
-    const [strict, loose] = room(360);
+    const [strict, loose] = room(420);
     const fit = fitTrailer(now(THREE, 1100, 3 * SYN_LINE_H), strict, loose);
     expect(fit.synLines).toBe(0);
     const grown = THREE - 3 * SYN_LINE_H - SYN_GAP + GROW;
@@ -282,10 +321,10 @@ describe('fitTrailer', () => {
     expect(seen).toEqual(['as it is', 'glide', 'over the axis', 'synopsis lines', 'no synopsis']);
   });
 
-  it('never leaves the grown box past the bottom edge while it can help it', () => {
+  it('never leaves the grown box in the floating buttons’ strip while it can help it', () => {
     // Down to the shortest window the box fits at with its synopsis
-    // folded away: 8px above it, 12px below.
-    const least = Math.ceil(THREE - 3 * SYN_LINE_H - SYN_GAP + GROW + PREVIEW_TOP_LOOSE + PREVIEW_EDGE);
+    // folded away: 8px above it, and the floating buttons' strip below.
+    const least = Math.ceil(THREE - 3 * SYN_LINE_H - SYN_GAP + GROW + PREVIEW_TOP_LOOSE + PREVIEW_FLOAT_CLEAR_TOUCH);
     for (let h = 900; h >= least; h -= 3) {
       const [strict, loose] = room(h);
       for (const [height, synH] of [
@@ -296,6 +335,83 @@ describe('fitTrailer', () => {
         const folded = fit.synLines == null ? height : height - synH + (fit.synLines ? fit.synLines * SYN_LINE_H : -SYN_GAP);
         expect(fit.top + folded + GROW, `${h}`).toBeLessThanOrEqual(strict.vb);
         expect(fit.top, `${h}`).toBeGreaterThanOrEqual(loose.vt);
+      }
+    }
+  });
+});
+
+describe('the strip View and Recenter float in', () => {
+  // The desktop windows the handoff checks by hand, and a shorter one,
+  // under the 114px header; and a tablet with a trackpad, under its
+  // 122px one, where a pointer can rest on a card and the buttons are a
+  // finger's size.
+  const windows = [
+    { name: '1366×768', view: { ...wide, clientWidth: 1366, clientHeight: 654 }, clear: previewFloatClear(false) },
+    { name: '1440×900', view: wide, clear: previewFloatClear(false) },
+    { name: '1280×600', view: { ...wide, clientWidth: 1280, clientHeight: 486 }, clear: previewFloatClear(false) },
+    { name: '924×828', view: { ...wide, clientWidth: 924, clientHeight: 706 }, clear: previewFloatClear(true) },
+  ];
+  /** A card near the map's right edge, whose preview, to its right, ends
+   *  50px from that edge, over Recenter's pill, which sits 16px in. */
+  const nearRight = (view: MapView, top: number) => ({
+    left: view.clientWidth - 50 - PREVIEW_W - PREVIEW_GAP - CARD.cardW,
+    top,
+  });
+  // The preview at 1440 with three lines of synopsis and no faces, and
+  // with six and the row of faces under its head.
+  const SMALL = 203.4375;
+  const TALL = SMALL + 3 * SYN_LINE_H + 42;
+  const shapes = [
+    { height: SMALL, synH: 3 * SYN_LINE_H },
+    { height: TALL, synH: SYN_LINES * SYN_LINE_H },
+  ];
+  const GROW = wellHeight('preview', videoHeight(PREVIEW_W)) - PLAYER.preview.pad;
+
+  it('holds the preview of a card whose top is in the map’s bottom 300px by its bottom, at vb', () => {
+    for (const { name, view, clear } of windows) {
+      const b = previewBounds(view, RAIL, 0, 0, clear);
+      const foot = view.scrollTop + view.clientHeight;
+      for (let top = foot - 300; top < foot; top++) {
+        const p = placePreview(nearRight(view, top), CARD, b, PLOT_H);
+        expect(p.x + PREVIEW_W, `${name}, ${top}`).toBe(view.clientWidth - 50);
+        expect(p.top, `${name}, ${top}`).toBeNull();
+        // Its bottom is the card's, or vb for a card reaching past it:
+        // never in the strip.
+        const end = PLOT_H - p.bottom!;
+        expect(end, `${name}, ${top}`).toBe(Math.min(top + CARD.cardH, b.vb));
+        expect(foot - end, `${name}, ${top}`).toBeGreaterThanOrEqual(clear);
+        if (top + CARD.cardH >= b.vb) expect(end, `${name}, ${top}`).toBe(b.vb);
+        // And there it stays once its height is known, unless the room
+        // above is too little for it, when it is held by its top instead,
+        // still ending above the strip.
+        for (const { height } of shapes) {
+          const held = holdInside(p, height, b, PLOT_H);
+          if (end - height >= b.vt) expect(held, `${name}, ${top}`).toBe(p);
+          else expect(held.top! + height, `${name}, ${top}`).toBeLessThanOrEqual(b.vb);
+        }
+      }
+    }
+  });
+
+  it('never lets the box end below vb, with its trailer open or not', () => {
+    for (const { name, view, clear } of windows) {
+      const strict = previewBounds(view, RAIL, 0, 0, clear);
+      const loose = previewBounds(view, RAIL, 0, 0, clear, true);
+      const foot = view.scrollTop + view.clientHeight;
+      for (let top = view.scrollTop - CARD.cardH; top < foot; top += 5) {
+        for (const { height, synH } of shapes) {
+          const place = holdInside(placePreview(nearRight(view, top), CARD, strict, PLOT_H), height, strict, PLOT_H);
+          const y0 = place.top ?? PLOT_H - place.bottom! - height;
+          expect(y0 + height, `${name}, ${top}`).toBeLessThanOrEqual(strict.vb);
+          const fit = fitTrailer({ y0, height, grow: GROW, synH }, strict, loose);
+          const folded =
+            fit.synLines == null ? height : height - synH + (fit.synLines ? fit.synLines * SYN_LINE_H : -SYN_GAP);
+          const end = fit.top + folded + GROW;
+          expect(end, `${name}, ${top}`).toBeLessThanOrEqual(strict.vb);
+          // So the player ends 10px above the buttons' tops, 16 + their
+          // height up from the foot.
+          expect(foot - (clear - 10) - end, `${name}, ${top}`).toBeGreaterThanOrEqual(10);
+        }
       }
     }
   });

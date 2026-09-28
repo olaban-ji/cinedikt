@@ -168,8 +168,11 @@ describe('the theme tokens', () => {
     ]);
     // Set by the very rule that reads it: the sheet's wash is an oklch()
     // made from --h, which has to live in a custom property to ship as
-    // written, and has one value per theme.
-    const local = new Set(['--wash']);
+    // written, and has one value per theme. A person's face is the same
+    // drawing at three sizes: .cd-face and its parts read the size, the
+    // photo's inset, the director's corner and the fade, which the face's
+    // own rules set (.cd-face-chip and the rest).
+    const local = new Set(['--wash', '--face', '--face-inset', '--face-r', '--face-fade']);
     const used = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]));
     const missing = [...used].filter((v) => !defined.has(v) && !inline.has(v) && !local.has(v));
     expect(missing).toEqual([]);

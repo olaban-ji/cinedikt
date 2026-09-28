@@ -10,7 +10,7 @@ import {
   type RefObject,
 } from 'react';
 import { NO_APP_SCROLL, useHeaderAway, type AppScroll } from './overHeader';
-import { fetchGrid, fetchGridFilms, searchMovies, type SearchHit } from './api';
+import { fetchGrid, fetchGridFilms, fetchPeoplePhotos, searchMovies, type SearchHit } from './api';
 import { gridCache } from './gridCache';
 import { capture } from './analytics';
 import { EAGER_TILES, coldScreenCount, tilesFrom, type FirstRunFilm } from './firstRun';
@@ -34,11 +34,14 @@ import {
   yearCounts,
   type GridFilm,
   type GridPayload,
+  type GridPerson,
   type GridSettings,
 } from './grid';
 import { GridMap, openingBox } from './GridMap';
 import { GridSheet } from './GridSheet';
 import { PeopleChips, filmCounts } from './PeopleChips';
+import { PersonCard } from './PersonCard';
+import { useFaceCard, warmBigPhotos } from './faceCard';
 import { NOTHING_SHOWN, assignHues, nextShown } from './personColour';
 import { Wordmark } from './Wordmark';
 import { ViewPanel } from './ViewPanel';
@@ -50,7 +53,7 @@ import { Progress, useProgress } from './Progress';
 import { isSearchShortcut, isTyping, searchPlaceholder } from './search';
 import { Toast, useToast } from './Toast';
 import { usePlayer } from './TrailerRow';
-import { hideEmptyToast } from './quickSwitch';
+import { dimsCards, hideEmptyToast } from './quickSwitch';
 import { filmPath, movieIdFromPath, routeFrom, usePageTitle } from './movieParam';
 import {
   applyFilters,
@@ -222,6 +225,40 @@ function warmShareCard(id: string, version: string | undefined) {
     priority: 'low',
     credentials: 'omit',
   } as RequestInit).catch(() => {});
+}
+
+/** Asks, once per map, for the photos of the people it arrived without.
+ *  The payload cannot say why one is missing (not looked up yet, none on
+ *  TMDb, or an answer too old to send); the photos endpoint can. Nobody
+ *  missing, nothing asked. Each answer is handed to `onSome` as it comes
+ *  (see fetchPeoplePhotos); `signal` is the map going. */
+export function askForMissingPhotos(
+  payload: Pick<GridPayload, 'people'>,
+  signal: AbortSignal,
+  onSome: (some: Record<string, string | null>) => void,
+  fetcher: typeof fetchPeoplePhotos = fetchPeoplePhotos,
+): void {
+  const missing = payload.people.filter((p) => !p.photo).map((p) => p.id);
+  if (missing.length === 0) return;
+  void fetcher(missing, signal, onSome);
+}
+
+/** The header's classes: ruled off over a map (`map`), lying over it on
+ *  a small screen (`over`) and gone up out of the way (`away`). While
+ *  the search field has the focus (`searching`) it stands over the
+ *  blur behind a playing preview trailer (.cd-header-searching). */
+export function headerClass({
+  map,
+  over,
+  away,
+  searching,
+}: {
+  map: boolean;
+  over: boolean;
+  away: boolean;
+  searching: boolean;
+}): string {
+  return `cd-header${map ? ' cd-header-map' : ''}${over ? ' cd-header-over' : ''}${away ? ' cd-header-away' : ''}${searching ? ' cd-header-searching' : ''}`;
 }
 
 /** Where the reader's view preferences live between visits. Filters
@@ -672,6 +709,50 @@ export function GridApp() {
   // how many of someone's films the map holds.
   const counts = useMemo(() => (payload ? filmCounts(payload) : new Map<string, number>()), [payload]);
 
+  // The photos of the people a map came without, as they are found. Kept
+  // beside the payload rather than folded into its people: a new payload
+  // lays the whole map out again. A person's photo is the same on every
+  // map, so what is found is kept for the visit.
+  const [photos, setPhotos] = useState<ReadonlyMap<string, string>>(new Map());
+  useEffect(() => {
+    if (!payload) return;
+    const ctrl = new AbortController();
+    askForMissingPhotos(payload, ctrl.signal, (some) =>
+      setPhotos((was) => {
+        const next = new Map(was);
+        // A null is TMDb having no photo, which is the same as no answer:
+        // the initials stay.
+        for (const [id, url] of Object.entries(some)) if (url) next.set(id, url);
+        // Answers that add nothing, "none" or photos already in hand,
+        // redraw nothing.
+        return [...next].every(([id, url]) => was.get(id) === url) ? was : next;
+      }),
+    );
+    return () => ctrl.abort();
+  }, [payload]);
+  const photoOf = useCallback((p: GridPerson) => p.photo ?? photos.get(p.id), [photos]);
+
+  // The one bigger photo of a person for the page, asked for by a chip
+  // or by a face in the map's hover preview.
+  const faceCard = useFaceCard((id) => {
+    const p = payload?.people.find((q) => q.id === id);
+    return p && photoOf(p);
+  }, scrollerRef);
+  // It belongs to the map it was opened on, as does one on its way.
+  const shutFaceCard = faceCard.shut;
+  useEffect(() => shutFaceCard(), [movieId, shutFaceCard]);
+  const cardPerson = faceCard.card && payload?.people.find((p) => p.id === faceCard.card?.id);
+  const cardPhoto = cardPerson ? photoOf(cardPerson) : undefined;
+  // Once a card has opened on a map, everyone else's bigger photo is
+  // fetched too, so moving on to the next person swaps at once rather
+  // than leaving a gap while TMDb sends theirs. The first card on a map
+  // still waits for its own after the dwell.
+  const warmedBig = useRef(new Set<string>());
+  const cardOpen = faceCard.card != null;
+  useEffect(() => {
+    if (cardOpen && payload) warmBigPhotos(payload.people.map(photoOf), warmedBig.current);
+  }, [cardOpen, payload, photoOf]);
+
   const bounds = useMemo(
     () => (payload ? yearBounds(payload, settings.showUnrated) : { lo: 1900, hi: 2100 }),
     [payload, settings.showUnrated],
@@ -690,20 +771,23 @@ export function GridApp() {
   const openedFromPill = useRef(false);
 
   // The pill's ✕ clears what the pill says: the floor, when the pill is
-  // where the floor is shown, and the year window. Hiding the empty
-  // years is a preference the pill does not speak for, so it is left.
+  // where the floor is shown, the year window and the genres. Hiding the
+  // empty years is a preference the pill does not speak for, so it is
+  // left.
   const clearPill = useCallback(() => {
     const was = settingsRef.current;
     const years = was.yearFrom != null || was.yearTo != null;
     const floor = rungsInView && was.minRating != null;
+    const genres = was.genres.length > 0;
     setSettings(withoutPill(was, rungsInView));
     // The toast about the floor goes with the floor, the same as picking
     // Any would take it.
     if (floor) toast.hide();
-    // Only the years move rows. A floor lights and dims in place, so
-    // there is nothing to put back in the middle.
+    // Only the years move the map. A floor or the genres light and dim
+    // in place, and with the empty years hidden their rows close up
+    // around the searched film, which stays where it is.
     if (years) setRelaid((n) => n + 1);
-    capture('filter_pill_cleared', { years, floor });
+    capture('filter_pill_cleared', { years, floor, genres });
     // The pill is about to unmount, so the focus has to go somewhere it
     // can be seen: the first chip, which is where the row starts.
     everyoneRef.current?.focus();
@@ -738,11 +822,11 @@ export function GridApp() {
   );
 
   // The quick "Hide empty years" switch beside View. It is offered while
-  // the chosen people or the rating floor are dimming cards, which is
-  // when a year can be empty, and only if turning it on would hide a
-  // year, or it is already on and so can be turned off from here.
+  // the chosen people, the rating floor or the genres are dimming cards,
+  // which is when a year can be empty, and only if turning it on would
+  // hide a year, or it is already on and so can be turned off from here.
   // Clearing the filters folds it away and leaves the setting as it was.
-  const filtering = selectedIdx.size > 0 || settings.minRating != null;
+  const filtering = dimsCards(settings, selectedIdx.size);
   const hidesSome = useMemo(
     () => payload != null && filtering && emptyYearCount(payload, settings, selectedIdx) > 0,
     [payload, filtering, settings, selectedIdx],
@@ -958,6 +1042,7 @@ export function GridApp() {
       settings.yearTo,
       settings.hideEmptyYears,
       settings.minRating,
+      settings.genres.join(','),
       [...selectedIdx].join(','),
     ].join('|'),
     appScroll,
@@ -1033,7 +1118,7 @@ export function GridApp() {
     <div className="cd-app" data-quick={quick || undefined}>
       <header
         ref={headerRef}
-        className={`cd-header${holdsChips ? ' cd-header-map' : ''}${overlay ? ' cd-header-over' : ''}${headerAway ? ' cd-header-away' : ''}`}
+        className={headerClass({ map: holdsChips, over: overlay, away: headerAway, searching })}
       >
         <div className="cd-header-row">
           {/* On a map, and only when there is a map to go back to. The
@@ -1090,9 +1175,13 @@ export function GridApp() {
             lit={lit}
             hovered={hovered}
             counts={counts}
+            photoOf={photoOf}
             onToggle={onToggle}
             onHover={setHovered}
             onClear={() => setPeople(new Set())}
+            onFace={faceCard.onFace}
+            offFace={faceCard.offFace}
+            hold={faceCard.hold}
             allRef={everyoneRef}
             lead={
               pillText ? (
@@ -1113,7 +1202,7 @@ export function GridApp() {
                     <button
                       type="button"
                       className="cd-filter-pill-x"
-                      aria-label={`Clear filters: ${pillText}`}
+                      aria-label="Clear these filters"
                       onClick={clearPill}
                     >
                       ✕
@@ -1156,6 +1245,9 @@ export function GridApp() {
           landing={landing}
           player={player}
           searchTyped={searchTyped}
+          photoOf={photoOf}
+          onFace={faceCard.onFace}
+          offFace={faceCard.offFace}
         />
       ) : error ? (
         <MapError
@@ -1198,6 +1290,7 @@ export function GridApp() {
         <GridSheet
           film={open}
           payload={payload}
+          photoOf={photoOf}
           onOnly={onOnly}
           onRemap={onRemap}
           onClose={() => setOpenId(null)}
@@ -1285,6 +1378,7 @@ export function GridApp() {
           perYear={perYear}
           anchorYear={payload?.anchor.year ?? 0}
           rangeEmpty={payload != null && rangeHoldsNone(payload, settings)}
+          payload={payload}
           onFloor={onFloor}
           theme={theme}
           onTheme={onTheme}
@@ -1300,6 +1394,17 @@ export function GridApp() {
               (pillRef.current ?? everyoneRef.current)?.focus();
             }
           }}
+        />
+      )}
+
+      {faceCard.card && cardPerson && cardPhoto && payload && (
+        <PersonCard
+          // Mounted afresh for each card, so each comes in from its edge.
+          key={`${faceCard.card.id}:${faceCard.card.from}`}
+          card={faceCard.card}
+          person={cardPerson}
+          photo={cardPhoto}
+          anchorTitle={payload.anchor.title}
         />
       )}
 
@@ -1441,10 +1546,10 @@ function flyerFace(card: HTMLElement, dressed: boolean): HTMLElement {
   const s = face.style;
   s.left = '0px';
   s.top = '0px';
-  // The plain face is the card as it stood, dimmed under a selection or
-  // a floor included, so the copy takes off at the card's own strength
-  // and brightens as the dressed face comes in over it. The dressed one
-  // starts from clear.
+  // The plain face is the card as it stood, dimmed under a selection, a
+  // floor or the genres included, so the copy takes off at the card's
+  // own strength and brightens as the dressed face comes in over it. The
+  // dressed one starts from clear.
   s.opacity = dressed ? '' : card.style.opacity;
   s.transform = '';
   s.transitionDelay = '';
@@ -1553,7 +1658,8 @@ function SearchField({
   /** What the empty field says (see searchPlaceholder). */
   placeholder: string;
   onPick: (id: string, title?: string) => void;
-  /** The header must not slide away from under a reader who is typing. */
+  /** The header must not slide away from under a reader who is typing,
+   *  nor lie under the blur behind a preview trailer (headerClass). */
   onFocusChange: (on: boolean) => void;
   /** Whether the field has text in it, for the map's hover preview. */
   onTyped: (typed: boolean) => void;
@@ -1802,7 +1908,9 @@ function RatingFilter({
  *  purpose: a row of identical bars reads as a loading bar, not as names
  *  that are about to arrive. */
 function ChipSkeletons() {
-  const widths = [96, 132, 164, 150, 124, 132, 134, 128];
+  // Each after "Everyone" has room for a face beside its name, so the
+  // row does not jump when the names arrive.
+  const widths = [96, 144, 176, 162, 136, 144, 146, 140];
   return (
     <div className="cd-chips cd-chips-loading" aria-hidden="true">
       {widths.map((w, i) => (

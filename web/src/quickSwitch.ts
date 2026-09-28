@@ -5,6 +5,13 @@ import type { ToastSpec } from './Toast';
 /** A settings update, the way GridApp's setSettings takes one. */
 type SettingsUpdate = (update: (was: GridSettings) => GridSettings) => void;
 
+/** Whether the chosen people, the rating floor or the genres are dimming
+ *  cards, which is when a year can be empty and so when the quick switch
+ *  is worth offering. `selected` is how many people are chosen. */
+export function dimsCards(settings: GridSettings, selected: number): boolean {
+  return selected > 0 || settings.minRating != null || settings.genres.length > 0;
+}
+
 /** What the toast says after the quick "Hide empty years" switch is
  *  flipped on a phone or short screen, where the switch is an icon with
  *  no words to say it. `hidden` is how many years turning it on takes

@@ -17,6 +17,7 @@ const narrowed = {
   yearFrom: 1999,
   yearTo: 2010,
   hideEmptyYears: true,
+  genres: ['Sci-Fi', 'Action'],
 };
 
 describe('freshFilters', () => {
@@ -27,13 +28,16 @@ describe('freshFilters', () => {
       yearFrom: null,
       yearTo: null,
       hideEmptyYears: false,
+      genres: [],
     });
   });
 
-  it('does not share its list between movies', () => {
+  it('does not share its lists between movies', () => {
     const a = freshFilters();
     a.people.push('nm0000001');
+    a.genres.push('Drama');
     expect(freshFilters().people).toEqual([]);
+    expect(freshFilters().genres).toEqual([]);
   });
 });
 
@@ -67,9 +71,42 @@ describe('filtersFromState', () => {
           yearFrom: '1999',
           yearTo: 1999.5,
           hideEmptyYears: 'yes',
+          genres: ['Sci-Fi', 'sci-fi', 7, 'Sci-Fi', 'Film-Noir', '<b>', 'Drama; DROP'],
         },
       }),
-    ).toEqual({ ...freshFilters(), people: ['nm0000206'] });
+    ).toEqual({ ...freshFilters(), people: ['nm0000206'], genres: ['Sci-Fi', 'Film-Noir'] });
+  });
+
+  it('keeps no more genres than IMDb has', () => {
+    const many = Array.from({ length: 40 }, (_, i) => `Genre${String.fromCharCode(97 + (i % 26))}${i >= 26 ? 'x' : ''}`);
+    expect(filtersFromState({ filters: { genres: many } }).genres).toHaveLength(28);
+  });
+});
+
+describe('the genres', () => {
+  it('start clear on a movie opened forward, and come back in pick order on Back', () => {
+    // Genres picked on The Matrix, stamped on its entry as they changed.
+    const prefs = preferencesFrom(null);
+    const picked = applyFilters(prefs, { ...freshFilters(), genres: ['Sci-Fi', 'Action'] });
+    const left = stampFilters({ movie: 'tt0133093', depth: 1 }, filtersOf(picked, []));
+    // Another movie opens clear.
+    const opened = forwardEntry('tt0137523', 2);
+    expect(applyFilters(picked, filtersFromState(opened)).genres).toEqual([]);
+    // Back to The Matrix puts them back, in the order they were picked.
+    expect(applyFilters(prefs, filtersFromState(left)).genres).toEqual(['Sci-Fi', 'Action']);
+  });
+
+  it('are copied onto the entry, so a later pick does not rewrite history', () => {
+    const genres = ['Drama'];
+    const stamped = stampFilters({ depth: 1 }, { ...freshFilters(), genres });
+    genres.push('War');
+    expect(filtersFromState(stamped).genres).toEqual(['Drama']);
+  });
+
+  it('are never kept with the preferences', () => {
+    const prefs = preferencesFrom(JSON.stringify({ yearOrder: 'newest', genres: ['Drama'] }));
+    expect(prefs.genres).toEqual([]);
+    expect(viewPrefs(applyFilters(prefs, narrowed))).not.toHaveProperty('genres');
   });
 });
 

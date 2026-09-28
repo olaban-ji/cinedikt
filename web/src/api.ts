@@ -286,10 +286,18 @@ const NCONST = /^nm\d+$/;
  *  server says are pending are asked about again after each of
  *  PHOTO_ASK_AGAIN_MS, until none are. `signal` is the caller going
  *  away: the asking stops, and the promise settles on what is known by
- *  then. */
+ *  then.
+ *
+ *  The promise settles only after the last attempt, which can be some
+ *  fifteen seconds away while anybody is pending, and a photo that has
+ *  been found should not wait for that. So `onSome` is handed the answers
+ *  as they come: the ones already known, at once, and then each
+ *  response's own, found photos and nulls alike. A response that answers
+ *  for nobody, everyone in it still pending, hands on nothing. */
 export async function fetchPeoplePhotos(
   ids: string[],
   signal?: AbortSignal,
+  onSome?: (some: Record<string, string | null>) => void,
 ): Promise<Record<string, string | null>> {
   const out: Record<string, string | null> = {};
   let asking: string[] = [];
@@ -299,6 +307,7 @@ export async function fetchPeoplePhotos(
     else if (NCONST.test(id)) asking.push(id);
   }
   const stop = signal ?? new AbortController().signal;
+  if (onSome && !stop.aborted && Object.keys(out).length > 0) onSome({ ...out });
   for (let i = 0; asking.length > 0 && !stop.aborted; i++) {
     const pending: string[] = [];
     for (let at = 0; at < asking.length && !stop.aborted; at += PHOTO_IDS_PER_ASK) {
@@ -311,6 +320,7 @@ export async function fetchPeoplePhotos(
       }
       const waiting = new Set(body.pending ?? []);
       const photos = body.photos ?? {};
+      const answered: Record<string, string | null> = {};
       for (const id of some) {
         if (waiting.has(id)) {
           pending.push(id);
@@ -318,8 +328,11 @@ export async function fetchPeoplePhotos(
           const photo = photos[id] || null;
           photoAnswers.set(id, photo);
           out[id] = photo;
+          answered[id] = photo;
         }
       }
+      // A caller that has gone is told nothing more.
+      if (onSome && !stop.aborted && Object.keys(answered).length > 0) onSome(answered);
     }
     asking = pending;
     if (asking.length === 0 || i >= PHOTO_ASK_AGAIN_MS.length) break;

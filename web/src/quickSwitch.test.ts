@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_SETTINGS, type GridSettings } from './grid';
-import { hideEmptyToast } from './quickSwitch';
+import { dimsCards, hideEmptyToast } from './quickSwitch';
 
 const { capture } = vi.hoisted(() => ({ capture: vi.fn() }));
 vi.mock('./analytics', () => ({ capture }));
@@ -52,5 +52,16 @@ describe('the quick switch’s toast', () => {
     expect(box.settings).toBe(start);
     expect(hide).not.toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
+  });
+});
+
+describe('when the quick switch is offered', () => {
+  it('is while the people, the floor or the genres dim cards', () => {
+    expect(dimsCards(DEFAULT_SETTINGS, 0)).toBe(false);
+    expect(dimsCards(DEFAULT_SETTINGS, 1)).toBe(true);
+    expect(dimsCards({ ...DEFAULT_SETTINGS, minRating: 7 }, 0)).toBe(true);
+    expect(dimsCards({ ...DEFAULT_SETTINGS, genres: ['Sci-Fi'] }, 0)).toBe(true);
+    // A year range takes rows away rather than dimming them.
+    expect(dimsCards({ ...DEFAULT_SETTINGS, yearFrom: 2000 }, 0)).toBe(false);
   });
 });

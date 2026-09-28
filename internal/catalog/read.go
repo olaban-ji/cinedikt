@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -49,11 +50,28 @@ type Movie struct {
 	IsAnchor bool     `json:"isAnchor"`
 }
 
+// FilmGenres are the IMDb genres a mapped film can carry, in IMDb's
+// alphabetical order. A film's genres travel on the spine as a bitmask
+// over this list: bit i is FilmGenres[i].
+//
+// IMDb has 28. Adult and Documentary are left out because those films
+// are never mapped, and Game-Show, News, Reality-TV, Talk-Show and Short
+// because the catalog keeps only feature films.
+var FilmGenres = []string{
+	"Action", "Adventure", "Animation", "Biography", "Comedy", "Crime", "Drama",
+	"Family", "Fantasy", "Film-Noir", "History", "Horror", "Music", "Musical",
+	"Mystery", "Romance", "Sci-Fi", "Sport", "Thriller", "War", "Western",
+}
+
 // Grid is a whole map: the searched movie, its people, and the spine.
 type Grid struct {
 	Anchor Movie    `json:"anchor"`
 	People []Person `json:"people"`
-	Films  [][5]any `json:"films"`
+	Films  [][6]any `json:"films"`
+	// Genres is the legend for the genre bits on the spine: always
+	// FilmGenres, sent with the map so the client never keeps a copy of
+	// the list that could fall out of step with the bits.
+	Genres []string `json:"genres"`
 	// OGVersion is the stamp on this movie's share image. The client
 	// fetches that address as the map opens, so the picture exists
 	// before anyone copies the link — Slack, iMessage and X all cache
@@ -127,6 +145,7 @@ func (s *Store) Grid(ctx context.Context, tconst string) (*Grid, error) {
 		Anchor:    anchor,
 		People:    people,
 		Films:     films,
+		Genres:    FilmGenres,
 		OGVersion: OGVersion(anchor.Poster, anchor.Title),
 	}, nil
 }
@@ -234,10 +253,11 @@ func (s *Store) peopleOn(ctx context.Context, tconst string) (people []Person, u
 // thousand cards is a map nobody can read; the most voted survive.
 const MaxSpine = 400
 
-// spine is every movie those people made, as the five facts that place
-// a card and say whose it is: id, year, rating, month-day, and which of
-// the searched movie's people are on it. The whole set comes back at
-// once, so a card's place is final from the first paint.
+// spine is every movie those people made, as the six facts that place
+// a card and say whose and what it is: id, year, rating, month-day,
+// which of the searched movie's people are on it, and its genres as bits
+// over FilmGenres. The whole set comes back at once, so a card's place
+// is final from the first paint.
 //
 // The people are indexes into the chip row rather than name ids. There
 // are up to four hundred films and several dozen people, so an id on
@@ -248,8 +268,9 @@ const MaxSpine = 400
 // detail for. Hiding the empty years means deciding whether anything in
 // a year is lit, and a year the reader has never scrolled to has no
 // detail at all — so without this the map would collapse rows as they
-// came into view.
-func (s *Store) spine(ctx context.Context, anchor string, people []Person) ([][5]any, error) {
+// came into view. The genres are there for the same reason: the genre
+// filter lights cards, and hiding the empty years asks it of every year.
+func (s *Store) spine(ctx context.Context, anchor string, people []Person) ([][6]any, error) {
 	ids := make([]string, len(people))
 	at := make(map[string]int, len(people))
 	for i, p := range people {
@@ -270,7 +291,7 @@ func (s *Store) spine(ctx context.Context, anchor string, people []Person) ([][5
 		    FROM credits
 		    GROUP BY tconst
 		)
-		SELECT t.tconst, t.start_year, r.average_rating, p.released, theirs.people
+		SELECT t.tconst, t.start_year, r.average_rating, p.released, theirs.people, t.genres
 		FROM theirs
 		JOIN `+Live+`.titles t USING (tconst)
 		LEFT JOIN `+Live+`.ratings r USING (tconst)
@@ -283,14 +304,14 @@ func (s *Store) spine(ctx context.Context, anchor string, people []Person) ([][5
 	}
 	defer rows.Close()
 
-	films := make([][5]any, 0, 256)
+	films := make([][6]any, 0, 256)
 	for rows.Next() {
 		var id string
 		var year int
 		var rating *float64
 		var released *time.Time
-		var whose []string
-		if err := rows.Scan(&id, &year, &rating, &released, &whose); err != nil {
+		var whose, genres []string
+		if err := rows.Scan(&id, &year, &rating, &released, &whose, &genres); err != nil {
 			return nil, fmt.Errorf("catalog: scan spine row: %w", err)
 		}
 		md := 0
@@ -303,9 +324,23 @@ func (s *Store) spine(ctx context.Context, anchor string, people []Person) ([][5
 		if rating != nil {
 			score = *rating
 		}
-		films = append(films, [5]any{id, year, score, md, indexesOf(whose, at)})
+		films = append(films, [6]any{id, year, score, md, indexesOf(whose, at), genreBits(genres)})
 	}
 	return films, rows.Err()
+}
+
+// genreBits is a film's genres as a bitmask over FilmGenres: bit i for
+// FilmGenres[i]. A genre outside the list sets nothing. Twenty-one bits
+// fit a JSON number exactly, and one number a film is about 2 KB on a
+// 400-film map.
+func genreBits(genres []string) int {
+	bits := 0
+	for _, g := range genres {
+		if i := slices.Index(FilmGenres, g); i >= 0 {
+			bits |= 1 << i
+		}
+	}
+	return bits
 }
 
 // indexesOf turns the name ids on a film into places in the chip row,

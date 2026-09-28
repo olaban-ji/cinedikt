@@ -9,6 +9,8 @@ import {
   type RefObject,
 } from 'react';
 import {
+  genreMask,
+  hasGenres,
   inWarmSpan,
   initialsFor,
   isLit,
@@ -31,12 +33,14 @@ import {
   type Row,
   type SpineFilm,
 } from './grid';
-import { MapPreview } from './MapPreview';
+import type { FaceCardEvents } from './faceCard';
+import { MapPreview, TrailerFocus } from './MapPreview';
 import { PosterImage } from './PosterImage';
 import { posterFallback, sheetPosterPx, sheetPosterURL } from './poster';
 import {
   placePreview,
   previewBounds,
+  previewFloatClear,
   previewScheduler,
   type PreviewBounds,
   type PreviewPlace,
@@ -138,6 +142,13 @@ interface Props {
   /** The search field has text in it, which Escape clears before it
    *  closes the hover preview. */
   searchTyped?: boolean;
+  /** A person's photo, from the payload or asked for since, for the
+   *  hover preview's faces; undefined while there is none to show. */
+  photoOf: (p: GridPerson) => string | undefined;
+  /** A pointer resting on one of the hover preview's faces, and leaving
+   *  it, for that person's bigger photo (see useFaceCard). */
+  onFace: FaceCardEvents['onFace'];
+  offFace: FaceCardEvents['offFace'];
 }
 
 /** How opaque a card that does not match the selection is. */
@@ -199,6 +210,9 @@ export function GridMap({
   landing = null,
   player,
   searchTyped = false,
+  photoOf,
+  onFace,
+  offFace,
 }: Props) {
   const tap = useTapGuard();
   // The poster fallback is painted in JavaScript, not CSS, so it is the
@@ -282,6 +296,9 @@ export function GridMap({
     };
   }, [readView, tap, scroller]);
 
+  // The genres picked, as the bits the spine carries. Zero without a
+  // legend, which asks for nothing.
+  const want = useMemo(() => genreMask(payload, settings.genres), [payload, settings.genres]);
   // Cards the reader already has keep their seat when a later page
   // arrives. A new map, or a width that changes the axis, starts again.
   // The spine is the whole grid, so this runs once per grid and width.
@@ -296,11 +313,11 @@ export function GridMap({
             payload,
             width,
             settings,
-            (f) => isLit(f, selectedIdx, settings.minRating),
+            (f) => isLit(f, selectedIdx, settings.minRating, want),
             compact,
           )
         : null,
-    [payload, width, settings, selectedIdx, compact],
+    [payload, width, settings, selectedIdx, compact, want],
   );
   // The chip under the pointer, in the spine's own terms. -1 for an id
   // this row does not hold, which no card carries.
@@ -314,10 +331,10 @@ export function GridMap({
   const cardOpacity = (c: Placed) =>
     (c.film.isAnchor && anchorHidden) || isFlown(c, flown)
       ? 0
-      : opacityOf(c, selectedIdx, hoveredIdx, settings.minRating);
+      : opacityOf(c, selectedIdx, hoveredIdx, settings.minRating, want);
   // What the rows are laid out against, so a reflow can tell a change
   // of filter from a change of map or of width.
-  const filterSig = `${settings.hideEmptyYears}|${settings.minRating}|${[...selectedIdx].sort((a, b) => a - b).join(',')}`;
+  const filterSig = `${settings.hideEmptyYears}|${settings.minRating}|${[...selectedIdx].sort((a, b) => a - b).join(',')}|${want}`;
   const reflow = useReflow({
     layout,
     sig: filterSig,
@@ -570,14 +587,19 @@ export function GridMap({
   // while a panel or View is up, and while the map is being left or
   // landed on.
   const previewBlocked = covered || leaving || landing != null;
+  // The screen's class: it sizes the floating buttons the preview keeps
+  // clear of, and the poster the panel draws.
+  const screenKind = useScreen();
   const preview = usePreview({
     layout,
     scroller,
     overlayH,
     headerAway,
+    floatClear: previewFloatClear(screenKind.touch),
     blocked: previewBlocked,
     selected: selectedIdx,
     minRating: settings.minRating,
+    want,
     said: (id) => wordsFor({ id, isAnchor: id === payload.anchor.id }, detail, payload.anchor),
     light: lightIfHovering,
     player,
@@ -587,6 +609,9 @@ export function GridMap({
   const peekFilm = peek
     ? wordsFor({ id: peek.id, isAnchor: peek.id === payload.anchor.id }, detail, payload.anchor)
     : undefined;
+  // The film whose preview is drawn, which the layer behind its trailer
+  // goes with.
+  const previewing = layout && peek && peekFilm ? peek.id : null;
 
   // Recenter is only worth offering when the film it would go to is not
   // already in front of the reader.
@@ -617,7 +642,7 @@ export function GridMap({
   // wait on the network. It is the file for this screen's sheet, which
   // is a different width on a phone, a landscape phone and anything
   // larger, so it is the one the sheet will ask for.
-  const sheetPx = sheetPosterPx(useScreen());
+  const sheetPx = sheetPosterPx(screenKind);
   const glassKey = layout
     ? cards
         .filter((c) => inWarmSpan(c.top, layout.metrics.cardH, screen))
@@ -737,7 +762,7 @@ export function GridMap({
                   people={byId}
                   codes={codes}
                   opacity={cardOpacity(c)}
-                  off={filteredOut(c.film, selectedIdx, settings.minRating)}
+                  off={filteredOut(c.film, selectedIdx, settings.minRating, want)}
                   eager={inWarmSpan(c.top, layout.metrics.cardH, screen)}
                   enter={
                     reveal.entering
@@ -761,12 +786,19 @@ export function GridMap({
                 <MapPreview
                   key={`${payload.anchor.id}:${peek.id}`}
                   film={peekFilm}
+                  people={payload.people}
+                  anchorTitle={payload.anchor.title}
+                  theme={theme}
+                  codes={codes}
+                  photoOf={photoOf}
                   place={peek.place}
                   player={player}
                   bounds={preview.bounds}
                   plotH={layout.plotH}
                   onEnter={preview.onEnter}
                   onLeave={preview.onLeave}
+                  onFace={onFace}
+                  offFace={offFace}
                 />
               )}
               <div className="cd-rail-layer" style={{ height: layout.plotH, width: layout.plotW }}>
@@ -783,6 +815,9 @@ export function GridMap({
           </div>
         )}
       </div>
+      {/* Outside the scroller, which it covers along with the header and
+          the floating buttons while the preview's trailer plays. */}
+      <TrailerFocus play={player.play} showing={previewing} />
       <button
         type="button"
         className={`cd-float cd-recentre${offer ? ' cd-float-up' : ''}`}
@@ -920,7 +955,8 @@ export function openingBox(
   const width = scroller.clientWidth || window.innerWidth;
   if (!(width > 0)) return null;
   const none = new Set<number>();
-  const lit = (f: SpineFilm) => isLit(f, none, settings.minRating);
+  const want = genreMask(payload, settings.genres);
+  const lit = (f: SpineFilm) => isLit(f, none, settings.minRating, want);
   const layout = layoutGrid(payload, width, settings, lit, compact);
   const card = layout.anchor;
   const at = centredScroll(layout, scroller, overlayH);
@@ -1169,8 +1205,9 @@ function useReflow({
   // Only a change of filter reflows, and only one that hides the empty
   // years or stops hiding them. A new map, a resize or a year range each
   // put the reader somewhere else entirely, and gliding three hundred
-  // cards across that would be motion about nothing. A floor or a
-  // selection changed with nothing hidden only dims and lights in place.
+  // cards across that would be motion about nothing. A floor, a
+  // selection or the genres changed with nothing hidden only dims and
+  // lights in place.
   const was = last.current;
   const el = scroller.current;
   if (
@@ -1382,11 +1419,16 @@ function usePreview(o: {
   scroller: RefObject<HTMLDivElement | null>;
   overlayH: number;
   headerAway: boolean;
+  /** The strip along the map's bottom that View and Recenter float in,
+   *  which the preview never reaches into (previewFloatClear). */
+  floatClear: number;
   /** Something else has the map: a panel or View is up, or the map is
    *  being left or landed on. */
   blocked: boolean;
   selected: Set<number>;
   minRating: number | null;
+  /** The genres picked, as spine bits (see genreMask). */
+  want: number;
   /** What a card says, once its words have come: who is on it, for its
    *  chips, and all the preview has to show. */
   said: (id: string) => GridFilm | undefined;
@@ -1416,9 +1458,9 @@ function usePreview(o: {
   const under = useRef<string | null>(null);
 
   const [bounds] = useState(() => (loose: boolean) => {
-    const { layout, scroller, overlayH, headerAway } = live.current;
+    const { layout, scroller, overlayH, headerAway, floatClear } = live.current;
     const el = scroller.current ?? { scrollLeft: 0, scrollTop: 0, clientWidth: 0, clientHeight: 0 };
-    return previewBounds(el, layout?.metrics.railW ?? 0, overlayH, headerAway ? 0 : overlayH, loose);
+    return previewBounds(el, layout?.metrics.railW ?? 0, overlayH, headerAway ? 0 : overlayH, floatClear, loose);
   });
 
   const [sched] = useState(() =>
@@ -1429,9 +1471,9 @@ function usePreview(o: {
       // is still an empty box opens nothing, and so neither counts as a
       // preview showing nor keeps its hover state for one.
       open: (id) => {
-        const { layout, blocked, selected, minRating, said } = live.current;
+        const { layout, blocked, selected, minRating, want, said } = live.current;
         const card = layout?.cards.find((c) => c.film.id === id);
-        if (!layout || !card || blocked || filteredOut(card.film, selected, minRating) || !said(id)) return;
+        if (!layout || !card || blocked || filteredOut(card.film, selected, minRating, want) || !said(id)) return;
         showing.current = id;
         setPeek({ id, place: placePreview(card, layout.metrics, bounds(false), layout.plotH), on: layout });
       },
@@ -1559,7 +1601,7 @@ export const Card = memo(function Card({
   people: Map<string, GridPerson>;
   codes: Map<string, string>;
   opacity: number;
-  /** Filtered out by the chosen people or the rating floor (see
+  /** Filtered out by the chosen people, the rating floor or the genres (see
    *  filteredOut): dimmed, and with nothing to open. It cannot be
    *  clicked, tapped, hovered or focused. */
   off?: boolean;
@@ -1749,9 +1791,10 @@ export function isFlown(card: Placed, flown: string | null): boolean {
 }
 
 /** A card is full strength when nothing is narrowing the grid, or when it
- *  holds someone being previewed or selected and clears the rating floor.
- *  A hovered chip previews just that person and overrides the selection
- *  while the pointer is on it.
+ *  holds someone being previewed or selected, clears the rating floor and
+ *  has every genre picked. A hovered chip previews just that person and
+ *  overrides the selection while the pointer is on it; a card without
+ *  the genres dims under it as one under the floor does.
  *
  *  Judged on the spine, which says who is on every card from the first
  *  paint. The detail is not needed, and waiting for it would light a card
@@ -1771,19 +1814,23 @@ export function opacityOf(
    *  left — is any index no card carries, and dims them all. */
   hovered: number | null,
   minRating: number | null = null,
+  /** The genres picked, as spine bits (see genreMask). */
+  want = 0,
 ): number {
   if (card.film.isAnchor) return 1;
   if (hovered != null) {
-    return passesFloor(card.film.rating, minRating) && card.film.people.includes(hovered)
+    return passesFloor(card.film.rating, minRating) &&
+      hasGenres(card.film.genres, want) &&
+      card.film.people.includes(hovered)
       ? 1
       : DIM_PREVIEW;
   }
-  return isLit(card.film, selected, minRating) ? 1 : DIM_SELECTED;
+  return isLit(card.film, selected, minRating, want) ? 1 : DIM_SELECTED;
 }
 
-/** Whether a card is filtered out: dimmed by the chosen people or the
- *  rating floor, the same test that gives it DIM_SELECTED above, and so
- *  a card with nothing to open.
+/** Whether a card is filtered out: dimmed by the chosen people, the
+ *  rating floor or the genres, the same test that gives it DIM_SELECTED
+ *  above, and so a card with nothing to open.
  *
  *  A chip preview is not part of it. It dims cards only while the
  *  pointer is on the chip, and a card the selection lights stays one
@@ -1792,6 +1839,7 @@ export function filteredOut(
   film: SpineFilm,
   selected: Set<number>,
   minRating: number | null,
+  want = 0,
 ): boolean {
-  return !film.isAnchor && !isLit(film, selected, minRating);
+  return !film.isAnchor && !isLit(film, selected, minRating, want);
 }

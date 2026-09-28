@@ -5,7 +5,7 @@ import {
 } from './grid';
 
 /** What narrows one map: who is selected, the rating floor, the year
- *  window, and whether empty years are hidden.
+ *  window, the genres picked, and whether empty years are hidden.
  *
  *  How the map is drawn — newest first, unrated films, the searched
  *  year's highlight — stays with the reader. A filter does not. It
@@ -16,6 +16,8 @@ export interface MapFilters {
   yearFrom: number | null;
   yearTo: number | null;
   hideEmptyYears: boolean;
+  /** In the order they were picked, as the map's legend names them. */
+  genres: string[];
 }
 
 /** A movie just opened. Nothing set on the one being left comes with it. */
@@ -26,6 +28,7 @@ export function freshFilters(): MapFilters {
     yearFrom: null,
     yearTo: null,
     hideEmptyYears: false,
+    genres: [],
   };
 }
 
@@ -54,6 +57,7 @@ export function filtersFromState(state: unknown): MapFilters {
     yearFrom: yearOf(f.yearFrom),
     yearTo: yearOf(f.yearTo),
     hideEmptyYears: f.hideEmptyYears === true,
+    genres: genresOf(f.genres),
   };
 }
 
@@ -63,7 +67,7 @@ export function stampFilters(state: unknown, filters: MapFilters): Record<string
   const base: Record<string, unknown> =
     state !== null && typeof state === 'object' ? { ...(state as Record<string, unknown>) } : {};
   if (typeof base.depth !== 'number') base.depth = 0;
-  return { ...base, filters: { ...filters, people: [...filters.people] } };
+  return { ...base, filters: { ...filters, people: [...filters.people], genres: [...filters.genres] } };
 }
 
 export function filtersOf(settings: GridSettings, people: Iterable<string>): MapFilters {
@@ -73,6 +77,7 @@ export function filtersOf(settings: GridSettings, people: Iterable<string>): Map
     yearFrom: settings.yearFrom,
     yearTo: settings.yearTo,
     hideEmptyYears: settings.hideEmptyYears,
+    genres: [...settings.genres],
   };
 }
 
@@ -84,6 +89,7 @@ export function applyFilters(settings: GridSettings, filters: MapFilters): GridS
     yearFrom: filters.yearFrom,
     yearTo: filters.yearTo,
     hideEmptyYears: filters.hideEmptyYears,
+    genres: filters.genres,
   };
 }
 
@@ -116,6 +122,24 @@ function yearOf(v: unknown): number | null {
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1800 || v > 2100) return null;
   return v;
 }
+
+/** Genre names as IMDb writes them ("Sci-Fi", "Film-Noir"), each once,
+ *  and no more than IMDb has. Which of them the map's legend holds is the
+ *  map's business (see genreMask); this only keeps a stale entry from
+ *  carrying anything that could not have been picked. */
+function genresOf(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const g of v) {
+    if (typeof g !== 'string' || !/^[A-Z][A-Za-z]*(-[A-Z][A-Za-z]*)?$/.test(g) || out.includes(g)) continue;
+    out.push(g);
+    if (out.length === IMDB_GENRES) break;
+  }
+  return out;
+}
+
+/** How many genres IMDb has, the most a reader could ever pick. */
+const IMDB_GENRES = 28;
 
 /** An IMDb name id, and not a hundred of them: a chip row is a
  *  selection, not a dump of whatever a stale entry was holding. */

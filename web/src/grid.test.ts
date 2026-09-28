@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import css from './grid.css?raw';
 import matrix from './fixtures/matrix-grid.json';
-import { opacityOf } from './GridMap';
+import { filteredOut, opacityOf } from './GridMap';
 import { keyYear } from './YearRange';
 import {
   activeFilters,
@@ -44,6 +44,7 @@ import {
   footRoom,
   footWidth,
   genreLine,
+  genreMask,
   MAX_MARKS,
   textWidth,
   AXIS_H,
@@ -71,21 +72,40 @@ type FilmSpec = {
   md?: number;
   /** Places in the chip row, as the server sends them. */
   people?: number[];
+  /** Genre bits over the legend. Left out, the tuple is five long, as
+   *  a spine that carries no genres sends it. */
+  genres?: number;
 };
 
 function payloadOf(
   anchor: { id: string; year: number; rating: number | null; md?: number },
   films: FilmSpec[],
   people: GridPerson[] = [],
+  /** The genre legend, for a spine that carries genres. */
+  legend?: string[],
 ): GridPayload {
   return {
     anchor: { ...anchor, md: anchor.md ?? 0, title: 'Anchor', people: [], isAnchor: true },
     people,
-    films: films.map(
-      (f) => [f.id, f.year, f.rating, f.md ?? 0, f.people ?? []] as SpineTuple,
+    films: films.map((f) =>
+      f.genres === undefined
+        ? ([f.id, f.year, f.rating, f.md ?? 0, f.people ?? []] as SpineTuple)
+        : ([f.id, f.year, f.rating, f.md ?? 0, f.people ?? [], f.genres] as SpineTuple),
     ),
+    ...(legend ? { genres: legend } : {}),
   };
 }
+
+/** The legend the server sends: IMDb's genres a mapped film can carry,
+ *  in IMDb's alphabetical order. Bit i is LEGEND[i]. */
+const LEGEND = [
+  'Action', 'Adventure', 'Animation', 'Biography', 'Comedy', 'Crime', 'Drama',
+  'Family', 'Fantasy', 'Film-Noir', 'History', 'Horror', 'Music', 'Musical',
+  'Mystery', 'Romance', 'Sci-Fi', 'Sport', 'Thriller', 'War', 'Western',
+];
+/** The bits for these genres, over LEGEND. */
+const bitsOf = (...names: string[]) =>
+  names.reduce((bits, n) => bits | (1 << LEGEND.indexOf(n)), 0);
 
 /** A chip row of n people, for the tests that select one. */
 function castOf(n: number): GridPerson[] {
@@ -1134,6 +1154,7 @@ describe('isLit', () => {
     rating: 7,
     md: 0,
     people: [1],
+    genres: 0,
     isAnchor: false,
     ...over,
   });
@@ -1292,9 +1313,27 @@ describe('the spine', () => {
     ]);
     const spine = spineOf(p);
     expect(spine).toEqual([
-      { id: 'tt0000001', year: 1999, rating: 8, md: 331, people: [], isAnchor: true },
-      { id: 'tt0000002', year: 2001, rating: null, md: 0, people: [], isAnchor: false },
+      { id: 'tt0000001', year: 1999, rating: 8, md: 331, people: [], genres: 0, isAnchor: true },
+      { id: 'tt0000002', year: 2001, rating: null, md: 0, people: [], genres: 0, isAnchor: false },
     ]);
+  });
+
+  it('reads the genre bits from the sixth element, and a spine without them as none', () => {
+    const p = payloadOf(
+      { id: 'tt0133093', year: 1999, rating: 8.7 },
+      [
+        { id: 'tt0133093', year: 1999, rating: 8.7, genres: 65537 },
+        { id: 'tt0000002', year: 2001, rating: 7, genres: 0 },
+        { id: 'tt0000003', year: 2003, rating: 7 },
+      ],
+      [],
+      LEGEND,
+    );
+    expect(spineOf(p).map((f) => f.genres)).toEqual([65537, 0, 0]);
+    // 65537 is Action and Sci-Fi, as the server's test has it.
+    expect(bitsOf('Action', 'Sci-Fi')).toBe(65537);
+    // The graph path's spine is five long with no legend, or shorter.
+    expect(spineOf(real).every((f) => f.genres === 0)).toBe(true);
   });
 
   it('is the whole grid, so a layout is final the first time', () => {
@@ -1401,7 +1440,7 @@ describe('the rating floor', () => {
 describe('opacityOf', () => {
   /** People are places in the chip row, as the spine names them. */
   const card = (rating: number | null, people: number[], isAnchor = false): Placed => ({
-    film: { id: 'tt0000001', year: 2000, rating, md: 0, people, isAnchor },
+    film: { id: 'tt0000001', year: 2000, rating, md: 0, people, genres: 0, isAnchor },
     left: 0,
     top: 0,
     lane: 0,
@@ -1559,6 +1598,7 @@ describe('revealDelay', () => {
       rating: 7,
       md: 0,
       people: [],
+      genres: 0,
       isAnchor,
     },
     left,
@@ -1611,6 +1651,7 @@ describe('nothingLit', () => {
     md: 0,
     isAnchor,
     people,
+    genres: 0,
   });
 
   it('says so when every film of theirs sits below the floor', () => {
@@ -1662,6 +1703,7 @@ describe('onPlot', () => {
     md: 0,
     isAnchor,
     people: [0],
+    genres: 0,
   });
 
   it('holds every film when nothing is cropped', () => {
@@ -1714,5 +1756,147 @@ describe('onPlot', () => {
     const s = { ...DEFAULT_SETTINGS, yearFrom: 2000, yearTo: 2010 };
     expect(nothingLit(spine, 1, 8)).toBe(false);
     expect(nothingLit(spine.filter((f) => onPlot(f, s)), 1, 8)).toBe(true);
+  });
+});
+
+describe('the genre filter', () => {
+  /** The searched film, Action and Sci-Fi, in 1999; a Sci-Fi drama in
+   *  2003; an Action comedy and a Western in 2005; an unrated Sci-Fi
+   *  thriller in 2008. */
+  const career = () =>
+    payloadOf(
+      { id: 'tt0000001', year: 1999, rating: 8.7 },
+      [
+        { id: 'tt0000001', year: 1999, rating: 8.7, people: [0, 1], genres: bitsOf('Action', 'Sci-Fi') },
+        { id: 'tt0000002', year: 2003, rating: 7.2, people: [0], genres: bitsOf('Drama', 'Sci-Fi') },
+        { id: 'tt0000003', year: 2005, rating: 6.1, people: [1], genres: bitsOf('Action', 'Comedy') },
+        { id: 'tt0000004', year: 2005, rating: 5.9, people: [0], genres: bitsOf('Western') },
+        { id: 'tt0000005', year: 2008, rating: null, people: [1], genres: bitsOf('Sci-Fi', 'Thriller') },
+      ],
+      castOf(2),
+      LEGEND,
+    );
+  const nobody = new Set<number>();
+  const byId = (id: string) => spineOf(career()).find((f) => f.id === id)!;
+  const placed = (id: string): Placed => ({ film: byId(id), left: 0, top: 0, lane: 0 });
+
+  describe('genreMask', () => {
+    it('is the bits for the names picked, over the payload’s legend', () => {
+      expect(genreMask(career(), [])).toBe(0);
+      expect(genreMask(career(), ['Sci-Fi'])).toBe(1 << 16);
+      expect(genreMask(career(), ['Sci-Fi', 'Action'])).toBe(65537);
+      expect(genreMask(career(), ['Western'])).toBe(1 << 20);
+    });
+
+    it('asks for nothing the legend has no bit for, or without a legend', () => {
+      expect(genreMask(career(), ['Talk-Show'])).toBe(0);
+      expect(genreMask(real, ['Sci-Fi'])).toBe(0);
+    });
+  });
+
+  describe('isLit with genres', () => {
+    it('needs every bit asked for', () => {
+      expect(isLit(byId('tt0000002'), nobody, null, bitsOf('Sci-Fi'))).toBe(true);
+      expect(isLit(byId('tt0000002'), nobody, null, bitsOf('Sci-Fi', 'Drama'))).toBe(true);
+      expect(isLit(byId('tt0000002'), nobody, null, bitsOf('Sci-Fi', 'Action'))).toBe(false);
+      expect(isLit(byId('tt0000003'), nobody, null, bitsOf('Sci-Fi'))).toBe(false);
+      // Nothing asked for is everything.
+      expect(isLit(byId('tt0000003'), nobody, null, 0)).toBe(true);
+    });
+
+    it('keeps the searched film lit, and still asks the floor and the people', () => {
+      expect(isLit(byId('tt0000001'), nobody, null, bitsOf('Western'))).toBe(true);
+      expect(isLit(byId('tt0000002'), nobody, 8, bitsOf('Sci-Fi'))).toBe(false);
+      expect(isLit(byId('tt0000002'), new Set([1]), null, bitsOf('Sci-Fi'))).toBe(false);
+      expect(isLit(byId('tt0000002'), new Set([0]), null, bitsOf('Sci-Fi'))).toBe(true);
+    });
+
+    it('dims a card without them, and puts it out of reach', () => {
+      const want = bitsOf('Sci-Fi');
+      expect(opacityOf(placed('tt0000002'), nobody, null, null, want)).toBe(1);
+      expect(opacityOf(placed('tt0000003'), nobody, null, null, want)).toBeLessThan(1);
+      expect(filteredOut(byId('tt0000003'), nobody, null, want)).toBe(true);
+      expect(filteredOut(byId('tt0000002'), nobody, null, want)).toBe(false);
+      expect(filteredOut(byId('tt0000001'), nobody, null, bitsOf('Western'))).toBe(false);
+    });
+
+    it('dims a hovered chip’s card without them, as it does one under the floor', () => {
+      const want = bitsOf('Sci-Fi');
+      // Person 1 is on the Action comedy and the Sci-Fi thriller.
+      expect(opacityOf(placed('tt0000003'), nobody, 1, null, want)).toBeLessThan(1);
+      expect(opacityOf(placed('tt0000005'), nobody, 1, null, want)).toBe(1);
+      expect(opacityOf(placed('tt0000001'), nobody, 1, null, bitsOf('Western'))).toBe(1);
+    });
+  });
+
+  describe('hiding the years it empties', () => {
+    it('counts them, and the layout takes them off', () => {
+      const s = settings({ genres: ['Sci-Fi'] });
+      // 2005 holds an Action comedy and a Western, and no Sci-Fi.
+      expect(emptyYearCount(career(), s, nobody)).toBe(1);
+      const want = genreMask(career(), s.genres);
+      const lit = (f: SpineFilm) => isLit(f, nobody, s.minRating, want);
+      const l = layoutGrid(career(), 1280, { ...s, hideEmptyYears: true }, lit);
+      expect(l.rows.map((r) => r.year)).toEqual([1999, 2003, 2008]);
+      expect(l.cards.map((c) => c.film.id).sort()).toEqual(['tt0000001', 'tt0000002', 'tt0000005']);
+      // Only the searched film is Action and Sci-Fi, and its year stays.
+      expect(emptyYearCount(career(), settings({ genres: ['Action', 'Sci-Fi'] }), nobody)).toBe(3);
+    });
+
+    it('agrees with the layout, with every other filter too', () => {
+      const picks = [[], ['Sci-Fi'], ['Action'], ['Sci-Fi', 'Drama'], ['Western', 'Sci-Fi']];
+      for (const genres of picks)
+        for (const showUnrated of [true, false])
+          for (const minRating of [null, 7])
+            for (const sel of [nobody, new Set([0]), new Set([1])]) {
+              const s = settings({ genres, showUnrated, minRating });
+              const want = genreMask(career(), genres);
+              const lit = (f: SpineFilm) => isLit(f, sel, minRating, want);
+              const rows = (hideEmptyYears: boolean) =>
+                layoutGrid(career(), 1280, { ...s, hideEmptyYears }, lit).rows.length;
+              const over = { genres, showUnrated, minRating, sel: [...sel] };
+              expect({ over, n: emptyYearCount(career(), s, sel) }).toEqual({ over, n: rows(false) - rows(true) });
+            }
+    });
+
+    it('lights only films with every genre picked, and says when that leaves the searched film alone', () => {
+      expect(litOthers(career(), settings({ genres: ['Sci-Fi'] }), nobody).map((f) => f.id)).toEqual([
+        'tt0000002',
+        'tt0000005',
+      ]);
+      expect(aloneAfterHiding(career(), settings({ genres: ['Western'], hideEmptyYears: true }), nobody)).toBe(false);
+      expect(
+        aloneAfterHiding(career(), settings({ genres: ['Western', 'Sci-Fi'], hideEmptyYears: true }), nobody),
+      ).toBe(true);
+    });
+  });
+
+  describe('what the pill and the View button say', () => {
+    it('names one genre, two with an ampersand, and more by how many', () => {
+      expect(activeFilters(settings({ genres: ['Sci-Fi'] }), false)).toBe('Sci-Fi');
+      expect(activeFilters(settings({ genres: ['Action', 'Sci-Fi'] }), false)).toBe('Action & Sci-Fi');
+      expect(activeFilters(settings({ genres: ['Action', 'Sci-Fi', 'Drama'] }), false)).toBe('3 genres');
+      // After the floor and the years, in the order they were picked.
+      expect(
+        activeFilters(settings({ minRating: 7, yearFrom: 2000, genres: ['Sci-Fi', 'Action'] }), true),
+      ).toBe('7.0+ · From 2000 · Sci-Fi & Action');
+    });
+
+    it('counts the genres once, however many are picked', () => {
+      expect(changedCount(settings({ genres: ['Sci-Fi'] }), false)).toBe(1);
+      expect(changedCount(settings({ genres: ['Sci-Fi', 'Action', 'Drama'] }), false)).toBe(1);
+      expect(changedCount(settings({ genres: ['Sci-Fi'], yearFrom: 2000, yearTo: 2010 }), true)).toBe(2);
+    });
+
+    it('clears them with the pill’s ✕, and leaves no pill behind', () => {
+      for (const rungsInView of [true, false]) {
+        const s = settings({ genres: ['Sci-Fi', 'Action'], yearFrom: 2000, hideEmptyYears: true });
+        const cleared = withoutPill(s, rungsInView);
+        expect(cleared.genres).toEqual([]);
+        expect(cleared.hideEmptyYears).toBe(true);
+        expect(activeFilters(cleared, rungsInView)).toBe('');
+        expect(activeFilters(withoutPill(settings({ genres: ['Drama'] }), rungsInView), rungsInView)).toBe('');
+      }
+    });
   });
 });

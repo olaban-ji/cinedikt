@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import css from './grid.css?raw';
+import { previewFloatClear } from './preview';
 
 /** The floating buttons and the toast are placed by the stylesheet
  *  alone, so this reads it. What is pinned is the arithmetic a later
@@ -91,6 +92,12 @@ describe('the floating buttons', () => {
   it('are 42 high, and 46 at a finger’s size', () => {
     expect(get('.cd-float-pill', 'height')).toBe('42px');
     expect(get('.cd-float-pill', 'height', TOUCH)).toBe('46px');
+  });
+
+  it('take the strip the hover preview keeps clear of: their offset, their height and 10px', () => {
+    const up = px(get('.cd-float', 'bottom')) + slop;
+    expect(previewFloatClear(false)).toBe(up + px(get('.cd-float-pill', 'height')) + 10);
+    expect(previewFloatClear(true)).toBe(up + px(get('.cd-float-pill', 'height', TOUCH)) + 10);
   });
 
   it('have no hover state, only a press', () => {

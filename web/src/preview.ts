@@ -13,8 +13,23 @@ export const PREVIEW_W = 360;
 export const PREVIEW_GAP = 8;
 /** How far it keeps from the year rail on its left. */
 export const PREVIEW_RAIL_GAP = 4;
-/** How far it keeps from the map's right and bottom edges. */
+/** How far it keeps from the map's right edge. */
 export const PREVIEW_EDGE = 12;
+/** The strip along the map's bottom where View and Recenter float: 16px
+ *  up from the edge, their height, and 10px clear above them. The
+ *  preview never reaches into it, so neither button can sit on it or on
+ *  its trailer. */
+export const PREVIEW_FLOAT_CLEAR = 16 + 42 + 10; // 68
+/** The same strip where the floating buttons are a finger's size, 46px
+ *  tall: every screen sized for a finger (Screen.touch), which takes in
+ *  a tablet with a trackpad, where a pointer can still rest on a card. */
+export const PREVIEW_FLOAT_CLEAR_TOUCH = 16 + 46 + 10; // 72
+
+/** The strip the floating buttons take on this screen. */
+export function previewFloatClear(touch: boolean): number {
+  return touch ? PREVIEW_FLOAT_CLEAR_TOUCH : PREVIEW_FLOAT_CLEAR;
+}
+
 /** How far below the map's top edge its top stays: the 26px pinned
  *  rating axis and 8 more. */
 export const PREVIEW_TOP = 34;
@@ -67,13 +82,16 @@ export interface PreviewBounds {
  *  scroller, below a header lying over it; `pinLift` is how far down
  *  the map's visible top edge is, the header's height while it is
  *  showing and 0 once it has gone up (the same as the pinned year
- *  labels' --pin-lift). `loose` lets a preview that an open trailer has
- *  grown rise over the pinned rating axis. */
+ *  labels' --pin-lift). `floatClear` is the strip along the bottom that
+ *  the floating buttons take (previewFloatClear), which the room ends
+ *  above. `loose` lets a preview that an open trailer has grown rise
+ *  over the pinned rating axis. */
 export function previewBounds(
   view: MapView,
   railW: number,
   overlayH: number,
   pinLift: number,
+  floatClear: number,
   loose = false,
 ): PreviewBounds {
   const top = view.scrollTop - overlayH;
@@ -81,7 +99,7 @@ export function previewBounds(
     x0: view.scrollLeft + railW + PREVIEW_RAIL_GAP,
     x1: view.scrollLeft + view.clientWidth - PREVIEW_EDGE,
     vt: top + pinLift + (loose ? PREVIEW_TOP_LOOSE : PREVIEW_TOP),
-    vb: top + view.clientHeight - PREVIEW_EDGE,
+    vb: top + view.clientHeight - floatClear,
   };
 }
 
@@ -213,7 +231,7 @@ export interface PreviewClock {
   cancel: (timer: number) => void;
 }
 
-const pageClock: PreviewClock = {
+export const pageClock: PreviewClock = {
   now: () => performance.now(),
   after: (ms, run) => window.setTimeout(run, ms),
   cancel: (timer) => window.clearTimeout(timer),

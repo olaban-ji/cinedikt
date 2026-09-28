@@ -252,3 +252,63 @@ func TestFilmsCarryTheirGenres(t *testing.T) {
 		t.Errorf("a film with no genres says %s, want no genres key", raw)
 	}
 }
+
+// TestSpineCarriesGenreBits is the genre filter's ground: every film on
+// the spine says its genres as bits over FilmGenres, the legend that
+// travels with the map, so a year nobody has scrolled to can still be
+// judged lit or not.
+func TestSpineCarriesGenreBits(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	publishFixture(t, s, unfiled)
+	// As in the genres test, the unfiled film is this test's alone.
+	t.Cleanup(func() { publishFixture(t, s) })
+	// The fixture credits nobody on it, so Keanu makes it, to put a
+	// film IMDb files under no genre on The Matrix's map.
+	if _, err := s.pool.Exec(ctx, `INSERT INTO `+Live+`.principals (tconst, ordering, nconst, category)
+		VALUES ('tt0000004', 1, 'nm0000206', 'actor')`); err != nil {
+		t.Fatal(err)
+	}
+
+	g, err := s.Grid(ctx, "tt0133093")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(g.Genres, FilmGenres) {
+		t.Errorf("legend = %q, want FilmGenres", g.Genres)
+	}
+	bits := map[string]any{}
+	for _, f := range g.Films {
+		bits[f[0].(string)] = f[5]
+	}
+	// Action is bit 0 and Sci-Fi bit 16.
+	if got := bits["tt0133093"]; got != 1|1<<16 {
+		t.Errorf("The Matrix's genres = %v, want %d", got, 1|1<<16)
+	}
+	got, ok := bits["tt0000004"]
+	if !ok {
+		t.Fatal("the film with no genres is not on the spine")
+	}
+	if got != 0 {
+		t.Errorf("a film with no genres = %v, want 0", got)
+	}
+	raw, err := json.Marshal(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"genres":["Action","Adventure",`) {
+		t.Errorf("the legend is not in the payload: %.300s", raw)
+	}
+}
+
+func TestGenreBitsSkipWhatAMapNeverHolds(t *testing.T) {
+	if got := genreBits([]string{"Documentary", "Talk-Show"}); got != 0 {
+		t.Errorf("genres outside the list = %d, want 0", got)
+	}
+	if got, want := genreBits([]string{"Western", "Talk-Show", "Action"}), 1|1<<20; got != want {
+		t.Errorf("Western and Action with Talk-Show = %d, want %d", got, want)
+	}
+	if got := genreBits(nil); got != 0 {
+		t.Errorf("no genres = %d, want 0", got)
+	}
+}

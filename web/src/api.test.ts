@@ -375,6 +375,85 @@ describe('fetchPeoplePhotos', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  // A found photo should not wait some fifteen seconds for a person who
+  // is still pending, so the answers are handed on as they come.
+  describe('handing on answers as they come', () => {
+    const LANA = 'https://image.tmdb.org/t/p/w185/lana.jpg';
+
+    it('hands on the known answers at once, then each response’s own, and settles on the same whole', async () => {
+      const fetch = stubFetch([
+        { status: 200, body: { photos: { nm0000206: KEANU, nm0000401: null }, pending: [] } },
+        { status: 200, body: { photos: { nm0915989: null, nm0005251: MOSS, nm0905154: null }, pending: ['nm0905154'] } },
+        { status: 200, body: { photos: { nm0905154: LANA }, pending: [] } },
+      ]);
+      const { fetchPeoplePhotos, PHOTO_ASK_AGAIN_MS } = await load();
+      await fetchPeoplePhotos(['nm0000206', 'nm0000401']);
+      const got: Record<string, string | null>[] = [];
+      const asked: number[] = [];
+      const ids = ['nm0000206', 'nm0000401', 'nm0915989', 'nm0005251', 'nm0905154'];
+      const asking = fetchPeoplePhotos(ids, undefined, (some) => {
+        got.push(some);
+        asked.push(fetch.mock.calls.length);
+      });
+      // Before this call's request goes out: "none" is an answer too.
+      expect(got).toEqual([{ nm0000206: KEANU, nm0000401: null }]);
+      expect(asked).toEqual([1]);
+      await vi.advanceTimersByTimeAsync(0);
+      // The first response's answers, without the person still pending.
+      expect(got).toEqual([
+        { nm0000206: KEANU, nm0000401: null },
+        { nm0915989: null, nm0005251: MOSS },
+      ]);
+      await vi.advanceTimersByTimeAsync(PHOTO_ASK_AGAIN_MS[0]);
+      expect(got).toHaveLength(3);
+      expect(got[2]).toEqual({ nm0905154: LANA });
+      const whole = { nm0000206: KEANU, nm0000401: null, nm0915989: null, nm0005251: MOSS, nm0905154: LANA };
+      await expect(asking).resolves.toEqual(whole);
+      // The same whole as a call that is handed nothing along the way.
+      await expect(fetchPeoplePhotos(ids)).resolves.toEqual(whole);
+    });
+
+    it('says nothing at once when nothing is known, nor for a response that answers for nobody', async () => {
+      const fetch = stubFetch([
+        { status: 200, body: { photos: { nm0905154: null }, pending: ['nm0905154'] } },
+        { status: 200, body: { photos: { nm0905154: LANA }, pending: [] } },
+      ]);
+      const { fetchPeoplePhotos, PHOTO_ASK_AGAIN_MS } = await load();
+      const got: Record<string, string | null>[] = [];
+      const asking = fetchPeoplePhotos(['nm0905154'], undefined, (some) => got.push(some));
+      expect(got).toEqual([]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      // Everyone in it was still pending.
+      expect(got).toEqual([]);
+      await vi.advanceTimersByTimeAsync(PHOTO_ASK_AGAIN_MS[0]);
+      expect(got).toEqual([{ nm0905154: LANA }]);
+      await expect(asking).resolves.toEqual({ nm0905154: LANA });
+    });
+
+    it('tells a caller that has gone nothing more', async () => {
+      const fetch = stubFetch([
+        { status: 200, body: { photos: { nm0000206: KEANU, nm0905154: null }, pending: ['nm0905154'] } },
+        { status: 200, body: { photos: { nm0905154: LANA }, pending: [] } },
+      ]);
+      const { fetchPeoplePhotos, PHOTO_ASK_AGAIN_MS } = await load();
+      const gone = new AbortController();
+      const got: Record<string, string | null>[] = [];
+      const asking = fetchPeoplePhotos(['nm0000206', 'nm0905154'], gone.signal, (some) => got.push(some));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(got).toEqual([{ nm0000206: KEANU }]);
+      gone.abort();
+      await vi.advanceTimersByTimeAsync(PHOTO_ASK_AGAIN_MS[0] * 10);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(got).toEqual([{ nm0000206: KEANU }]);
+      await expect(asking).resolves.toEqual({ nm0000206: KEANU });
+      // Nor one that had gone before it asked, known answers or not.
+      const gotLate: Record<string, string | null>[] = [];
+      await fetchPeoplePhotos(['nm0000206'], gone.signal, (some) => gotLate.push(some));
+      expect(gotLate).toEqual([]);
+    });
+  });
+
   it('asks at most fifty at a time, each person once, and never sends an id the server would refuse', async () => {
     const ids = Array.from({ length: 60 }, (_, i) => `nm${String(i + 1).padStart(7, '0')}`);
     const answer = (some: string[]): Answer => ({

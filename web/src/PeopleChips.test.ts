@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { chipName, filmCounts } from './PeopleChips';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import css from './grid.css?raw';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { faceCardController, type FaceCard, type FaceHold, type ImageLoad } from './faceCard';
+import { PeopleChips, chipEvents, chipName, filmCounts } from './PeopleChips';
 import matrix from './fixtures/matrix-grid.json';
 import type { GridPayload, GridPerson, SpineTuple } from './grid';
+import type { PreviewClock } from './preview';
 
 const real = matrix as GridPayload;
 
@@ -62,5 +67,189 @@ describe('chipName', () => {
 
   it('leaves a chip with no count to its own text', () => {
     expect(chipName('Keanu Reeves', undefined)).toBeUndefined();
+  });
+});
+
+/** A chip row that nothing holds. */
+const NO_HOLD: FaceHold = { down: () => {}, up: () => {}, cancel: () => {}, click: () => false, menu: () => false };
+
+describe('a chip', () => {
+  const KEANU = 'https://image.tmdb.org/t/p/w185/keanu.jpg';
+  const LANA = 'https://image.tmdb.org/t/p/w185/lana.jpg';
+
+  /** The row as its first render draws it. Keanu's photo came with the
+   *  payload; Lana's was asked for since; nobody else has one. */
+  function row(): string {
+    const people = real.people.map((p) => (p.id === 'nm0000206' ? { ...p, photo: KEANU } : p));
+    return renderToStaticMarkup(
+      createElement(PeopleChips, {
+        people,
+        carried: new Set<string>(),
+        selected: new Set<string>(),
+        lit: new Set<string>(),
+        hovered: null,
+        counts: new Map([
+          ['nm0000206', 66],
+          ['nm0905154', 8],
+          ['nm0915989', 43],
+        ]),
+        photoOf: (p) => p.photo ?? (p.id === 'nm0905154' ? LANA : undefined),
+        onToggle: () => {},
+        onHover: () => {},
+        onClear: () => {},
+        onFace: () => {},
+        offFace: () => {},
+        hold: NO_HOLD,
+      }),
+    );
+  }
+
+  /** One person's chip, from its tag to its end. */
+  function chip(html: string, id: string): string {
+    const at = html.indexOf(`data-chip="${id}"`);
+    expect(at).toBeGreaterThan(-1);
+    return html.slice(html.lastIndexOf('<button', at), html.indexOf('</button>', at));
+  }
+
+  it('shows the person’s face where the dot was, and says the same as before', () => {
+    const html = row();
+    expect(html).not.toContain('cd-chip-dot');
+    const keanu = chip(html, 'nm0000206');
+    expect(keanu).toContain('aria-label="Keanu Reeves, 66 movies"');
+    expect(keanu).toContain(
+      '<span class="cd-face cd-face-chip" aria-hidden="true"><span class="cd-face-initials">KR</span>' +
+        `<span class="cd-face-ring"></span><img class="cd-face-photo" src="${KEANU}" alt="" decoding="async"/></span>` +
+        '<span class="cd-chip-name">Keanu Reeves</span><span class="cd-chip-count">66</span>',
+    );
+  });
+
+  it('takes a photo asked for since the payload, and the initials without one', () => {
+    const html = row();
+    expect(chip(html, 'nm0905154')).toContain(`src="${LANA}"`);
+    const hugo = chip(html, 'nm0915989');
+    expect(hugo).toContain('aria-label="Hugo Weaving, 43 movies"');
+    expect(hugo).toContain('<span class="cd-face cd-face-chip" aria-hidden="true"><span class="cd-face-initials">HW</span></span>');
+    expect(hugo).not.toContain('<img');
+  });
+
+  it('gives a director a rounded square and the cast a circle, with the codes the cards use', () => {
+    const html = row();
+    // The Wachowskis share initials, so the codes lengthen their first names.
+    expect(chip(html, 'nm0905154')).toContain('class="cd-face cd-face-chip cd-face-square"');
+    expect(chip(html, 'nm0905154')).toContain('<span class="cd-face-initials">LaW</span>');
+    expect(chip(html, 'nm0905152')).toContain('<span class="cd-face-initials">LiW</span>');
+    expect(chip(html, 'nm0000206')).not.toContain('cd-face-square');
+  });
+});
+
+describe('a chip’s bigger photo', () => {
+  const KEANU = 'https://image.tmdb.org/t/p/w185/keanu.jpg';
+  const chipEl = {} as HTMLElement;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Keanu's chip, wired as the row wires it, to a card controller on
+   *  the test's timers whose photos are in hand at once. */
+  function keanu(hovers = true) {
+    vi.useFakeTimers();
+    const clock: PreviewClock = {
+      now: () => Date.now(),
+      after: (ms, run) => setTimeout(run, ms),
+      cancel: (t) => clearTimeout(t),
+    };
+    const loaded: ImageLoad = (_url, done) => {
+      done(true);
+      return () => {};
+    };
+    const log: string[] = [];
+    const opened: FaceCard[] = [];
+    const cards = faceCardController(
+      {
+        hovers: () => hovers,
+        photo: (id) => (id === 'nm0000206' ? KEANU : undefined),
+        place: () => ({ x: 120, y: 142, down: true }),
+        open: (card) => {
+          opened.push(card);
+          log.push('open');
+        },
+        close: () => log.push('close'),
+      },
+      clock,
+      loaded,
+    );
+    const toggled: string[] = [];
+    const lit: (string | null)[] = [];
+    const on = chipEvents('nm0000206', {
+      tap: { allows: () => true },
+      rest: { enter: (id) => lit.push(id), leave: () => lit.push(null) },
+      onToggle: (id) => toggled.push(id),
+      onFace: cards.onFace,
+      offFace: cards.offFace,
+      hold: { down: cards.down, up: cards.up, cancel: cards.cancel, click: cards.click, menu: cards.menu },
+    });
+    return { on, log, opened, toggled, lit };
+  }
+
+  it('asks to open 400ms after the mouse comes onto the chip, and closes as it leaves', () => {
+    const { on, log, opened, lit } = keanu();
+    on.onMouseEnter({ currentTarget: chipEl });
+    // The chip lights its films on its own, shorter delay, as before.
+    expect(lit).toEqual(['nm0000206']);
+    vi.advanceTimersByTime(399);
+    expect(log).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(opened).toEqual([{ id: 'nm0000206', from: 'chip', x: 120, y: 142, down: true }]);
+    on.onMouseLeave();
+    expect(log).toEqual(['open', 'close']);
+    expect(lit).toEqual(['nm0000206', null]);
+  });
+
+  it('opens after a finger holds the chip for 450ms, closes as it lifts, and the click after does not toggle the chip', () => {
+    const { on, log, opened, toggled } = keanu(false);
+    on.onPointerDown({ currentTarget: chipEl, pointerType: 'touch' });
+    vi.advanceTimersByTime(449);
+    expect(log).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(opened.map((c) => c.from)).toEqual(['chip']);
+    // Holding, the phone's own menu is kept away.
+    const menu = { preventDefault: vi.fn() };
+    on.onContextMenu(menu);
+    expect(menu.preventDefault).toHaveBeenCalled();
+    on.onPointerUp();
+    expect(log).toEqual(['open', 'close']);
+    on.onClick();
+    expect(toggled).toEqual([]);
+    // The next tap is the chip's again.
+    on.onPointerDown({ currentTarget: chipEl, pointerType: 'touch' });
+    on.onPointerUp();
+    on.onClick();
+    expect(toggled).toEqual(['nm0000206']);
+  });
+
+  it('opens nothing for a press called off before 450ms', () => {
+    const { on, log, toggled } = keanu(false);
+    on.onPointerDown({ currentTarget: chipEl, pointerType: 'touch' });
+    vi.advanceTimersByTime(300);
+    on.onPointerCancel();
+    vi.advanceTimersByTime(1000);
+    expect(log).toEqual([]);
+    // A tap let go of in time is a tap: the chip toggles.
+    on.onPointerDown({ currentTarget: chipEl, pointerType: 'touch' });
+    vi.advanceTimersByTime(200);
+    on.onPointerUp();
+    on.onClick();
+    vi.advanceTimersByTime(1000);
+    expect(log).toEqual([]);
+    expect(toggled).toEqual(['nm0000206']);
+  });
+});
+
+describe('a chip’s touch rules', () => {
+  it('keep iOS’s callout and a text selection from coming up under a held finger', () => {
+    const rule = css.replace(/\/\*[\s\S]*?\*\//g, '').match(/(?:^|\})\s*\.cd-chip\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(rule).toMatch(/-webkit-touch-callout:\s*none;/);
+    expect(rule).toMatch(/(?:^|[;\s])user-select:\s*none;/);
   });
 });

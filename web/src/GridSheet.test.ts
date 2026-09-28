@@ -136,6 +136,7 @@ function panel(key: string | null | undefined, over: Partial<GridFilm> = {}, pla
     createElement(GridSheet, {
       film: shown,
       payload,
+      photoOf: (p) => p.photo,
       onOnly: () => {},
       onRemap: () => {},
       onClose: () => {},
@@ -263,6 +264,69 @@ describe('the panel’s trailer row', () => {
     const html = panel(KEY, {}, other);
     expect(html).not.toContain('<iframe');
     expect(html).not.toContain('cd-sheet-playing');
+  });
+});
+
+describe('the panel’s people', () => {
+  const LANA = 'https://image.tmdb.org/t/p/w185/lana.jpg';
+  const KEANU = 'https://image.tmdb.org/t/p/w185/keanu.jpg';
+  const people: GridPerson[] = [
+    { id: 'nm0905154', name: 'Lana Wachowski', role: 'director', order: 0, photo: LANA },
+    { id: 'nm0000206', name: 'Keanu Reeves', role: 'cast', character: 'Neo', order: 2 },
+    { id: 'nm0000401', name: 'Laurence Fishburne', role: 'cast', character: 'Morpheus', order: 3 },
+  ];
+
+  /** The panel for The Matrix Reloaded, with Keanu's photo asked for
+   *  since the payload and nobody else's but Lana's. */
+  function rows(): string {
+    answer.key = KEY;
+    return renderToStaticMarkup(
+      createElement(GridSheet, {
+        film: film(7.2, { title: 'The Matrix Reloaded', people: people.map((p) => p.id) }),
+        payload: { anchor, people, films: [] },
+        photoOf: (p) => p.photo ?? (p.id === 'nm0000206' ? KEANU : undefined),
+        onOnly: () => {},
+        onRemap: () => {},
+        onClose: () => {},
+        player: playerWith(null),
+      }),
+    );
+  }
+
+  /** One person's row, from its tag to its end. */
+  function row(html: string, name: string): string {
+    const at = html.indexOf(`aria-label="Show only ${name}&#x27;s movies"`);
+    expect(at).toBeGreaterThan(-1);
+    return html.slice(html.lastIndexOf('<button', at), html.indexOf('</button>', at));
+  }
+
+  it('has a face in every row, where the initials disc was', () => {
+    const html = rows();
+    expect(html).not.toContain('cd-sheet-initials');
+    expect(row(html, 'Keanu Reeves')).toContain(
+      '<span class="cd-face cd-face-sheet" aria-hidden="true"><span class="cd-face-initials">KR</span>' +
+        `<span class="cd-face-ring"></span><img class="cd-face-photo" src="${KEANU}" alt="" decoding="async"/></span>` +
+        '<span class="cd-sheet-person-text"><span class="cd-sheet-name">Keanu Reeves</span>',
+    );
+    // Nobody has found Laurence's photo: the initials stay.
+    expect(row(html, 'Laurence Fishburne')).toContain(
+      '<span class="cd-face cd-face-sheet" aria-hidden="true"><span class="cd-face-initials">LF</span></span>',
+    );
+  });
+
+  it('draws a director round: the role line already says who directed', () => {
+    const lana = row(rows(), 'Lana Wachowski');
+    expect(lana).toContain('<span class="cd-face cd-face-sheet" aria-hidden="true">');
+    expect(lana).toContain(`src="${LANA}"`);
+    expect(lana).toContain('<span class="cd-sheet-role">Directed The Matrix</span>');
+    expect(lana).not.toContain('cd-face-square');
+  });
+
+  it('holds the 44px face 8px from the row’s edge, the row still 60px tall', () => {
+    const person = decls('.cd-sheet-person');
+    expect(person.get('padding')).toBe('0 10px 0 8px');
+    expect(person.get('min-height')).toBe('60px');
+    expect(decls('.cd-face-sheet').get('--face')).toBe('44px');
   });
 });
 

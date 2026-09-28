@@ -29,7 +29,7 @@ import { previewScheduler, type PreviewClock } from './preview';
 /** A card whose spine says it holds these places in the chip row. */
 function card(people: number[] = [], id = 'tt0000001', isAnchor = false): Placed {
   return {
-    film: { id, year: 2000, rating: 7, md: 0, people, isAnchor },
+    film: { id, year: 2000, rating: 7, md: 0, people, genres: 0, isAnchor },
     left: 0,
     top: 0,
     lane: 0,

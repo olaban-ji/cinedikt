@@ -1,13 +1,16 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   type ReactNode,
   type RefObject,
   type WheelEvent,
 } from 'react';
-import type { GridPayload, GridPerson } from './grid';
+import type { FaceCardEvents, FaceHold } from './faceCard';
+import { initialsFor, type GridPayload, type GridPerson } from './grid';
 import { carriedFirst, personVars } from './personColour';
-import { useHoverDelay, useTapGuard } from './tap';
+import { PersonFace } from './PersonFace';
+import { useHoverDelay, useTapGuard, type TapGuard } from './tap';
 import { useResolvedTheme } from './theme';
 
 interface Props {
@@ -26,9 +29,18 @@ interface Props {
   /** How many of each person's films this map holds (see filmCounts).
    *  A person missing from it shows no number. */
   counts: ReadonlyMap<string, number>;
+  /** A person's photo, from the payload or asked for since; undefined
+   *  while there is none to show. */
+  photoOf: (p: GridPerson) => string | undefined;
   onToggle: (id: string) => void;
   onHover: (id: string | null) => void;
   onClear: () => void;
+  /** A pointer resting on a chip, and leaving it, for its person's
+   *  bigger photo (see useFaceCard). */
+  onFace: FaceCardEvents['onFace'];
+  offFace: FaceCardEvents['offFace'];
+  /** A press on a chip, which a finger holds to see the bigger photo. */
+  hold: FaceHold;
   /** Rendered before "Everyone": the active-filter pill, when there is
    *  one. Nothing that hides content may be invisible. */
   lead?: ReactNode;
@@ -41,10 +53,13 @@ interface Props {
  *  last map, then everyone else in billing order. A chip selects that
  *  person; the grid dims everything they are not in.
  *
- *  Each chip carries its person's colour, the same one their marks have
- *  on the cards, and its swatch's shape says cast or director. After the
- *  name comes how many of their films are on this map, so the reader can
- *  tell at a glance whose work the map is mostly made of. */
+ *  Each chip carries its person's photo in a ring of their colour, the
+ *  same one their marks have on the cards, or their initials on a disc
+ *  of it, and the face's shape says cast or director. After the name
+ *  comes how many of their films are on this map, so the reader can
+ *  tell at a glance whose work the map is mostly made of. A pointer
+ *  resting on a chip, or a finger held on one, shows the photo bigger
+ *  (see chipEvents). */
 export function PeopleChips({
   people,
   carried,
@@ -52,14 +67,21 @@ export function PeopleChips({
   lit,
   hovered,
   counts,
+  photoOf,
   onToggle,
   onHover,
   onClear,
+  onFace,
+  offFace,
+  hold,
   lead,
   allRef,
 }: Props) {
   useEffect(() => () => onHover(null), [onHover]);
   const theme = useResolvedTheme();
+  // Worked out over the whole map, so a person has the same initials
+  // here as on every card.
+  const codes = useMemo(() => initialsFor(people), [people]);
   const row = useRef<HTMLDivElement>(null);
   // The strip scrolls sideways, so the same rule the map uses applies:
   // a chip that ends a flick was not chosen.
@@ -102,11 +124,14 @@ export function PeopleChips({
             style={personVars(p, theme)}
             aria-pressed={on}
             aria-label={chipName(p.name, n)}
-            onClick={() => tap.allows() && onToggle(p.id)}
-            onMouseEnter={() => rest.enter(p.id)}
-            onMouseLeave={rest.leave}
+            {...chipEvents(p.id, { tap, rest, onToggle, onFace, offFace, hold })}
           >
-            <span className="cd-chip-dot" aria-hidden="true" />
+            <PersonFace
+              photo={photoOf(p)}
+              code={codes.get(p.id) ?? '?'}
+              size="chip"
+              square={p.role === 'director'}
+            />
             <span className="cd-chip-name">{p.name}</span>
             {n != null && <span className="cd-chip-count">{n}</span>}
           </button>
@@ -114,6 +139,46 @@ export function PeopleChips({
       })}
     </div>
   );
+}
+
+/** A chip's events. A click that was meant toggles its person, unless
+ *  it ends a finger's hold, which was for the bigger photo. A pointer
+ *  resting on it lights their films after the row's short delay and
+ *  opens their bigger photo after a longer one; leaving puts both away.
+ *  A finger held on it opens the photo, and lifting closes it. */
+export function chipEvents(
+  id: string,
+  o: {
+    tap: Pick<TapGuard, 'allows'>;
+    rest: { enter: (id: string) => void; leave: () => void };
+    onToggle: (id: string) => void;
+    onFace: FaceCardEvents['onFace'];
+    offFace: FaceCardEvents['offFace'];
+    hold: FaceHold;
+  },
+) {
+  return {
+    onClick: () => {
+      // Asked first, and every time: the hold is over either way.
+      if (o.hold.click()) return;
+      if (o.tap.allows()) o.onToggle(id);
+    },
+    onMouseEnter: (e: { currentTarget: HTMLElement }) => {
+      o.rest.enter(id);
+      o.onFace(id, e.currentTarget, 'chip');
+    },
+    onMouseLeave: () => {
+      o.rest.leave();
+      o.offFace();
+    },
+    onPointerDown: (e: { currentTarget: HTMLElement; pointerType: string }) =>
+      o.hold.down(id, e.currentTarget, e.pointerType),
+    onPointerUp: () => o.hold.up(),
+    onPointerCancel: () => o.hold.cancel(),
+    onContextMenu: (e: { preventDefault: () => void }) => {
+      if (o.hold.menu()) e.preventDefault();
+    },
+  };
 }
 
 /** A wheel over the chips moves them sideways.

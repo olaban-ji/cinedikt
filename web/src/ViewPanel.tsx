@@ -1,6 +1,13 @@
-import { useRef, useState, type MutableRefObject } from 'react';
+import { useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { capture } from './analytics';
-import { RATING_STOPS, rungLabel, type GridSettings } from './grid';
+import {
+  genreChoices,
+  RATING_STOPS,
+  rungLabel,
+  toggleGenre,
+  type GridPayload,
+  type GridSettings,
+} from './grid';
 import { useScreen } from './screen';
 import { useCloser, useDrag, useEscape, useFocusTrapped, useGlide, VIEW_EXIT_MS } from './sheet';
 import { ThemePicker } from './ThemePicker';
@@ -77,6 +84,8 @@ interface Props {
   /** The range holds none of this cast's other films, which is why the
    *  reader is looking at one row. See `rangeHoldsNone`. */
   rangeEmpty: boolean;
+  /** The map, for the genres its films carry. */
+  payload: GridPayload | null;
   onFloor: (r: number | null) => void;
   theme: ThemePref;
   onTheme: (p: ThemePref) => void;
@@ -99,6 +108,7 @@ export function ViewPanel({
   perYear,
   anchorYear,
   rangeEmpty,
+  payload,
   onFloor,
   theme,
   onTheme,
@@ -229,6 +239,7 @@ export function ViewPanel({
             </p>
           )}
         </div>
+        {payload && <GenreSection payload={payload} settings={settings} onChange={onChange} />}
         <div className="cd-view-section cd-view-switches">
           {SWITCHES.map((sw) => (
             <button
@@ -261,6 +272,62 @@ export function ViewPanel({
         </div>
       </div>
     </>
+  );
+}
+
+/** The genre filter: every genre a mapped film can carry, as toggles in
+ *  three columns, lighting only the films that have all of those picked.
+ *  Each says how many films on the plot it would leave lit, and one that
+ *  would leave none cannot be picked. A map whose spine carries no
+ *  genres has no legend, and no section. */
+export function GenreSection({
+  payload,
+  settings,
+  onChange,
+}: {
+  payload: GridPayload;
+  settings: GridSettings;
+  onChange: (s: GridSettings) => void;
+}) {
+  const choices = useMemo(() => genreChoices(payload, settings), [payload, settings]);
+  if (choices.length === 0) return null;
+  const any = settings.genres.length > 0;
+  return (
+    <div className="cd-view-section cd-genres">
+      <div className="cd-view-heading-row">
+        <span className="cd-view-heading">Genres</span>
+        <span className="cd-genres-hint">Lights movies with all you pick</span>
+        {/* Always here, like Years' Reset, so the row never changes
+            height when a genre is picked; named for what it clears. */}
+        <button
+          type="button"
+          className="cd-link cd-genres-clear"
+          style={any ? undefined : { visibility: 'hidden' }}
+          aria-hidden={any ? undefined : true}
+          aria-label="Clear genres"
+          tabIndex={any ? undefined : -1}
+          onClick={() => onChange({ ...settings, genres: [] })}
+        >
+          Clear
+        </button>
+      </div>
+      <div className="cd-genre-grid" role="group" aria-label="Genres">
+        {choices.map((g) => (
+          <button
+            key={g.name}
+            type="button"
+            className={`cd-genre${g.picked ? ' cd-genre-on' : ''}`}
+            aria-pressed={g.picked}
+            aria-label={g.label}
+            disabled={g.disabled}
+            onClick={() => onChange(toggleGenre(settings, g.name))}
+          >
+            <span className="cd-genre-name">{g.name}</span>
+            {g.count > 0 && <span className="cd-genre-n">{g.count}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

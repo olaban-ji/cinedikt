@@ -39,6 +39,9 @@ export type SpineTuple = [
    *  `payload.people`. Indexes rather than name ids, because there are
    *  four hundred films and the ids would be most of the payload. */
   people?: number[],
+  /** The film's genres, as bits over `payload.genres`: bit i is
+   *  genres[i]. Absent on a spine that carries no genres. */
+  genres?: number,
 ];
 
 export interface SpineFilm {
@@ -54,13 +57,17 @@ export interface SpineFilm {
    *  it: hiding the empty years asks of every year whether anything in
    *  it is lit, including the years nobody has looked at yet. */
   people: number[];
+  /** The film's genres as bits over `payload.genres`, 0 for none. On the
+   *  spine for the same reason as the people: the genre filter lights
+   *  cards, and hiding the empty years asks it of every year. */
+  genres: number;
   isAnchor: boolean;
 }
 
 /** What a card says, which arrives a screen at a time into a box that
  *  already exists. Its people are name ids, not spine indexes: the card
  *  draws a marker per person and looks each one up by id. */
-export interface GridFilm extends Omit<SpineFilm, 'people'> {
+export interface GridFilm extends Omit<SpineFilm, 'people' | 'genres'> {
   title: string;
   /** YYYY-MM-DD when we have it. The year band stacks by this, not labels. */
   released?: string;
@@ -87,18 +94,43 @@ export interface GridPayload {
    *  it while the map opens rather than leaving the first reader to
    *  paste a link at an address that has nothing behind it yet. */
   og_v?: string;
+  /** The legend for the genre bits on the spine: every genre a mapped
+   *  film can carry, in IMDb's alphabetical order. The server sends it so
+   *  the client never keeps a list of its own. Absent where the spine
+   *  carries no genres, and then there is no genre filter. */
+  genres?: string[];
 }
 
 /** The spine, read into something with names on it. */
 export function spineOf(payload: GridPayload): SpineFilm[] {
-  return payload.films.map(([id, year, rating, md, people]) => ({
+  return payload.films.map(([id, year, rating, md, people, genres]) => ({
     id,
     year,
     rating,
     md: md ?? 0,
     people: people ?? [],
+    genres: genres ?? 0,
     isAnchor: id === payload.anchor.id,
   }));
+}
+
+/** The bits for the genres picked, over the payload's legend. A name the
+ *  legend does not hold sets nothing, and without a legend nothing is
+ *  asked for at all. */
+export function genreMask(payload: Pick<GridPayload, 'genres'>, names: readonly string[]): number {
+  const legend = payload.genres ?? [];
+  let want = 0;
+  for (const name of names) {
+    const i = legend.indexOf(name);
+    if (i >= 0) want |= 1 << i;
+  }
+  return want;
+}
+
+/** Whether a film has every genre asked for. Nothing asked for is
+ *  everything. */
+export function hasGenres(genres: number, want: number): boolean {
+  return (genres & want) === want;
 }
 
 /** The oldest and newest years this map holds. The year control's ends
@@ -204,6 +236,11 @@ export interface GridSettings {
   yearTo: number | null;
   /** Collapse rows where nothing is lit. Applies to every filter. */
   hideEmptyYears: boolean;
+  /** Light only films with every one of these genres, named as the
+   *  payload's legend names them, in the order they were picked. Like
+   *  the years, it belongs to the visit: another movie starts clear, and
+   *  coming back restores it. */
+  genres: string[];
 }
 
 export const DEFAULT_SETTINGS: GridSettings = {
@@ -214,6 +251,7 @@ export const DEFAULT_SETTINGS: GridSettings = {
   yearFrom: null,
   yearTo: null,
   hideEmptyYears: false,
+  genres: [],
 };
 
 /** Settings a stored string, read back. Anything missing takes its
@@ -546,7 +584,8 @@ export function litOthers(
   settings: GridSettings,
   selected: Set<number>,
 ): SpineFilm[] {
-  return othersOnPlot(payload, settings).filter((f) => isLit(f, selected, settings.minRating));
+  const want = genreMask(payload, settings.genres);
+  return othersOnPlot(payload, settings).filter((f) => isLit(f, selected, settings.minRating, want));
 }
 
 /** Whether the reader's year range holds none of this cast's other films,
@@ -575,8 +614,9 @@ export function aloneAfterHiding(
   selected: Set<number>,
 ): boolean {
   if (!settings.hideEmptyYears) return false;
+  const want = genreMask(payload, settings.genres);
   const others = othersOnPlot(payload, settings);
-  return others.length > 0 && !others.some((f) => isLit(f, selected, settings.minRating));
+  return others.length > 0 && !others.some((f) => isLit(f, selected, settings.minRating, want));
 }
 
 /** How many years on the plot hold nothing lit: what hiding the empty
@@ -586,10 +626,11 @@ export function emptyYearCount(
   settings: GridSettings,
   selected: Set<number>,
 ): number {
+  const want = genreMask(payload, settings.genres);
   const lit = new Map<number, boolean>();
   for (const f of spineOf(payload)) {
     if (!onPlot(f, settings)) continue;
-    lit.set(f.year, (lit.get(f.year) ?? false) || isLit(f, selected, settings.minRating));
+    lit.set(f.year, (lit.get(f.year) ?? false) || isLit(f, selected, settings.minRating, want));
   }
   let n = 0;
   for (const on of lit.values()) if (!on) n += 1;
@@ -600,7 +641,8 @@ export function emptyYearCount(
  *
  *  The searched film always is: it is the centre of its own map. An
  *  unrated film clears no floor, because there is nothing to compare;
- *  with nobody selected, everyone counts.
+ *  a film needs every genre picked (`want`, from genreMask); with nobody
+ *  selected, everyone counts.
  *
  *  A hovered chip is not part of this. A preview that reflowed the grid
  *  would move the cards out from under the pointer that asked for it. */
@@ -608,9 +650,11 @@ export function isLit(
   f: SpineFilm,
   selected: Set<number>,
   floor: number | null,
+  want = 0,
 ): boolean {
   if (f.isAnchor) return true;
   if (!passesFloor(f.rating, floor)) return false;
+  if (want && !hasGenres(f.genres, want)) return false;
   if (selected.size === 0) return true;
   return f.people.some((i) => selected.has(i));
 }
@@ -761,6 +805,10 @@ export function activeFilters(settings: GridSettings, rungsInView: boolean): str
   if (from != null && to != null) parts.push(`${from}–${to}`);
   else if (from != null) parts.push(`From ${from}`);
   else if (to != null) parts.push(`To ${to}`);
+  const genres = settings.genres;
+  if (genres.length === 1) parts.push(genres[0]);
+  else if (genres.length === 2) parts.push(`${genres[0]} & ${genres[1]}`);
+  else if (genres.length > 2) parts.push(`${genres.length} genres`);
   // Hiding the empty years is not here. It filters no movie out — it
   // only closes up the rows between the ones already showing — and the
   // reader can see it has happened. A pill is for what is hidden.
@@ -768,7 +816,8 @@ export function activeFilters(settings: GridSettings, rungsInView: boolean): str
 }
 
 /** The settings once the pill's ✕ has been pressed: everything the pill
- *  names is cleared, and nothing it does not.
+ *  names is cleared, and nothing it does not: the years, the genres, and
+ *  the floor where the pill shows it.
  *
  *  It used to clear the year window alone. On a phone, where the pill
  *  also names the rating floor, a pill that said only "6.5+" had an ✕
@@ -785,14 +834,74 @@ export function withoutPill(settings: GridSettings, rungsInView: boolean): GridS
     minRating: rungsInView ? null : settings.minRating,
     yearFrom: null,
     yearTo: null,
+    genres: [],
   };
+}
+
+/** One toggle in the View panel's Genres section. */
+export interface GenreChoice {
+  /** As the legend writes it: "Sci-Fi", "Film-Noir". */
+  name: string;
+  /** How many films on the plot have every genre picked and this one. */
+  count: number;
+  picked: boolean;
+  /** Picking it would light nothing, so it cannot be picked. A picked
+   *  genre never is: it can always be unpicked. */
+  disabled: boolean;
+  /** What the toggle says to a screen reader: "Sci-Fi, 12 movies". */
+  label: string;
+}
+
+/** The Genres section's toggles, in the legend's order, so each genre
+ *  keeps its place from map to map. Empty without a legend, and then
+ *  there is no section.
+ *
+ *  A count is of the films on the plot — the unrated column and the year
+ *  range decide that, and the searched film is always on it — that have
+ *  every genre picked plus this one. The rating floor and the chosen
+ *  people are left out, so a count says what the map holds rather than
+ *  what the other filters happen to leave lit. */
+export function genreChoices(payload: GridPayload, settings: GridSettings): GenreChoice[] {
+  const legend = payload.genres ?? [];
+  if (legend.length === 0) return [];
+  const plot = spineOf(payload).filter((f) => onPlot(f, settings));
+  const picked = genreMask(payload, settings.genres);
+  return legend.map((name, i) => {
+    const bit = 1 << i;
+    const on = (picked & bit) !== 0;
+    const want = picked | bit;
+    let count = 0;
+    let holding = 0;
+    for (const f of plot) {
+      if (hasGenres(f.genres, want)) count += 1;
+      if (f.genres & bit) holding += 1;
+    }
+    const says =
+      count > 0
+        ? `${count} ${count === 1 ? 'movie' : 'movies'}`
+        : holding === 0
+          ? 'none on this map'
+          : 'none with the genres picked';
+    return { name, count, picked: on, disabled: !on && count === 0, label: `${name}, ${says}` };
+  });
+}
+
+/** The settings with a genre picked, or unpicked if it was. Picks are
+ *  kept in the order they were made, which is the order the pill names
+ *  two of them in. */
+export function toggleGenre(settings: GridSettings, name: string): GridSettings {
+  const genres = settings.genres.includes(name)
+    ? settings.genres.filter((g) => g !== name)
+    : [...settings.genres, name];
+  return { ...settings, genres };
 }
 
 /** How many settings differ from the defaults, for the View button.
  *
  *  A range counts once however many ends it has: the reader set one
- *  thing. The rating floor counts only where it is changed from — in
- *  the panel — so the number matches what opening the panel would show.
+ *  thing. So do the genres, however many are picked. The rating floor
+ *  counts only where it is changed from — in the panel — so the number
+ *  matches what opening the panel would show.
  */
 export function changedCount(settings: GridSettings, rungsInView: boolean): number {
   let n = 0;
@@ -801,6 +910,7 @@ export function changedCount(settings: GridSettings, rungsInView: boolean): numb
   if (settings.highlightYear !== DEFAULT_SETTINGS.highlightYear) n++;
   if (settings.yearFrom != null || settings.yearTo != null) n++;
   if (rungsInView && settings.minRating != null) n++;
+  if (settings.genres.length > 0) n++;
   return n;
 }
 

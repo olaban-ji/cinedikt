@@ -322,7 +322,9 @@ button {
   flex-shrink: 0;
   box-sizing: border-box;
   height: 34px;
-  padding: 0 12px 0 11px;
+  /* The face sits 3px inside the chip on every side: 34 − 28 = 6, and
+     44 − 38 = 6 where the chip is a thumb's target. */
+  padding: 0 12px 0 3px;
   white-space: nowrap;
   border-radius: 11px;
   /* The edge is a ring painted inside the chip rather than a border, so
@@ -333,6 +335,10 @@ button {
   color: var(--t);
   font-size: 13px;
   font-weight: 500;
+  /* A finger held on a chip opens its person's bigger photo, so neither
+     iOS's callout nor a text selection may come up over it. */
+  -webkit-touch-callout: none;
+  user-select: none;
   transition:
     background-color 0.15s ease,
     box-shadow 0.15s ease,
@@ -380,15 +386,6 @@ button {
   outline-offset: -2px;
 }
 
-/* Round for cast, square for a director: --swatch-r is set per person. */
-.cd-chip-dot {
-  width: 9px;
-  height: 9px;
-  flex-shrink: 0;
-  border-radius: var(--swatch-r, 50%);
-  background: var(--tone);
-}
-
 /* How many of their films are on this map. Quieter than the name, and
    the same weight whether or not the chip is chosen. */
 .cd-chip-count {
@@ -424,9 +421,210 @@ button {
   }
 }
 
+/* ---- people's faces ---- */
+
+/* A person's photo in a ring of their colour; until it has loaded, or
+   when there is none, their initials on a disc of it, in the same box. */
+.cd-face {
+  --face-fade: 240ms;
+  position: relative;
+  flex-shrink: 0;
+  width: var(--face);
+  height: var(--face);
+  border-radius: 50%;
+}
+
+.cd-face-square {
+  border-radius: var(--face-r);
+}
+
+.cd-face-chip {
+  --face: 28px;
+  --face-inset: 3.5px;
+  --face-r: 8px;
+  font-size: 10.5px;
+}
+
+.cd-face-preview {
+  --face: 30px;
+  --face-inset: 3.5px;
+  --face-r: 9px;
+  font-size: 10.5px;
+}
+
+.cd-face-sheet {
+  --face: 44px;
+  --face-inset: 4.5px;
+  font-size: 13px;
+}
+
+.cd-face-initials,
+.cd-face-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  transition: opacity var(--face-fade) ease;
+}
+
+.cd-face-initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklch, var(--tone) 20%, transparent);
+  color: var(--tone);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.cd-face-ring {
+  box-shadow: inset 0 0 0 2px var(--tone);
+  opacity: 0;
+}
+
+/* TMDB's profile images are 2:3 portraits framed on the head; 22% from
+   the top keeps the face in the middle of a square crop. */
+.cd-face-photo {
+  position: absolute;
+  inset: var(--face-inset);
+  width: calc(100% - 2 * var(--face-inset));
+  height: calc(100% - 2 * var(--face-inset));
+  object-fit: cover;
+  object-position: 50% 22%;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity var(--face-fade) ease;
+}
+
+.cd-face-square .cd-face-photo {
+  border-radius: calc(var(--face-r) - var(--face-inset));
+}
+
+.cd-face-in .cd-face-initials {
+  opacity: 0;
+}
+
+.cd-face-in .cd-face-ring,
+.cd-face-in .cd-face-photo {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cd-face {
+    --face-fade: 0ms;
+  }
+}
+
+/* Forced colours drop box-shadow, so the ring comes back as a border. */
+@media (forced-colors: active) {
+  .cd-face-ring {
+    box-shadow: none;
+    border: 2px solid CanvasText;
+  }
+}
+
+/* ---- a bigger photo of a person ----
+
+   Beside the chip or preview face it was asked for from (PersonCard,
+   placed by placeFaceCard in faceCard.ts): its left edge, and its top
+   when it hangs below, or its bottom when it stands above. It grows
+   from the edge nearest what asked for it. For looking only, so it never
+   takes the pointer. Over the sheets and the preview, under the toast. */
+.cd-person-card {
+  position: fixed;
+  z-index: 45;
+  width: 148px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 6px 10px;
+  border-radius: 16px;
+  background: var(--s);
+  box-shadow:
+    inset 0 0 0 1px var(--ln2),
+    var(--pop);
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.96);
+  transform-origin: 50% 0;
+  transition:
+    opacity 160ms ease,
+    transform 220ms var(--ease-glide);
+}
+
+.cd-person-card-up {
+  transform-origin: 50% 100%;
+}
+
+.cd-person-card-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* The same ring as the small faces: 2px of their colour, then a gap. */
+.cd-person-card-frame {
+  display: block;
+  padding: 4px;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 2px var(--tone);
+}
+
+.cd-person-card-photo {
+  display: block;
+  aspect-ratio: 2 / 3;
+  border-radius: 8px;
+  background: var(--c2) 50% 22% / cover no-repeat;
+}
+
+.cd-person-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.cd-person-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.cd-person-card-role {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--t3);
+  text-wrap: balance;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cd-person-card {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* Forced colours drop box-shadow, so the card's edge and the photo's
+   ring come back as borders. */
+@media (forced-colors: active) {
+  .cd-person-card {
+    border: 1px solid CanvasText;
+  }
+
+  .cd-person-card-frame {
+    box-shadow: none;
+    border: 2px solid CanvasText;
+  }
+}
 
 /* ---- scroller ---- */
 
+/* Never a transform, filter, will-change or z-index here, nor on
+   .cd-plot-wrap or .cd-plot: each makes a stacking context, which would
+   trap the hover preview inside it, below .cd-trailer-focus and the
+   header. The preview's z-index has to meet theirs directly. The fade
+   below is one too while it runs, but only as a map is left or lands,
+   when no preview is open. */
 .cd-scroller {
   flex: 1;
   min-height: 0;
@@ -1381,6 +1579,18 @@ button {
   transition: background-color 0.25s ease;
 }
 
+/* While the search field has the focus, the header stands over
+   .cd-trailer-focus (31) and a preview with a trailer (32). The two can
+   be up together: "/" and ⌘K reach the field with the pointer still
+   resting on the preview, and a trailer starts on a rest over Watch
+   trailer without taking the focus from the field. What the reader
+   types, and the results under it, are never under the blur. The
+   list's own z-index (40) cannot lift it past them: it counts only
+   inside the header, which is a stacking context. */
+.cd-header-searching {
+  z-index: 33;
+}
+
 /* On a map the header is ruled off from the plot below it, from the
    first paint: the rule says the chips are the header's, not the map's. */
 .cd-header-map {
@@ -2266,14 +2476,17 @@ button {
   color: var(--t3);
 }
 
-/* A row is not tinted by its person: their colour is in the initials,
-   and a row lit in it would read as chosen. It only firms its ring. */
+/* A row is not tinted by its person: their colour is in the face beside
+   the name, a ring round their photo or a disc under their initials, and
+   a row lit in it would read as chosen. It only firms its own ring. */
 .cd-sheet-person {
   display: flex;
   align-items: center;
   gap: 12px;
   min-height: 60px;
-  padding: 0 10px 0 12px;
+  /* The 44px face sits 8px from the row's edge, and the row stays 60px
+     tall. */
+  padding: 0 10px 0 8px;
   box-sizing: border-box;
   border: 0;
   border-radius: 14px;
@@ -2305,22 +2518,6 @@ button {
   .cd-sheet-person:hover {
     box-shadow: inset 0 0 0 1px var(--ln3);
   }
-}
-
-/* The person's initials in their colour, on a disc of it. */
-.cd-sheet-initials {
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: color-mix(in oklch, var(--tone) 20%, transparent);
-  color: var(--tone);
-  font-size: 11.5px;
-  font-weight: 700;
-  line-height: 1;
 }
 
 .cd-sheet-person-text {
@@ -2815,12 +3012,13 @@ button {
 
 /* ---- hover preview ----
 
-   A card's synopsis and trailer, beside it on the map, for a pointer
-   resting on it (MapPreview). It is placed in the plot by script
+   A card's people, synopsis and trailer, beside it on the map, for a
+   pointer resting on it (MapPreview). It is placed in the plot by script
    (placePreview in preview.ts): its left edge, and its top or its
    bottom, whichever it grows from. Above every card, the axis and the
-   rail, and under the header. It comes in from 6px nearer its card
-   (.cd-preview-left when it is left of the card), and goes at once. */
+   rail, and under the header, until a trailer is set in it. It comes in
+   from 6px nearer its card (.cd-preview-left when it is left of the
+   card), and goes at once. */
 .cd-preview {
   position: absolute;
   z-index: 12;
@@ -2855,8 +3053,11 @@ button {
 
 /* While a trailer is open in it, the preview's top glides up with the
    opening to keep the grown box inside the map, and back with the
-   close, on the player's own timings. */
+   close, on the player's own timings. From the player being set until
+   it is cleared, the preview stands above .cd-trailer-focus (31), which
+   is over the header and the floating buttons. */
 .cd-preview-trailer {
+  z-index: 32;
   transition:
     opacity 0.16s ease,
     translate 0.22s var(--ease-glide),
@@ -2929,6 +3130,46 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* Who links the film to the searched one, in chip-row order: faces
+   with names for one or two people, faces alone for more, with each
+   name in its title. Nine fit across; past that, eight and a count.
+   30px tall, it adds 42px to the box with the gap above it; two long
+   names can wrap onto a second line. A photo arriving never changes its
+   size, so nothing is measured again for it. */
+.cd-preview-faces {
+  position: relative; /* above .cd-preview-wash */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.cd-preview-faces-named {
+  gap: 6px 14px;
+}
+
+.cd-preview-face {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cd-preview-face-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t);
+  white-space: nowrap;
+}
+
+.cd-preview-faces-more {
+  padding-left: 3px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Six lines at most (SYN_LINES of SYN_LINE_H in preview.ts). To make
    room for a trailer it folds to fewer, its max-height set in whole
    lines by script, or away entirely, taking back the box's gap. Its
@@ -2986,6 +3227,47 @@ button {
   .cd-preview-syn,
   .cd-preview-trailer-open .cd-preview-syn {
     transition: none;
+  }
+}
+
+/* Behind a playing preview trailer: the map, the header and the
+   floating buttons recede. Static once it has faded in, so the one
+   backdrop blur costs nothing while the video plays. Only its opacity
+   ever moves: the blur is always 8px. The tint is the ground at 48%,
+   which dims the dark theme and veils the light one. It is mounted
+   while the preview's player is set, and in once that player is open
+   (TrailerFocus in MapPreview.tsx). */
+.cd-trailer-focus {
+  position: fixed;
+  inset: 0;
+  z-index: 31; /* above .cd-header (20) and .cd-float (30) */
+  pointer-events: none;
+  background: color-mix(in oklch, var(--g) 48%, transparent);
+  -webkit-backdrop-filter: blur(8px) saturate(0.85);
+  backdrop-filter: blur(8px) saturate(0.85);
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+
+.cd-trailer-focus-in {
+  opacity: 1;
+  transition-duration: 520ms; /* the player's own opening */
+}
+
+/* For a reader who has asked for nothing to move, it is there with the
+   player and gone with it. */
+@media (prefers-reduced-motion: reduce) {
+  .cd-trailer-focus {
+    transition: none;
+  }
+}
+
+/* In forced colours the page keeps the contrast the reader chose:
+   nothing behind the preview is dimmed or blurred, and the preview is
+   set off by its outline. */
+@media (forced-colors: active) {
+  .cd-trailer-focus {
+    display: none;
   }
 }
 
@@ -3489,6 +3771,103 @@ button {
   font-weight: 700;
 }
 
+/* The genres, between the years and the switches: a rule above them,
+   and a heading row laid out like Years'. */
+.cd-genres {
+  gap: 6px;
+  border-top: 1px solid var(--ln2);
+  padding-top: 8px;
+}
+
+.cd-genres-hint {
+  font-size: 12px;
+  color: var(--t3);
+}
+
+/* Years has its readout to push Reset to the end of the row; Clear
+   pushes itself. */
+.cd-genres-clear {
+  margin-left: auto;
+}
+
+.cd-genre-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+/* A genre: its name, cut short if it has to be, and how many movies it
+   would leave lit. A ring rather than a fill, like the panel's rungs,
+   until it is picked. */
+.cd-genre {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px 0 10px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--ln2);
+  color: var(--t);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.1s ease;
+}
+
+.cd-genre-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-genre-n {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-genre-on {
+  background: var(--accSoft);
+  box-shadow: inset 0 0 0 1px var(--acc);
+  color: var(--accText);
+  font-weight: 700;
+}
+
+.cd-genre-on .cd-genre-n {
+  color: var(--accText);
+}
+
+/* Nothing on the plot has it with the genres picked, so picking it
+   would light nothing. */
+.cd-genre:disabled {
+  opacity: 0.45;
+  color: var(--t3);
+  cursor: default;
+}
+
+.cd-genre:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.cd-genre:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
 .cd-switch {
   display: flex;
   align-items: center;
@@ -3556,45 +3935,64 @@ button {
 }
 
 /* The panel's rungs are 42 to the eye and 44 to a finger: the extra is
-   a pixel above and below each, inside the gaps between the rows. */
+   a pixel above and below each, inside the gaps between the rows. The
+   genres grow to the rungs' height, and reach the same way. */
 @media (max-width: 1023.98px), (max-height: 499.98px), (pointer: coarse) {
-  .cd-view-rungs .cd-rung::before {
+  .cd-view-rungs .cd-rung::before,
+  .cd-genre::before {
     content: '';
     position: absolute;
     inset: -1px 0;
   }
+
+  .cd-genre {
+    height: 42px;
+  }
 }
 
 /* Forced colours drop the panel's ring and every fill in it, so the
-   edges come back as outlines and the chosen rung and the switches
-   that are on as Highlight. */
+   edges come back as outlines, the chosen rung, the picked genres and
+   the switches that are on as Highlight, and a genre that cannot be
+   picked as GrayText. */
 @media (forced-colors: active) {
   .cd-view {
     outline: 1px solid CanvasText;
   }
 
   .cd-view-rungs .cd-rung,
+  .cd-genre,
   .cd-switch-track {
     outline: 1px solid ButtonText;
     outline-offset: -1px;
   }
 
   .cd-view-rungs .cd-rung-on,
+  .cd-genre-on,
   .cd-switch[aria-checked='true'] .cd-switch-track {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
+
+  .cd-genre:disabled {
+    outline-color: GrayText;
+  }
 }
 
-/* The same for the panel, after its rules: there, gone, and a switch
-   that is simply on or off. */
+/* The same for the panel, after its rules: there, gone, a switch that
+   is simply on or off, and a genre that changes at once and does not
+   shrink under a press. */
 @media (prefers-reduced-motion: reduce) {
   .cd-view-scrim-dim,
   .cd-view,
   .cd-view.cd-view-out,
+  .cd-genre,
   .cd-switch-track,
   .cd-switch-knob {
     transition: none;
+  }
+
+  .cd-genre:not(:disabled):active {
+    transform: none;
   }
 }
 
@@ -3698,6 +4096,11 @@ button {
   .cd-chip,
   .cd-chip-skeleton {
     height: 44px;
+  }
+
+  .cd-face-chip {
+    --face: 38px;
+    font-size: 12.5px;
   }
 
   .cd-search {

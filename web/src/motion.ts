@@ -523,6 +523,21 @@ export function chipShift(was: Box, now: Box): { dx: number; dy: number } {
   return { dx: was.left - now.left, dy: was.top - now.top };
 }
 
+// ---- a bigger photo of a person ----
+//
+// The card with a person's photo, name and role (PersonCard, timed by
+// faceCard.ts). A pointer resting on a chip or a preview face opens it
+// after the dwell, a little longer than the chip's own 140ms preview, so
+// sweeping along the row only lights films. On touch a press held on a
+// chip opens it. Once one is showing, or within the warm window of one
+// closing, the next person's swaps in at once. It fades in over
+// FACE_CARD_IN_MS, the opacity transition .cd-person-card draws.
+
+export const FACE_CARD_DWELL_MS = 400;
+export const FACE_CARD_HOLD_MS = 450;
+export const FACE_CARD_WARM_MS = 250;
+export const FACE_CARD_IN_MS = 160;
+
 // ---- narrowing the map ----
 //
 // Hiding or showing the empty years closes the rows up, or opens them
