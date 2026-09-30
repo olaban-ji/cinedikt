@@ -362,7 +362,11 @@ export function GridApp() {
   // and while the next is fetched it stays in the tree out of sight (see
   // `leaving` below), so the next one fades up in the same place.
   const [drawn, setDrawn] = useState<{ id: string; payload: GridPayload } | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Loading from the first render when the page opens on a map's
+  // address. Waiting for the effect below to say so would draw one frame
+  // of the opening screen first, and that screen's first-run request
+  // would go out only to be cancelled as it unmounted.
+  const [loading, setLoading] = useState(() => movieId !== null);
   // A map is being fetched from the opening screen, which stays behind
   // the progress line, dimmed, until it arrives.
   const [fromCold, setFromCold] = useState(false);
