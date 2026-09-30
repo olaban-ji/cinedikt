@@ -1,15 +1,26 @@
-import { createElement } from 'react';
+import { createElement, type ComponentProps } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import css from './grid.css?raw';
 import { faceCardController, type FaceCard } from './faceCard';
 import { headerClass } from './GridApp';
+import { previewHost, type Peek } from './GridMap';
 import matrix from './fixtures/matrix-grid.json';
-import { initialsFor, type GridFilm, type GridPayload, type GridPerson } from './grid';
-import { MapPreview, TrailerFocus, faceEvents, faceTitle, facesRow, previewPlay } from './MapPreview';
+import { initialsFor, layoutGrid, type GridFilm, type GridPayload, type GridPerson } from './grid';
+import {
+  MapPreview,
+  TrailerFocus,
+  faceEvents,
+  faceTitle,
+  facesRow,
+  leavingClass,
+  previewPlay,
+} from './MapPreview';
 import { faceAfter, faceStart, photoArrived } from './PersonFace';
 import {
+  PREVIEW_BACK_MS,
   PREVIEW_LEAVE_PLAYING_MS,
+  PREVIEW_OUT_PLAYING_MS,
   PREVIEW_REST_MS,
   previewScheduler,
   type PreviewClock,
@@ -35,6 +46,27 @@ vi.mock('./analytics', async (importOriginal) => ({
   capture: () => {},
 }));
 
+// The effects each render asks for. The server renderer runs none of
+// them; a test that needs what it drew mounted, and then unmounted, runs
+// them by hand (see mount).
+const effects = vi.hoisted(() => [] as (() => void | (() => void))[]);
+vi.mock('react', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react')>()),
+  useEffect: (effect: () => void | (() => void)) => {
+    effects.push(effect);
+  },
+}));
+
+/** Runs the effects the renders since the last call asked for, as
+ *  mounting what they drew would, and returns its unmount, which runs
+ *  their clean-ups. */
+function mount(): () => void {
+  const cleanups = effects.splice(0).map((effect) => effect());
+  return () => {
+    for (const cleanup of cleanups) if (typeof cleanup === 'function') cleanup();
+  };
+}
+
 const ID = 'tt0089218';
 const KEY = 'hJ2j4oWdQtU';
 const SYNOPSIS = 'A gang of kids about to lose their homes find an old treasure map.';
@@ -50,6 +82,7 @@ function playerWith(play: Play | null): Player {
     start: () => {},
     stop: () => {},
     drop: () => {},
+    fade: () => {},
     sound: () => {},
     resize: () => {},
     frame: { current: null },
@@ -66,6 +99,7 @@ function preview(
   place: PreviewPlace = { x: 627, side: -1, top: 1306, bottom: null },
   play: Play | null = null,
   photoOf: (p: GridPerson) => string | undefined = (p) => p.photo,
+  more: Partial<ComponentProps<typeof MapPreview>> = {},
 ): string {
   answer.key = key;
   return renderToStaticMarkup(
@@ -84,6 +118,7 @@ function preview(
       onLeave: () => {},
       onFace: () => {},
       offFace: () => {},
+      ...more,
     }),
   );
 }
@@ -163,6 +198,99 @@ describe('the hover preview', () => {
     const html = preview(KEY, {}, undefined, panel);
     expect(html).not.toContain('cd-preview-trailer');
     expect(html).not.toContain('<iframe');
+  });
+});
+
+describe('the hover preview as it leaves', () => {
+  /** The opening tag of the preview, leaving as asked. */
+  const tag = (more: Partial<ComponentProps<typeof MapPreview>>) =>
+    preview(KEY, {}, undefined, null, undefined, more).match(/^<div[^>]*>/)?.[0] ?? '';
+  const classOf = (more: Partial<ComponentProps<typeof MapPreview>>) => tag(more).match(/class="([^"]*)"/)?.[1];
+
+  it('takes cd-preview-out, with -out-playing for its trailer, or -gone giving way to the next card’s', () => {
+    expect(classOf({})).toBe('cd-preview cd-preview-left');
+    expect(classOf({ leaving: 'plain' })).toBe('cd-preview cd-preview-left cd-preview-out');
+    expect(classOf({ leaving: 'playing' })).toBe('cd-preview cd-preview-left cd-preview-out cd-preview-out-playing');
+    expect(classOf({ leaving: 'gone' })).toBe('cd-preview cd-preview-left cd-preview-out cd-preview-gone');
+    // Taken back, it simply loses them, and the entrance takes over.
+    expect(classOf({ back: true })).toBe('cd-preview cd-preview-left');
+    expect(leavingClass(undefined)).toBe('');
+  });
+
+  it('is inert and hidden only while giving way: one leaving can still be taken back by the pointer', () => {
+    for (const leaving of [undefined, 'plain', 'playing'] as const) {
+      expect(tag({ leaving }), leaving).not.toMatch(/ (inert|aria-hidden)=/);
+    }
+    expect(tag({ leaving: 'gone' })).toContain(' inert=""');
+    expect(tag({ leaving: 'gone' })).toContain(' aria-hidden="true"');
+  });
+
+  describe('as it unmounts', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.stubGlobal('window', globalThis);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    });
+
+    it('drops the player in the preview for its own film', () => {
+      const dropped: unknown[][] = [];
+      const player = { ...playerWith(null), drop: (...args: unknown[]) => dropped.push(args) };
+      effects.length = 0;
+      preview(null, {}, undefined, null, undefined, { player });
+      const unmount = mount();
+      expect(dropped).toEqual([]);
+      unmount();
+      expect(dropped).toEqual([['preview', ID]]);
+    });
+
+    it('leaves a player that belongs to another preview alone', () => {
+      const player = realPlayer();
+      effects.length = 0;
+      preview(null, {}, undefined, null, undefined, { player });
+      const unmount = mount();
+      // The next card's preview has started its trailer meanwhile.
+      player.start('preview', 'tt0088763', true, 360);
+      unmount();
+      expect(player.now()?.id).toBe('tt0088763');
+    });
+
+    it('puts away a bigger photo from its faces, or one on its way, as its leave begins', () => {
+      for (const leaving of ['plain', 'playing', 'gone'] as const) {
+        const offFace = vi.fn();
+        effects.length = 0;
+        preview(null, {}, undefined, null, undefined, { leaving, offFace });
+        mount();
+        expect(offFace, leaving).toHaveBeenCalledExactlyOnceWith('peek');
+      }
+      // Not while it is on show.
+      const offFace = vi.fn();
+      effects.length = 0;
+      preview(null, {}, undefined, null, undefined, { offFace });
+      mount();
+      expect(offFace).not.toHaveBeenCalled();
+    });
+
+    it('puts one away again as it unmounts, unless it gave way on a swap: by then one can only be the next preview’s', () => {
+      for (const leaving of [undefined, 'plain', 'playing'] as const) {
+        const offFace = vi.fn();
+        effects.length = 0;
+        preview(null, {}, undefined, null, undefined, { leaving, offFace });
+        const unmount = mount();
+        offFace.mockClear();
+        unmount();
+        expect(offFace, leaving).toHaveBeenCalledExactlyOnceWith('peek');
+      }
+      const offFace = vi.fn();
+      effects.length = 0;
+      preview(null, {}, undefined, null, undefined, { leaving: 'gone', offFace });
+      const unmount = mount();
+      offFace.mockClear();
+      unmount();
+      expect(offFace).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -363,6 +491,20 @@ describe('a bigger photo from the hover preview’s faces', () => {
     // Without a trailer, the face showing its photo drops the title again.
     expect(preview(KEY, people, undefined, null, photoOf)).not.toContain('title="Keanu Reeves"');
   });
+
+  it('opens none from a preview that is leaving, and names every face instead', () => {
+    const SEEN = 'https://image.tmdb.org/t/p/w185/keanu-seen-leaving.jpg';
+    photoArrived(SEEN);
+    const photoOf = (p: GridPerson) => (p.name === 'Keanu Reeves' ? SEEN : undefined);
+    const people = { people: ids('Keanu Reeves') };
+    for (const leaving of ['plain', 'playing', 'gone'] as const) {
+      expect(preview(KEY, people, undefined, null, photoOf, { leaving }), leaving).toContain(
+        '<span class="cd-preview-face" title="Keanu Reeves" style="--tone:',
+      );
+    }
+    // Taken back, its faces open one again.
+    expect(preview(KEY, people, undefined, null, photoOf, { back: true })).not.toContain('title="Keanu Reeves"');
+  });
 });
 
 describe('facesRow', () => {
@@ -456,14 +598,17 @@ function realPlayer(): Player {
   return made.player!;
 }
 
-/** The layer as GridMap draws it, for the player as it stands and the
- *  film whose preview is drawn (null: none is). */
-function layer(player: Player, showing: string | null = ID): string {
-  return renderToStaticMarkup(createElement(TrailerFocus, { play: player.now(), showing }));
+/** The layer as GridMap draws it, for the player as it stands, the
+ *  film whose preview is drawn (null: none is), and whether that preview
+ *  is leaving or was taken back. */
+function layer(player: Player, showing: string | null = ID, peek: Pick<Peek, 'out' | 'back'> = {}): string {
+  return renderToStaticMarkup(createElement(TrailerFocus, { play: player.now(), showing, ...peek }));
 }
 
 const FOCUS = '<div class="cd-trailer-focus" aria-hidden="true"></div>';
 const FOCUS_IN = '<div class="cd-trailer-focus cd-trailer-focus-in" aria-hidden="true"></div>';
+const FOCUS_OUT = '<div class="cd-trailer-focus cd-trailer-focus-out" aria-hidden="true"></div>';
+const FOCUS_BACK = '<div class="cd-trailer-focus cd-trailer-focus-in cd-trailer-focus-back" aria-hidden="true"></div>';
 
 describe('the focus on a trailer playing in the preview', () => {
   beforeEach(() => {
@@ -515,13 +660,13 @@ describe('the focus on a trailer playing in the preview', () => {
     expect(layer(player)).toBe(FOCUS_IN);
   });
 
-  it('goes at once when the preview closes, before its player has been dropped', () => {
+  it('goes at once when the preview is taken away at once, before its player has been dropped', () => {
     const player = realPlayer();
     player.start('preview', ID, true, 360);
     vi.advanceTimersByTime(ENTER_MS);
-    // The render that draws no preview, for a scroll, another map or the
-    // pointer leaving, draws no layer either, with the player still set:
-    // the preview drops it only as it unmounts.
+    // The render that draws no preview, for another map, a panel or a
+    // new layout, draws no layer either, with the player still set: the
+    // preview drops it only as it unmounts.
     expect(layer(player, null)).toBe('');
     // Nor for another card's preview drawn in its place.
     expect(layer(player, 'tt0088763')).toBe('');
@@ -531,39 +676,80 @@ describe('the focus on a trailer playing in the preview', () => {
     expect(layer(player)).toBe('');
   });
 
-  it('takes no pointer, so leaving the preview still closes it after 450ms, and the layer with it', () => {
+  it('lifts as the preview leaves, in step with it, and comes back quicker with a preview taken back', () => {
+    const player = realPlayer();
+    player.start('preview', ID, false, 360);
+    vi.advanceTimersByTime(ENTER_MS);
+    expect(layer(player, ID, { out: 'playing' })).toBe(FOCUS_OUT);
+    expect(layer(player, ID, { back: true })).toBe(FOCUS_BACK);
+    // Still out while the player is opening, and nothing to come back to
+    // while it closes.
+    const opening = realPlayer();
+    opening.start('preview', ID, false, 360);
+    expect(layer(opening, ID, { back: true })).toBe(
+      '<div class="cd-trailer-focus cd-trailer-focus-back" aria-hidden="true"></div>',
+    );
+    player.stop('preview');
+    expect(layer(player, ID, { out: 'playing' })).toBe(FOCUS_OUT);
+  });
+
+  it('takes no pointer, so leaving the preview still starts its leave after 450ms, and the layer lifts with it until it has gone', () => {
     expect(decls('.cd-trailer-focus').get('pointer-events')).toBe('none');
     const player = realPlayer();
-    let showing: string | null = null;
-    const sched = previewScheduler(
-      {
-        showing: () => showing,
-        // As GridMap asks it.
-        playing: () => player.now()?.where === 'preview',
-        open: (id) => {
-          showing = id;
-        },
-        close: () => {
-          showing = null;
-          player.drop('preview');
-        },
+    const laid = layoutGrid(matrix as unknown as GridPayload, 1440);
+    const card = laid.cards.find((c) => !c.film.isAnchor)!.film.id;
+    const slot = { peek: null as Peek | null };
+    // As GridMap draws it.
+    const drawn = () => layer(player, slot.peek?.id ?? null, { out: slot.peek?.out, back: slot.peek?.back });
+    const host = previewHost({
+      map: () => ({
+        layout: laid,
+        blocked: false,
+        selected: new Set(),
+        minRating: null,
+        want: 0,
+        said: (id) => film({ id }),
+        light: () => {},
+        player,
+      }),
+      bounds: () => ({ x0: 0, x1: laid.plotW, vt: 0, vb: laid.plotH }),
+      now: () => slot.peek,
+      put: (p) => {
+        slot.peek = p;
       },
-      { now: () => Date.now(), after: (ms, run) => setTimeout(run, ms), cancel: (t) => clearTimeout(t) },
-    );
-    sched.rest(ID);
+      gone: () => {},
+      held: () => {},
+      showing: { current: null },
+      under: { current: null },
+    });
+    const sched = previewScheduler(host, {
+      now: () => Date.now(),
+      after: (ms, run) => setTimeout(run, ms),
+      cancel: (t) => clearTimeout(t),
+    });
+    sched.rest(card);
     vi.advanceTimersByTime(PREVIEW_REST_MS);
-    expect(showing).toBe(ID);
-    player.start('preview', ID, true, 360);
+    expect(slot.peek?.id).toBe(card);
+    player.start('preview', card, true, 360);
     vi.advanceTimersByTime(ENTER_MS);
-    expect(layer(player, showing)).toBe(FOCUS_IN);
+    expect(drawn()).toBe(FOCUS_IN);
     sched.hold();
     sched.leave();
     vi.advanceTimersByTime(PREVIEW_LEAVE_PLAYING_MS - 1);
-    expect(layer(player, showing)).toBe(FOCUS_IN);
+    expect(drawn()).toBe(FOCUS_IN);
     vi.advanceTimersByTime(1);
-    expect(showing).toBeNull();
-    expect(layer(player, showing)).toBe('');
+    expect(slot.peek?.out).toBe('playing');
+    expect(drawn()).toBe(FOCUS_OUT);
+    // Mounted as long as the leaving preview is, whose player is still set.
+    vi.advanceTimersByTime(419);
+    expect(player.now()?.id).toBe(card);
+    expect(drawn()).toBe(FOCUS_OUT);
+    vi.advanceTimersByTime(1);
+    expect(slot.peek).toBeNull();
+    expect(player.now()).toBeNull();
+    expect(drawn()).toBe('');
     sched.dispose();
+    host.dispose();
   });
 
   it('leaves a player in the panel alone: the panel has its own scrim', () => {
@@ -655,8 +841,26 @@ describe('the layer as the stylesheet draws it', () => {
     }
   });
 
+  it('lifts in step with a preview leaving with its trailer, and comes back in 240ms with one taken back', () => {
+    expect(Object.fromEntries(decls('.cd-trailer-focus.cd-trailer-focus-out'))).toEqual({
+      opacity: '0',
+      transition: `opacity ${PREVIEW_OUT_PLAYING_MS}ms var(--ease-close)`,
+    });
+    expect(Object.fromEntries(decls('.cd-trailer-focus-in.cd-trailer-focus-back'))).toEqual({
+      'transition-duration': `${PREVIEW_BACK_MS}ms`,
+    });
+    // After the rule it comes in by, so their transitions win.
+    const at = (selector: string) => SHEET.findIndex((r) => r.media === null && r.selector === selector);
+    expect(at('.cd-trailer-focus-in')).toBeGreaterThan(at('.cd-trailer-focus'));
+    expect(at('.cd-trailer-focus.cd-trailer-focus-out')).toBeGreaterThan(at('.cd-trailer-focus-in'));
+    expect(at('.cd-trailer-focus-in.cd-trailer-focus-back')).toBeGreaterThan(at('.cd-trailer-focus-in'));
+  });
+
   it('is there at once for a reader who has asked for nothing to move, and not at all in forced colours', () => {
     expect(decls('.cd-trailer-focus', '(prefers-reduced-motion: reduce)').get('transition')).toBe('none');
+    for (const selector of ['.cd-trailer-focus.cd-trailer-focus-out', '.cd-trailer-focus-in.cd-trailer-focus-back']) {
+      expect(decls(selector, '(prefers-reduced-motion: reduce)').get('transition'), selector).toBe('none');
+    }
     expect(decls('.cd-trailer-focus', '(forced-colors: active)').get('display')).toBe('none');
   });
 });

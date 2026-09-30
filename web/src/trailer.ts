@@ -153,11 +153,14 @@ export function watchUrl(key: string): string {
 }
 
 /** The commands the player is sent. */
-export type YouTubeCommand = 'mute' | 'unMute' | 'playVideo' | 'pauseVideo';
+export type YouTubeCommand = 'mute' | 'unMute' | 'playVideo' | 'pauseVideo' | 'setVolume';
+
+/** A command with what it takes, such as setVolume's 0 to 100. */
+export type YouTubeCall = [func: YouTubeCommand, args?: number[]];
 
 /** One IFrame API command, as the message the player listens for. */
-export function ytCommand(func: YouTubeCommand): string {
-  return JSON.stringify({ event: 'command', func, args: [] });
+export function ytCommand(func: YouTubeCommand, args: number[] = []): string {
+  return JSON.stringify({ event: 'command', func, args });
 }
 
 /** Asks the player to start telling the page about itself, which is how
@@ -176,11 +179,13 @@ export function saysReady(data: unknown): boolean {
 
 /** What a player that has just said it is ready is told, so that it
  *  matches what its controls already show: paused if it is closing,
- *  otherwise muted, or playing with its sound on. */
-export function catchUp(play: Play | null): YouTubeCommand[] {
+ *  otherwise muted, or playing with its sound on. YouTube remembers the
+ *  volume across embeds, so one with its sound on is put back to full
+ *  first, in case a preview's leave (Player.fade) left it quiet. */
+export function catchUp(play: Play | null): YouTubeCall[] {
   if (!play) return [];
-  if (play.closing) return ['pauseVideo'];
-  return play.muted ? ['mute'] : ['unMute', 'playVideo'];
+  if (play.closing) return [['pauseVideo']];
+  return play.muted ? [['mute']] : [['setVolume', [100]], ['unMute'], ['playVideo']];
 }
 
 /** The page's line to the embedded player. */
@@ -188,7 +193,7 @@ export interface PlayerLink {
   /** A new frame is about to mount, which has to say it is ready again. */
   reset: () => void;
   /** Sends a command, if the player can hear it yet. */
-  send: (func: YouTubeCommand) => void;
+  send: (func: YouTubeCommand, args?: number[]) => void;
   /** A message from the player. The first that says it is ready brings
    *  the player into line with `play`, what is open as of now. */
   heard: (data: unknown, play: Play | null) => void;
@@ -206,13 +211,13 @@ export function playerLink(post: (message: string) => void): PlayerLink {
     reset: () => {
       ready = false;
     },
-    send: (func) => {
-      if (ready) post(ytCommand(func));
+    send: (func, args) => {
+      if (ready) post(ytCommand(func, args));
     },
     heard: (data, play) => {
       if (ready || !saysReady(data)) return;
       ready = true;
-      for (const func of catchUp(play)) post(ytCommand(func));
+      for (const [func, args] of catchUp(play)) post(ytCommand(func, args));
     },
   };
 }

@@ -38,13 +38,20 @@ import { MapPreview, TrailerFocus } from './MapPreview';
 import { PosterImage } from './PosterImage';
 import { posterFallback, sheetPosterPx, sheetPosterURL } from './poster';
 import {
+  PREVIEW_BACK_MS,
+  PREVIEW_DRIFT_EXTRA_MS,
+  PREVIEW_OUT_MS,
+  PREVIEW_OUT_PLAYING_MS,
+  PREVIEW_SWAP_OUT_MS,
   placePreview,
   previewBounds,
   previewFloatClear,
   previewScheduler,
   type PreviewBounds,
+  type PreviewHost,
   type PreviewPlace,
 } from './preview';
+import { isFor } from './trailer';
 import { useScreen } from './screen';
 import { personVars } from './personColour';
 import { canHover, canRest, useOffScreen, useTapGuard } from './tap';
@@ -606,6 +613,7 @@ export function GridMap({
     searchTyped,
   });
   const peek = previewBlocked ? null : preview.peek;
+  const gone = previewBlocked ? null : preview.gone;
   const peekFilm = peek
     ? wordsFor({ id: peek.id, isAnchor: peek.id === payload.anchor.id }, detail, payload.anchor)
     : undefined;
@@ -782,25 +790,36 @@ export function GridMap({
                   onPreview={preview.onCard}
                 />
               ))}
-              {peek && peekFilm && (
-                <MapPreview
-                  key={`${payload.anchor.id}:${peek.id}`}
-                  film={peekFilm}
-                  people={payload.people}
-                  anchorTitle={payload.anchor.title}
-                  theme={theme}
-                  codes={codes}
-                  photoOf={photoOf}
-                  place={peek.place}
-                  player={player}
-                  bounds={preview.bounds}
-                  plotH={layout.plotH}
-                  onEnter={preview.onEnter}
-                  onLeave={preview.onLeave}
-                  onFace={onFace}
-                  offFace={offFace}
-                />
-              )}
+              {/* The one giving way first, so the new one is drawn over it. */}
+              {previewsDrawn(payload.anchor.id, gone, peek).map(({ key, p, leaving }) => {
+                const film =
+                  p === peek
+                    ? peekFilm
+                    : wordsFor({ id: p.id, isAnchor: p.id === payload.anchor.id }, detail, payload.anchor);
+                return (
+                  film && (
+                    <MapPreview
+                      key={key}
+                      film={film}
+                      leaving={leaving}
+                      back={p.back}
+                      people={payload.people}
+                      anchorTitle={payload.anchor.title}
+                      theme={theme}
+                      codes={codes}
+                      photoOf={photoOf}
+                      place={p.place}
+                      player={player}
+                      bounds={preview.bounds}
+                      plotH={layout.plotH}
+                      onEnter={preview.onEnter}
+                      onLeave={preview.onLeave}
+                      onFace={onFace}
+                      offFace={offFace}
+                    />
+                  )
+                );
+              })}
               <div className="cd-rail-layer" style={{ height: layout.plotH, width: layout.plotW }}>
                 <div className="cd-rail" style={{ width: layout.metrics.railW, height: layout.plotH }}>
                   {reflow.rows.map(({ row: r, labelAt }) => (
@@ -817,7 +836,7 @@ export function GridMap({
       </div>
       {/* Outside the scroller, which it covers along with the header and
           the floating buttons while the preview's trailer plays. */}
-      <TrailerFocus play={player.play} showing={previewing} />
+      <TrailerFocus play={player.play} showing={previewing} out={peek?.out} back={peek?.back} />
       <button
         type="button"
         className={`cd-float cd-recentre${offer ? ' cd-float-up' : ''}`}
@@ -1401,20 +1420,26 @@ function railLabel(n: HTMLElement): HTMLElement {
  *  layout it was placed on. A new layout is a map whose cards may have
  *  moved, so a preview placed on an older one is not drawn (see
  *  usePreview for the one exception). */
-interface Peek {
+export interface Peek {
   id: string;
+  /** Which opening of a preview this is. It is part of its key, so a card
+   *  opened again while its last preview is still fading out as `gone`
+   *  mounts a new preview, whose entrance runs, rather than taking over
+   *  the fading one: React would move that one in the page, and an
+   *  element moved loses its transitions and snaps to full. */
+  n: number;
   place: PreviewPlace;
   on: GridLayout;
+  /** Set once it has begun to leave: `playing` when its trailer is set,
+   *  which then goes with it, sound and blur and all. */
+  out?: 'plain' | 'playing';
+  /** Taken back while it was leaving: the sound and the blur behind come
+   *  back quicker than they first came (PREVIEW_BACK_MS). */
+  back?: boolean;
 }
 
-/** The hover preview's state and the pointer's part in it. A pointer
- *  that can rest precisely, resting on a card that can be opened, opens
- *  its preview beside it (see previewScheduler for when). Moving onto
- *  the preview keeps it, and the card keeps its hover state and its
- *  chips lit meanwhile. A scroll, Escape, a panel or View opening, the
- *  map being left and any new layout close it at once, except while its
- *  trailer is fullscreen. */
-function usePreview(o: {
+/** What the map hands usePreview. */
+interface PreviewOptions {
   layout: GridLayout | null;
   scroller: RefObject<HTMLDivElement | null>;
   overlayH: number;
@@ -1437,9 +1462,214 @@ function usePreview(o: {
   player: Player;
   /** The search field has text in it. */
   searchTyped: boolean;
-}): {
+}
+
+/** What of the map the preview's host reads, at the moment it asks. */
+export type PreviewMap = Pick<
+  PreviewOptions,
+  'layout' | 'blocked' | 'selected' | 'minRating' | 'want' | 'said' | 'light' | 'player'
+>;
+
+/** The previews to draw, each keyed by its film on this map and which
+ *  opening of it it is. One list, so a preview moving from the live slot
+ *  to `gone` keeps its key, its instance and its DOM, and fades from
+ *  where it is. The gone one comes first, so the new one is drawn over
+ *  it. */
+export function previewsDrawn(anchorId: string, gone: Peek | null, peek: Peek | null) {
+  return [gone, peek]
+    .filter((p): p is Peek => p != null)
+    .map((p) => ({ key: `${anchorId}:${p.id}:${p.n}`, p, leaving: p === gone ? ('gone' as const) : p.out }));
+}
+
+/** What the scheduler asks of the map, for usePreview: opening a card's
+ *  preview, letting it leave or taking it away at once, and bringing it
+ *  back; and, for the pointer leaving a card, holding that card's hover
+ *  state for its preview (`leftCard`). It draws through `put` (the live
+ *  preview, which `now` reads back between renders), `gone` (the one
+ *  giving way on a swap) and `held` (the card drawn as hovered for its
+ *  preview). `showing` is the card whose preview is showing, as of now,
+ *  and `under` the card the pointer is on. */
+export function previewHost(o: {
+  map: () => PreviewMap;
+  bounds: (loose: boolean) => PreviewBounds;
+  now: () => Peek | null;
+  put: (p: Peek | null) => void;
+  gone: (p: Peek | null) => void;
+  held: (id: string | null) => void;
+  showing: { current: string | null };
+  under: { current: string | null };
+}): PreviewHost & { leftCard: (id: string) => void; dispose: () => void } {
+  // The leaving preview's unmount, the gone one's, the card whose preview
+  // opens once a preview leaving with its trailer has gone, and how many
+  // previews have opened (Peek.n).
+  let unmount = 0;
+  let goneTimer = 0;
+  let next: string | null = null;
+  let opened = 0;
+
+  const playsIn = (id: string) => isFor(o.map().player.now(), 'preview', id);
+  // The player's sound, when it has any to move: open and not muted.
+  const heard = (id: string) => {
+    const p = o.map().player.now();
+    return isFor(p, 'preview', id) && p.open && !p.muted;
+  };
+  const stopUnmount = () => {
+    window.clearTimeout(unmount);
+    unmount = 0;
+  };
+  const stopGone = () => {
+    window.clearTimeout(goneTimer);
+    goneTimer = 0;
+    o.gone(null);
+  };
+  // The chips a card or its preview lit go with it, unless the pointer
+  // is on a card, which lit its own.
+  const letGo = () => {
+    o.held(null);
+    if (o.under.current == null) o.map().light([]);
+  };
+  // Only a card whose words have come has a preview to show. One that
+  // is still an empty box opens nothing, and so neither counts as a
+  // preview showing nor keeps its hover state for one.
+  const placeFor = (id: string): Peek | null => {
+    const { layout, blocked, selected, minRating, want, said } = o.map();
+    const card = layout?.cards.find((c) => c.film.id === id);
+    if (!layout || !card || blocked || filteredOut(card.film, selected, minRating, want) || !said(id)) return null;
+    return { id, n: ++opened, place: placePreview(card, layout.metrics, o.bounds(false), layout.plotH), on: layout };
+  };
+  const show = (p: Peek) => {
+    o.showing.current = p.id;
+    o.put(p);
+  };
+  // Gone at once, with whatever was waiting on it.
+  const takeAway = () => {
+    stopUnmount();
+    next = null;
+    o.showing.current = null;
+    o.put(null);
+    letGo();
+  };
+  // Begins to leave: it fades where it stands and drifts back towards
+  // its card, and unmounts once both have finished. It still counts as
+  // showing until then, so resting on its card is being back on the card
+  // whose preview it is. Its trailer, if set, plays on through the fade
+  // while its sound and the blur behind go with it.
+  const leave = () => {
+    const p = o.now();
+    if (!p || p.out) return;
+    if (stillNow()) {
+      takeAway();
+      return;
+    }
+    const playing = playsIn(p.id);
+    const ms = playing ? PREVIEW_OUT_PLAYING_MS : PREVIEW_OUT_MS;
+    o.put({ ...p, out: playing ? 'playing' : 'plain', back: false });
+    letGo();
+    if (heard(p.id)) o.map().player.fade(0, ms);
+    stopUnmount();
+    unmount = window.setTimeout(() => {
+      unmount = 0;
+      const then = next;
+      next = null;
+      // Its player goes here, while the frame is still in the page, so
+      // the volume put back as it goes reaches YouTube. MapPreview's own
+      // unmount would drop it too, but only once the frame has gone.
+      o.map().player.drop('preview', p.id);
+      o.showing.current = null;
+      o.put(null);
+      // The next card's preview, if the pointer is still on that card.
+      const q = then != null && o.under.current === then ? placeFor(then) : null;
+      if (q) show(q);
+    }, ms + PREVIEW_DRIFT_EXTRA_MS + 20);
+  };
+
+  return {
+    showing: () => o.showing.current,
+    playing: () => o.map().player.now()?.where === 'preview',
+    open: (id) => {
+      const cur = o.now();
+      const still = stillNow();
+      // A preview with its trailer set leaves first, sound and blur and
+      // all, and the next opens as it goes. For a reader who has asked
+      // for nothing to move, it is simply replaced, as any other is.
+      if (cur && playsIn(cur.id) && !still) {
+        next = id;
+        leave();
+        return;
+      }
+      const q = placeFor(id);
+      if (!q) return;
+      if (cur && !still) {
+        // The old one fades out under the new one, which mounts with its
+        // own key, so its entrance runs. One already fading is replaced
+        // at once: it has nearly gone.
+        stopUnmount();
+        next = null;
+        stopGone();
+        if (cur.id !== id) {
+          o.gone(cur);
+          goneTimer = window.setTimeout(stopGone, PREVIEW_SWAP_OUT_MS + 40);
+        }
+      }
+      show(q);
+    },
+    close: (hard) => {
+      if (!hard) {
+        // A scroll or Escape forgets the card waiting on this leave, as it
+        // forgets any other open on its way.
+        next = null;
+        leave();
+        return;
+      }
+      stopGone();
+      takeAway();
+    },
+    keep: () => {
+      const p = o.now();
+      if (!p?.out) return;
+      stopUnmount();
+      next = null;
+      o.put({ ...p, out: undefined, back: true });
+      const { light, said, player } = o.map();
+      o.held(p.id);
+      light(said(p.id)?.people ?? []);
+      if (heard(p.id)) player.fade(100, PREVIEW_BACK_MS);
+    },
+    // The pointer has left this card, perhaps on its way to its preview.
+    // The card keeps its hover state, and the chips it lit stay lit, until
+    // the preview closes or the pointer settles on another card. A preview
+    // already leaving carries on leaving, and its card's hover goes with
+    // it: nothing would put that back once the preview had gone.
+    leftCard: (id) => {
+      if (o.showing.current !== id || o.now()?.out) return;
+      const { light, said } = o.map();
+      o.held(id);
+      light(said(id)?.people ?? []);
+    },
+    dispose: () => {
+      window.clearTimeout(unmount);
+      window.clearTimeout(goneTimer);
+    },
+  };
+}
+
+/** The hover preview's state and the pointer's part in it. A pointer
+ *  that can rest precisely, resting on a card that can be opened, opens
+ *  its preview beside it (see previewScheduler for when). Moving onto
+ *  the preview keeps it, and the card keeps its hover state and its
+ *  chips lit meanwhile. The pointer leaving, a scroll or Escape let it
+ *  leave as it came, fading back towards its card, and a pointer back on
+ *  it or its card before it has gone brings it back. Another map, a
+ *  panel or View opening, a new layout and reduced motion take it away
+ *  at once, except while its trailer is fullscreen. On a swap between
+ *  cards the old preview fades out under the new one (`gone`), unless
+ *  its trailer is set: then it leaves first, and the next card's opens
+ *  as it goes if the pointer is still there (see previewHost). */
+function usePreview(o: PreviewOptions): {
   /** The preview to draw, if there is one. */
   peek: Peek | null;
+  /** The preview giving way to `peek` on a swap, fading out under it. */
+  gone: Peek | null;
   /** The card drawn as hovered for its preview. */
   held: string | null;
   onCard: (id: string, over: boolean) => void;
@@ -1451,7 +1681,15 @@ function usePreview(o: {
   const live = useRef(o);
   live.current = o;
   const [peek, setPeek] = useState<Peek | null>(null);
-  // What is showing as of now, for a pointer faster than a render.
+  // The same, as of now, for timers and handlers between renders.
+  const peekNow = useRef<Peek | null>(null);
+  const [put] = useState(() => (next: Peek | null) => {
+    peekNow.current = next;
+    setPeek(next);
+  });
+  const [gone, setGone] = useState<Peek | null>(null);
+  // What is showing as of now, for a pointer faster than a render. A
+  // leaving preview still counts until it has gone.
   const showing = useRef<string | null>(null);
   const [held, setHeld] = useState<string | null>(null);
   // The card the pointer is on, if it is on one.
@@ -1463,31 +1701,26 @@ function usePreview(o: {
     return previewBounds(el, layout?.metrics.railW ?? 0, overlayH, headerAway ? 0 : overlayH, floatClear, loose);
   });
 
-  const [sched] = useState(() =>
-    previewScheduler({
-      showing: () => showing.current,
-      playing: () => live.current.player.now()?.where === 'preview',
-      // Only a card whose words have come has a preview to show. One that
-      // is still an empty box opens nothing, and so neither counts as a
-      // preview showing nor keeps its hover state for one.
-      open: (id) => {
-        const { layout, blocked, selected, minRating, want, said } = live.current;
-        const card = layout?.cards.find((c) => c.film.id === id);
-        if (!layout || !card || blocked || filteredOut(card.film, selected, minRating, want) || !said(id)) return;
-        showing.current = id;
-        setPeek({ id, place: placePreview(card, layout.metrics, bounds(false), layout.plotH), on: layout });
-      },
-      close: () => {
-        showing.current = null;
-        setPeek(null);
-        setHeld(null);
-        // The chips a card or its preview lit go with it, unless the
-        // pointer is on a card, which lit its own.
-        if (under.current == null) live.current.light([]);
-      },
+  const [host] = useState(() =>
+    previewHost({
+      map: () => live.current,
+      bounds,
+      now: () => peekNow.current,
+      put,
+      gone: setGone,
+      held: setHeld,
+      showing,
+      under,
     }),
   );
-  useEffect(() => () => sched.dispose(), [sched]);
+  const [sched] = useState(() => previewScheduler(host));
+  useEffect(
+    () => () => {
+      sched.dispose();
+      host.dispose();
+    },
+    [sched, host],
+  );
 
   // Whether the preview's own trailer has gone fullscreen. The browser
   // then sizes the page's viewport to the screen, so the map lays itself
@@ -1500,11 +1733,11 @@ function usePreview(o: {
   });
 
   useEffect(() => {
-    if (o.blocked) sched.shut();
+    if (o.blocked) sched.shut(true);
   }, [o.blocked, sched]);
   useEffect(() => {
     if (!fullscreen()) {
-      sched.shut();
+      sched.shut(true);
       return;
     }
     // Carried across to the new layout, so it is still drawn. Its place
@@ -1512,8 +1745,9 @@ function usePreview(o: {
     // fullscreen frame; once that ends, the next new layout or scroll
     // closes it as usual.
     const now = o.layout;
-    setPeek((p) => (p && now ? { ...p, on: now } : p));
-  }, [o.layout, sched, fullscreen]);
+    const p = peekNow.current;
+    if (p && now) put({ ...p, on: now });
+  }, [o.layout, sched, fullscreen, put]);
   useEffect(() => {
     const el = o.scroller.current;
     const onScroll = () => {
@@ -1544,16 +1778,10 @@ function usePreview(o: {
         return;
       }
       if (under.current === id) under.current = null;
-      if (showing.current === id) {
-        // Perhaps on its way to the preview. The card keeps its hover
-        // state, and the chips it lit stay lit, until the preview closes
-        // or the pointer settles on another card.
-        setHeld(id);
-        live.current.light(live.current.said(id)?.people ?? []);
-      }
+      host.leftCard(id);
       sched.leave();
     },
-    [sched],
+    [sched, host],
   );
 
   const onEnter = useCallback(() => {
@@ -1570,7 +1798,8 @@ function usePreview(o: {
   // across: the draw with the new layout comes first, and a preview
   // missing from it would already be gone, and its frame with it.
   const drawn = peek && (peek.on === o.layout || fullscreen()) ? peek : null;
-  return { peek: drawn, held, onCard, onEnter, onLeave, bounds };
+  const fading = gone && gone.on === o.layout ? gone : null;
+  return { peek: drawn, gone: fading, held, onCard, onEnter, onLeave, bounds };
 }
 
 export const Card = memo(function Card({

@@ -60,6 +60,17 @@ export const PREVIEW_WARM_MS = 350;
 export const PREVIEW_LEAVE_MS = 160;
 /** The same while its trailer plays, so a slip off the edge does not stop it. */
 export const PREVIEW_LEAVE_PLAYING_MS = 450;
+/** A preview leaving: its fade. Its drift back towards its card runs
+ *  PREVIEW_DRIFT_EXTRA_MS longer, and it unmounts 20ms after that. */
+export const PREVIEW_OUT_MS = 280;
+/** The same with its trailer set: the video, its sound and the blur
+ *  behind go with it, in step. */
+export const PREVIEW_OUT_PLAYING_MS = 360;
+/** A preview giving way to the next card's, which comes in over it. */
+export const PREVIEW_SWAP_OUT_MS = 200;
+export const PREVIEW_DRIFT_EXTRA_MS = 40;
+/** Taken back mid-leave: the sound and the blur come back over this. */
+export const PREVIEW_BACK_MS = 240;
 
 /** What of the map's scroller the preview is placed against. */
 export interface MapView {
@@ -219,8 +230,12 @@ export interface PreviewHost {
   playing: () => boolean;
   /** Show this card's preview, in place of any other. */
   open: (id: string) => void;
-  /** Take the preview away. */
-  close: () => void;
+  /** Take the preview away: at once when `hard` (another map, a panel
+   *  or View opening, a new layout), otherwise as a leave it can be taken
+   *  back from. */
+  close: (hard: boolean) => void;
+  /** The pointer is back on a preview that is leaving: bring it back. */
+  keep: () => void;
 }
 
 /** Time, for the scheduler. The page's own by default; a test's own
@@ -244,9 +259,10 @@ export interface PreviewScheduler {
   leave: () => void;
   /** The pointer is on the preview, which keeps it. */
   hold: () => void;
-  /** Close it now, and forget anything on its way: a scroll, Escape, a
-   *  panel or View opening, the map changing. */
-  shut: () => void;
+  /** Close it now, and forget anything on its way. Soft (a scroll,
+   *  Escape) lets it leave as it came; hard (a panel or View opening, the
+   *  map or its layout changing) takes it away at once. */
+  shut: (hard?: boolean) => void;
   /** Let go of any timer, for good. */
   dispose: () => void;
 }
@@ -260,18 +276,22 @@ export function previewScheduler(host: PreviewHost, clock: PreviewClock = pageCl
     if (timer) clock.cancel(timer);
     timer = 0;
   };
-  const shut = () => {
+  const shut = (hard = false) => {
     cancel();
     if (host.showing() == null) return;
     shutAt = clock.now();
-    host.close();
+    host.close(hard);
   };
   return {
     rest: (id) => {
       cancel();
       const showing = host.showing();
-      // Back on the card whose preview it is: it simply stays.
-      if (showing === id) return;
+      // Back on the card whose preview it is: it stays, or comes back if
+      // it had begun to leave.
+      if (showing === id) {
+        host.keep();
+        return;
+      }
       const wait = restDelay(showing != null, clock.now() - shutAt, host.playing());
       timer = clock.after(wait, () => {
         timer = 0;
@@ -286,7 +306,10 @@ export function previewScheduler(host: PreviewHost, clock: PreviewClock = pageCl
         shut();
       });
     },
-    hold: cancel,
+    hold: () => {
+      cancel();
+      host.keep();
+    },
     shut,
     dispose: cancel,
   };

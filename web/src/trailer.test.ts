@@ -328,6 +328,7 @@ describe('ytCommand', () => {
   it('is the IFrame API’s command message', () => {
     expect(ytCommand('pauseVideo')).toBe('{"event":"command","func":"pauseVideo","args":[]}');
     expect(JSON.parse(ytCommand('unMute'))).toEqual({ event: 'command', func: 'unMute', args: [] });
+    expect(ytCommand('setVolume', [40])).toBe('{"event":"command","func":"setVolume","args":[40]}');
   });
 
   it('asks the player to start talking with the widget handshake', () => {
@@ -354,9 +355,11 @@ describe('catchUp', () => {
   const open = { ...startPlay(null, 'panel', 'tt1', false, 430, false)!, open: true };
 
   it('brings a ready player into line with its controls', () => {
-    expect(catchUp(open)).toEqual(['unMute', 'playVideo']);
-    expect(catchUp({ ...open, muted: true })).toEqual(['mute']);
-    expect(catchUp(stopPlay(open))).toEqual(['pauseVideo']);
+    // Its sound back to full first: YouTube keeps the volume a leave
+    // faded down across embeds.
+    expect(catchUp(open)).toEqual([['setVolume', [100]], ['unMute'], ['playVideo']]);
+    expect(catchUp({ ...open, muted: true })).toEqual([['mute']]);
+    expect(catchUp(stopPlay(open))).toEqual([['pauseVideo']]);
     expect(catchUp(null)).toEqual([]);
   });
 });
@@ -380,7 +383,8 @@ describe('playerLink', () => {
     link.heard('{"event":"initialDelivery","id":1}', play);
     expect(posted).toEqual([]);
     link.heard(READY, play);
-    expect(said(posted)).toEqual(['unMute', 'playVideo']);
+    expect(said(posted)).toEqual(['setVolume', 'unMute', 'playVideo']);
+    expect(JSON.parse(posted[0]).args).toEqual([100]);
   });
 
   it('turns a player down that was turned down while it loaded', () => {

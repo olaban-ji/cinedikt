@@ -120,6 +120,7 @@ function playerWith(play: Play | null, did: string[] = []): Player {
     start: (where, id, muted) => did.push(`start ${where} ${id} ${muted ? 'muted' : 'sound'}`),
     stop: (where) => did.push(`stop ${where ?? 'any'}`),
     drop: (where) => did.push(`drop ${where}`),
+    fade: (to, ms) => did.push(`fade ${to} ${ms}`),
     sound: () => did.push('sound'),
     resize: () => {},
     frame: { current: null },

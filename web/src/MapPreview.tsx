@@ -49,6 +49,13 @@ interface Props {
    *  person's bigger photo (see useFaceCard). */
   onFace: FaceCardEvents['onFace'];
   offFace: FaceCardEvents['offFace'];
+  /** Leaving: fading back towards its card (`plain`), the same slower
+   *  with its trailer set (`playing`), or giving way to the next card's
+   *  preview on a swap (`gone`). A leaving preview can still be taken
+   *  back by the pointer; a gone one cannot. */
+  leaving?: 'plain' | 'playing' | 'gone';
+  /** Taken back while it was leaving. */
+  back?: boolean;
 }
 
 /** How a trailer opening in the preview made room for itself: the top
@@ -82,6 +89,7 @@ export function MapPreview({
   onLeave,
   onFace,
   offFace,
+  leaving,
 }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const syn = useRef<HTMLParagraphElement>(null);
@@ -110,20 +118,36 @@ export function MapPreview({
 
   const trailer = useTrailer(film.id);
   // A preview that goes takes its trailer with it at once: there is no
-  // box left for the close to play in.
+  // box left for the close to play in. Only its own: one fading out on a
+  // swap must never take the next preview's.
   const { drop } = player;
-  useEffect(() => () => drop('preview'), [drop]);
+  const filmId = film.id;
+  useEffect(() => () => drop('preview', filmId), [drop, filmId]);
   // And a bigger photo opened from one of its faces, or on its way: the
-  // face under the pointer goes without a mouseleave.
-  useEffect(() => () => offFace('peek'), [offFace]);
+  // face under the pointer goes without a mouseleave. Not for one that
+  // gave way on a swap, which has been inert since, so by the time it
+  // unmounts a bigger photo from a preview's face can only be the next
+  // preview's.
+  const goneNow = useRef(false);
+  goneNow.current = leaving === 'gone';
+  useEffect(
+    () => () => {
+      if (!goneNow.current) offFace('peek');
+    },
+    [offFace],
+  );
   const play = previewPlay(player.play, film.id);
   // YouTube allows nothing over its player, and a bigger photo opened
   // from a face can land on it. While a trailer is set in the preview its
   // faces open none, and one already showing goes as the trailer starts.
+  // Nor while the preview is leaving: one from its faces, or on its way,
+  // goes as the leave begins, rather than hanging over the preview as it
+  // fades.
   const trailerSet = play != null;
+  const noCard = trailerSet || leaving != null;
   useEffect(() => {
-    if (trailerSet) offFace('peek');
-  }, [trailerSet, offFace]);
+    if (noCard) offFace('peek');
+  }, [noCard, offFace]);
 
   const [lift, setLift] = useState<Lift | null>(null);
   // The synopsis folds as the trailer opens, and its line clamp follows
@@ -191,10 +215,12 @@ export function MapPreview({
   return (
     <div
       ref={box}
-      className={`cd-preview${spot.side < 0 ? ' cd-preview-left' : ''}${shown ? ' cd-preview-in' : ''}${play ? ' cd-preview-trailer' : ''}${play?.open ? ' cd-preview-trailer-open' : ''}`}
+      className={`cd-preview${spot.side < 0 ? ' cd-preview-left' : ''}${shown ? ' cd-preview-in' : ''}${play ? ' cd-preview-trailer' : ''}${play?.open ? ' cd-preview-trailer-open' : ''}${leavingClass(leaving)}`}
       style={style}
       role="group"
       aria-label={`${film.title}, preview`}
+      inert={leaving === 'gone'}
+      aria-hidden={leaving === 'gone' ? true : undefined}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
     >
@@ -223,7 +249,7 @@ export function MapPreview({
               code={codes.get(p.id) ?? '?'}
               theme={theme}
               named={faces.named}
-              cardable={!trailerSet}
+              cardable={!noCard}
               onFace={onFace}
               offFace={offFace}
             />
@@ -250,6 +276,12 @@ export function MapPreview({
   );
 }
 
+/** The classes a leaving preview takes on (see `leaving`). */
+export function leavingClass(leaving: Props['leaving']): string {
+  if (!leaving) return '';
+  return ` cd-preview-out${leaving === 'playing' ? ' cd-preview-out-playing' : leaving === 'gone' ? ' cd-preview-gone' : ''}`;
+}
+
 /** The page's player, if it is set in the preview for this film:
  *  opening, open or closing. Null for one in the panel, for another
  *  film's, and when no preview is drawn (`id` null). */
@@ -265,15 +297,34 @@ export function previewPlay(play: Play | null, id: string | null): Play | null {
  *  It goes when the player is cleared.
  *
  *  `showing` is the film whose preview is drawn, null while none is. A
- *  preview closing, for a scroll, another map or anything else, drops
- *  its player only as it unmounts, which is after it has gone from the
+ *  preview leaving keeps its player to the end, and the layer lifts in
+ *  step with it (`out`), coming back with it if it is taken back
+ *  (`back`). A preview taken away at once (another map, a new layout)
+ *  drops its player only as it unmounts, after it has gone from the
  *  screen, so the layer goes with the preview itself rather than
  *  waiting for that. It takes no pointer: leaving the preview still
  *  closes it. */
-export function TrailerFocus({ play, showing }: { play: Play | null; showing: string | null }) {
+export function TrailerFocus({
+  play,
+  showing,
+  out,
+  back,
+}: {
+  play: Play | null;
+  showing: string | null;
+  /** The showing preview is leaving: the layer lifts with it. */
+  out?: 'plain' | 'playing';
+  /** It was taken back mid-leave: the layer comes back quicker. */
+  back?: boolean;
+}) {
   const on = previewPlay(play, showing);
   if (!on) return null;
-  return <div className={`cd-trailer-focus${on.open ? ' cd-trailer-focus-in' : ''}`} aria-hidden="true" />;
+  return (
+    <div
+      className={`cd-trailer-focus${on.open && !out ? ' cd-trailer-focus-in' : ''}${out ? ' cd-trailer-focus-out' : ''}${back ? ' cd-trailer-focus-back' : ''}`}
+      aria-hidden="true"
+    />
+  );
 }
 
 /** One face in the preview's row, in its person's colour, named beside
@@ -294,7 +345,7 @@ function PreviewFace({
   theme: Theme;
   named: boolean;
   /** Whether a pointer resting on it may open the bigger photo: not
-   *  while a trailer is set in the preview. */
+   *  while a trailer is set in the preview, nor while it is leaving. */
   cardable: boolean;
   onFace: FaceCardEvents['onFace'];
   offFace: FaceCardEvents['offFace'];
@@ -321,15 +372,16 @@ function PreviewFace({
  *  pointer resting on it, which names them, and the browser's tooltip
  *  would say it again. A face still showing its initials, because there
  *  is no photo, it failed to load or it has not arrived yet, keeps the
- *  tooltip, and so does every face while a trailer is set in the
- *  preview, when none opens: that is how a pointer learns who it is. */
+ *  tooltip, and so does every face while none opens (a trailer set in
+ *  the preview, or the preview leaving): that is how a pointer learns
+ *  who it is. */
 export function faceTitle(name: string, cardShows: boolean): string | undefined {
   return cardShows ? undefined : name;
 }
 
 /** A preview face's events: a pointer resting on it asks for that
  *  person's bigger photo, unless `cardable` is false (a trailer is set in
- *  the preview), and leaving puts it away. */
+ *  the preview, or it is leaving), and leaving puts it away. */
 export function faceEvents(
   id: string,
   onFace: FaceCardEvents['onFace'],

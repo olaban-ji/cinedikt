@@ -3018,7 +3018,7 @@ button {
    bottom, whichever it grows from. Above every card, the axis and the
    rail, and under the header, until a trailer is set in it. It comes in
    from 6px nearer its card (.cd-preview-left when it is left of the
-   card), and goes at once. */
+   card), and leaves the same way (.cd-preview-out). */
 .cd-preview {
   position: absolute;
   z-index: 12;
@@ -3069,6 +3069,37 @@ button {
     opacity 0.16s ease,
     translate 0.22s var(--ease-glide),
     top 520ms var(--ease-glide);
+}
+
+/* Leaving: it fades where it stands and drifts back towards its card, on
+   the close curve. Nothing else in it moves. Outranks .cd-preview-in.
+   Taken back, it loses this class, and the entrance's transitions run
+   from wherever it had got to. */
+.cd-preview.cd-preview-out {
+  opacity: 0;
+  translate: -6px 0;
+  transition:
+    opacity 280ms var(--ease-close),
+    translate 320ms var(--ease-close);
+}
+
+.cd-preview-left.cd-preview-out {
+  translate: 6px 0;
+}
+
+/* With its trailer set: slower, in step with the blur and the sound. */
+.cd-preview.cd-preview-out-playing {
+  transition:
+    opacity 360ms var(--ease-close),
+    translate 400ms var(--ease-close);
+}
+
+/* Giving way to the next card's preview, which is drawn over it. */
+.cd-preview.cd-preview-gone {
+  pointer-events: none;
+  transition:
+    opacity 200ms var(--ease-close),
+    translate 240ms var(--ease-close);
 }
 
 /* The film's hue across the top, in the sheet's wash colours, fading to
@@ -3219,11 +3250,15 @@ button {
 }
 
 /* For a reader who has asked for nothing to move, the preview simply
-   appears, and makes room for a trailer at once. */
+   appears, and makes room for a trailer at once. It never leaves slowly
+   either (it unmounts at once), but the leaving rules are held still too. */
 @media (prefers-reduced-motion: reduce) {
   .cd-preview,
   .cd-preview-trailer,
   .cd-preview-trailer-open,
+  .cd-preview.cd-preview-out,
+  .cd-preview.cd-preview-out-playing,
+  .cd-preview.cd-preview-gone,
   .cd-preview-syn,
   .cd-preview-trailer-open .cd-preview-syn {
     transition: none;
@@ -3254,10 +3289,23 @@ button {
   transition-duration: 520ms; /* the player's own opening */
 }
 
+/* Lifting as the preview leaves, in step with it. */
+.cd-trailer-focus.cd-trailer-focus-out {
+  opacity: 0;
+  transition: opacity 360ms var(--ease-close);
+}
+
+/* Back with a preview taken back mid-leave. */
+.cd-trailer-focus-in.cd-trailer-focus-back {
+  transition-duration: 240ms;
+}
+
 /* For a reader who has asked for nothing to move, it is there with the
    player and gone with it. */
 @media (prefers-reduced-motion: reduce) {
-  .cd-trailer-focus {
+  .cd-trailer-focus,
+  .cd-trailer-focus.cd-trailer-focus-out,
+  .cd-trailer-focus-in.cd-trailer-focus-back {
     transition: none;
   }
 }

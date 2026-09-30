@@ -44,8 +44,13 @@ export interface Player {
   /** Close whatever is open, or only a player open in `where`. */
   stop: (where?: PlayWhere) => void;
   /** Take away a player open in `where` at once, with no close to play:
-   *  for a place that has itself gone. */
-  drop: (where: PlayWhere) => void;
+   *  for a place that has itself gone. With `id`, only that film's, so a
+   *  preview going never takes a player that belongs to another. */
+  drop: (where: PlayWhere, id?: string) => void;
+  /** Move the sound to `to` (0 to 100) over `ms`: a preview leaving with
+   *  its trailer takes the sound down with it, and one taken back brings
+   *  it up again. */
+  fade: (to: number, ms: number) => void;
   /** Turn the sound on, or off again. */
   sound: () => void;
   /** The box the video bleeds across is a new width; the video follows. */
@@ -53,6 +58,10 @@ export interface Player {
   /** The frame, which the commands are sent to. There is only ever one. */
   frame: RefObject<HTMLIFrameElement | null>;
 }
+
+/** How often a fade sets the volume: often enough to sound smooth,
+ *  seldom enough not to crowd the player's message queue. */
+export const FADE_STEP_MS = 30;
 
 export function usePlayer(): Player {
   const [play, setPlay] = useState<Play | null>(null);
@@ -62,6 +71,12 @@ export function usePlayer(): Player {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const timer = useRef(0);
   const settle = useRef(0);
+  // The player's volume as the page last set it: 100 unless a fade has
+  // moved it. YouTube keeps it across embeds, so a lowered one is put
+  // back before its player goes (see drop), and set again whenever the
+  // sound is turned on (catchUp for a new frame, and sound).
+  const volume = useRef(100);
+  const fading = useRef(0);
 
   const put = useCallback((next: Play | null) => {
     current.current = next;
@@ -91,12 +106,18 @@ export function usePlayer(): Player {
   );
   const { send } = link;
 
+  const [stopFade] = useState(() => () => {
+    window.clearInterval(fading.current);
+    fading.current = 0;
+  });
+
   useEffect(
     () => () => {
       window.clearTimeout(timer.current);
       window.clearTimeout(settle.current);
+      stopFade();
     },
-    [],
+    [stopFade],
   );
 
   useEffect(() => {
@@ -113,17 +134,22 @@ export function usePlayer(): Player {
       const next = startPlay(was, where, id, muted, W, stillNow(), synLines);
       if (!next) return;
       window.clearTimeout(timer.current);
+      stopFade();
       if (isFor(was, where, id)) {
         // Taken back while it was closing. Its frame is still here and
         // paused, so it is told to carry on, with the sound as asked for
-        // this time, rather than loaded again.
+        // this time, rather than loaded again. A fade that had lowered its
+        // volume is put back to full, whichever way it carries on: muted,
+        // it does not hear it, and is at full once its sound is turned on.
+        if (volume.current !== 100) send('setVolume', [100]);
         send(muted ? 'mute' : 'unMute');
         send('playVideo');
       } else {
         // A new frame mounts, and nothing it is sent is heard until it
-        // says it is ready.
+        // says it is ready. It is put back to full then (catchUp).
         link.reset();
       }
+      volume.current = 100;
       put(next);
       capture('trailer_play', { from: where, muted });
       if (next.open) {
@@ -142,7 +168,7 @@ export function usePlayer(): Player {
         settleFold(opened);
       }, ENTER_MS);
     },
-    [link, put, send, settleFold],
+    [link, put, send, settleFold, stopFade],
   );
 
   const stop = useCallback(
@@ -156,6 +182,7 @@ export function usePlayer(): Player {
       send('pauseVideo');
       window.clearTimeout(timer.current);
       window.clearTimeout(settle.current);
+      stopFade();
       if (stillNow()) {
         put(null);
         return;
@@ -165,25 +192,58 @@ export function usePlayer(): Player {
         if (current.current?.closing) put(null);
       }, TRAILER_GONE_MS);
     },
-    [put, send],
+    [put, send, stopFade],
   );
 
   const drop = useCallback(
-    (where: PlayWhere) => {
+    (where: PlayWhere, id?: string) => {
       const was = current.current;
-      if (was?.where !== where) return;
+      if (was?.where !== where || (id != null && was.id !== id)) return;
+      stopFade();
+      // Silenced first, so putting the volume back is not heard.
+      if (volume.current !== 100) {
+        send('mute');
+        send('setVolume', [100]);
+        volume.current = 100;
+      }
       if (!was.closing) send('pauseVideo');
       window.clearTimeout(timer.current);
       window.clearTimeout(settle.current);
       put(null);
     },
-    [put, send],
+    [put, send, stopFade],
+  );
+
+  // A step every 30ms on a smoothstep from where the volume is to `to`.
+  // Counted in steps rather than read off a clock, so a fade always ends
+  // on `to`, however late its timer fires.
+  const fade = useCallback(
+    (to: number, ms: number) => {
+      stopFade();
+      const from = volume.current;
+      if (from === to) return;
+      const steps = Math.max(1, Math.round(ms / FADE_STEP_MS));
+      let n = 0;
+      fading.current = window.setInterval(() => {
+        n++;
+        const k = Math.min(1, n / steps);
+        const v = Math.round(from + (to - from) * k * k * (3 - 2 * k));
+        volume.current = v;
+        send('setVolume', [v]);
+        if (k >= 1) stopFade();
+      }, FADE_STEP_MS);
+    },
+    [send, stopFade],
   );
 
   const sound = useCallback(() => {
     const p = current.current;
     if (!p || p.closing) return;
     if (p.muted) {
+      // YouTube keeps the volume across embeds, and a frame taken away at
+      // once mid-fade never heard it put back, so turning the sound on
+      // puts it where the page believes it is.
+      send('setVolume', [volume.current]);
       send('unMute');
       // A muted start that the browser held back, or a video that has
       // ended, plays on from here.
@@ -206,8 +266,8 @@ export function usePlayer(): Player {
   const now = useCallback(() => current.current, []);
 
   return useMemo(
-    () => ({ play, now, start, stop, drop, sound, resize, frame }),
-    [play, now, start, stop, drop, sound, resize],
+    () => ({ play, now, start, stop, drop, fade, sound, resize, frame }),
+    [play, now, start, stop, drop, fade, sound, resize],
   );
 }
 

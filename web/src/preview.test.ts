@@ -1,16 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import css from './grid.css?raw';
 import {
+  PREVIEW_BACK_MS,
+  PREVIEW_DRIFT_EXTRA_MS,
   PREVIEW_EDGE,
   PREVIEW_FLOAT_CLEAR,
   PREVIEW_FLOAT_CLEAR_TOUCH,
   PREVIEW_GAP,
   PREVIEW_LEAVE_MS,
   PREVIEW_LEAVE_PLAYING_MS,
+  PREVIEW_OUT_MS,
+  PREVIEW_OUT_PLAYING_MS,
   PREVIEW_RAIL_GAP,
   PREVIEW_REST_MS,
   PREVIEW_ROOM,
   PREVIEW_SWAP_MS,
+  PREVIEW_SWAP_OUT_MS,
   PREVIEW_TOP,
   PREVIEW_TOP_LOOSE,
   PREVIEW_W,
@@ -25,6 +30,7 @@ import {
   placePreview,
   previewBounds,
   previewFloatClear,
+  previewScheduler,
   restDelay,
   type MapView,
   type PreviewNow,
@@ -425,6 +431,11 @@ describe('the preview’s timings', () => {
     expect(PREVIEW_LEAVE_MS).toBe(160);
     expect(PREVIEW_LEAVE_PLAYING_MS).toBe(450);
     expect(SYN_SETTLE_MS).toBe(540);
+    expect(PREVIEW_OUT_MS).toBe(280);
+    expect(PREVIEW_OUT_PLAYING_MS).toBe(360);
+    expect(PREVIEW_SWAP_OUT_MS).toBe(200);
+    expect(PREVIEW_DRIFT_EXTRA_MS).toBe(40);
+    expect(PREVIEW_BACK_MS).toBe(240);
   });
 
   it('let the synopsis finish folding before its clamp moves', () => {
@@ -467,6 +478,34 @@ describe('the preview as the stylesheet draws it', () => {
       expect(z, sel).toBeGreaterThan(Number(decls(sel, false).get('z-index')));
     }
     expect(z).toBeLessThan(Number(decls('.cd-header', false).get('z-index')));
+  });
+
+  it('leaves the way it came: fading where it stands and drifting 6px back towards its card, on the close curve', () => {
+    expect(Object.fromEntries(decls('.cd-preview.cd-preview-out', false))).toEqual({
+      opacity: '0',
+      translate: '-6px 0',
+      transition: `opacity ${PREVIEW_OUT_MS}ms var(--ease-close), translate ${PREVIEW_OUT_MS + PREVIEW_DRIFT_EXTRA_MS}ms var(--ease-close)`,
+    });
+    expect(Object.fromEntries(decls('.cd-preview-left.cd-preview-out', false))).toEqual({ translate: '6px 0' });
+    expect(Object.fromEntries(decls('.cd-preview.cd-preview-out-playing', false))).toEqual({
+      transition: `opacity ${PREVIEW_OUT_PLAYING_MS}ms var(--ease-close), translate ${PREVIEW_OUT_PLAYING_MS + PREVIEW_DRIFT_EXTRA_MS}ms var(--ease-close)`,
+    });
+    expect(Object.fromEntries(decls('.cd-preview.cd-preview-gone', false))).toEqual({
+      'pointer-events': 'none',
+      transition: `opacity ${PREVIEW_SWAP_OUT_MS}ms var(--ease-close), translate ${PREVIEW_SWAP_OUT_MS + PREVIEW_DRIFT_EXTRA_MS}ms var(--ease-close)`,
+    });
+  });
+
+  it('puts the leaving rules after the trailer’s, so their transitions win', () => {
+    const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const at = (selector: string) => text.search(new RegExp(`(^|\\})\\s*${selector.replace(/\./g, '\\.')}\\s*\\{`));
+    const open = at('.cd-preview-trailer-open');
+    expect(at('.cd-preview-trailer')).toBeGreaterThan(0);
+    expect(open).toBeGreaterThan(at('.cd-preview-trailer'));
+    for (const sel of ['.cd-preview.cd-preview-out', '.cd-preview.cd-preview-out-playing', '.cd-preview.cd-preview-gone']) {
+      expect(at(sel), sel).toBeGreaterThan(open);
+    }
+    expect(at('.cd-preview-left.cd-preview-out')).toBeGreaterThan(at('.cd-preview.cd-preview-out'));
   });
 
   it('comes in from 6px nearer its card', () => {
@@ -519,8 +558,77 @@ describe('the preview as the stylesheet draws it', () => {
       '.cd-preview-trailer-open',
       '.cd-preview-syn',
       '.cd-preview-trailer-open .cd-preview-syn',
+      '.cd-preview.cd-preview-out',
+      '.cd-preview.cd-preview-out-playing',
+      '.cd-preview.cd-preview-gone',
     ]) {
       expect(decls(sel).get('transition'), sel).toBe('none');
     }
+  });
+});
+
+describe('the scheduler’s part in a preview leaving', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // The page's clock is the window's.
+    vi.stubGlobal('window', globalThis);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** A scheduler over a map showing this card's preview, on the page's
+   *  own clock, recording what it asks. A leaving preview still counts
+   *  as showing, so `showing` stands throughout. */
+  function over(showing: string) {
+    const did: string[] = [];
+    const sched = previewScheduler({
+      showing: () => showing,
+      playing: () => false,
+      open: (id) => did.push(`open ${id}`),
+      close: (hard) => did.push(`close(${hard})`),
+      keep: () => did.push('keep'),
+    });
+    return { did, sched };
+  }
+
+  it('asks for the preview back when the pointer rests on its card again', () => {
+    const { did, sched } = over('a');
+    sched.leave();
+    vi.advanceTimersByTime(100);
+    sched.rest('a');
+    vi.advanceTimersByTime(5000);
+    expect(did).toEqual(['keep']);
+    sched.dispose();
+  });
+
+  it('asks for it back when the pointer moves onto the preview', () => {
+    const { did, sched } = over('a');
+    sched.leave();
+    vi.advanceTimersByTime(100);
+    sched.hold();
+    vi.advanceTimersByTime(5000);
+    expect(did).toEqual(['keep']);
+    sched.dispose();
+  });
+
+  it('lets the preview leave softly when the pointer has gone, for a scroll and for Escape', () => {
+    const { did, sched } = over('a');
+    sched.leave();
+    vi.advanceTimersByTime(PREVIEW_LEAVE_MS - 1);
+    expect(did).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(did).toEqual(['close(false)']);
+    sched.shut();
+    expect(did).toEqual(['close(false)', 'close(false)']);
+  });
+
+  it('takes it away at once only when told to', () => {
+    const { did, sched } = over('a');
+    sched.leave();
+    sched.shut(true);
+    vi.advanceTimersByTime(5000);
+    expect(did).toEqual(['close(true)']);
   });
 });
