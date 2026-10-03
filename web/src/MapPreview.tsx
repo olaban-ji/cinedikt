@@ -1,17 +1,21 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type Ref } from 'react';
+import { flushSync } from 'react-dom';
 import type { FaceCardEvents } from './faceCard';
 import { genreLine, type GridFilm, type GridPerson } from './grid';
-import { headingFor } from './GridSheet';
+import { WatchLogo, headingFor } from './GridSheet';
 import { stillNow } from './motion';
 import { personVars } from './personColour';
 import { PersonFace, faceStart } from './PersonFace';
 import { hueOf } from './poster';
 import {
+  STREAM_GROW_MS,
+  SYN_GAP,
   SYN_LINE_H,
   SYN_LINES,
   SYN_SETTLE_MS,
   fitTrailer,
   holdInside,
+  streamShare,
   type PreviewBounds,
   type PreviewPlace,
 } from './preview';
@@ -19,6 +23,7 @@ import { ENTER_MS } from './sheet';
 import type { Theme } from './theme';
 import { TrailerRow, useTrailer, type Player } from './TrailerRow';
 import { PLAYER, isFor, videoHeight, wellHeight, type Play } from './trailer';
+import { offerLabel, streamPeek, useWhereToWatch, type WatchOffer } from './whereToWatch';
 
 interface Props {
   film: GridFilm;
@@ -62,15 +67,16 @@ interface Props {
  *  the preview had before (`y0`), the one it glides to while the trailer
  *  is open (`y1`), and how far the synopsis folds. `y0` is kept after
  *  the trailer closes, so opening it again starts from the same place. */
-interface Lift {
+export interface Lift {
   y0: number;
   y1: number;
   synLines: number | null;
 }
 
-/** A card's people, synopsis and trailer, beside it on the map, for a
- *  pointer that has come to rest on it. Mounted afresh for each card it
- *  shows, so each one slides in from its card.
+/** A card's people, synopsis and trailer, and where its movie streams,
+ *  beside it on the map, for a pointer that has come to rest on it.
+ *  Mounted afresh for each card it shows, so each one slides in from its
+ *  card.
  *
  *  It never takes the focus. The pointer that opened it keeps it open
  *  by moving onto it; the map closes it (see GridMap). */
@@ -150,6 +156,95 @@ export function MapPreview({
   }, [noCard, offFace]);
 
   const [lift, setLift] = useState<Lift | null>(null);
+
+  // Where the movie streams, as the preview's last line. An answer in
+  // as it opened is there from the first paint; one that comes after
+  // grows in, from a moment after it is first drawn closed. One coming
+  // as the preview leaves waits: it would grow as the box fades. While a
+  // trailer is set in the preview the row folds away, and opens out
+  // again once the trailer has gone.
+  const peekRow = streamPeek(useWhereToWatch(film.id));
+  const streamRow = useRef<HTMLDivElement>(null);
+  const [grown, setGrown] = useState(() => streamStartsGrown(peekRow != null, stillNow()));
+  const rowPhase = streamPhaseOf(peekRow != null, grown, leaving, trailerSet);
+  const drawRow = rowPhase != null;
+
+  // The row opening out makes the box taller, so once it has, the box
+  // is held inside the map again. Read at that moment, from the latest
+  // render: by then a trailer may have opened in it and moved it since.
+  // Not while the preview is leaving: it fades where it stands. Taken
+  // back, it is held again.
+  const latest = useRef({ spot, lift, bounds, plotH, leaving, trailerSet });
+  latest.current = { spot, lift, bounds, plotH, leaving, trailerSet };
+  const reHold = useCallback(() => {
+    const el = box.current;
+    const now = latest.current;
+    if (!el || now.leaving != null) return;
+    const again = holdAgain(now.spot, now.lift, el.getBoundingClientRect().height, now.bounds(false), now.plotH);
+    if (again.held) setHeld(again.held);
+    if (again.lift) setLift(again.lift);
+  }, []);
+
+  // A preview held by its top with too little room below for the row
+  // would grow down past the edge, and only then be moved back up. So as
+  // the row starts to grow in, such a preview is held by its bottom, where
+  // its bottom is then, and grows upwards instead (growsUp). The row's
+  // own height is there to read while it is still closed: only the
+  // wrapper round it is clipped to nothing.
+  const growIn = useCallback(() => {
+    const el = box.current;
+    const row = streamRow.current?.querySelector('.cd-preview-stream-row');
+    const now = latest.current;
+    if (el && row && now.leaving == null && !now.trailerSet) {
+      const up = growsUp(
+        now.spot,
+        now.lift,
+        el.getBoundingClientRect().height,
+        row.getBoundingClientRect().height + SYN_GAP,
+        now.bounds(false),
+        now.plotH,
+      );
+      if (up) setHeld(up);
+    }
+    setGrown(true);
+  }, []);
+  useEffect(() => (drawRow && !grown ? growSoon(growIn) : undefined), [drawRow, grown, growIn]);
+
+  const rowOpen = rowHolds(rowPhase, leaving);
+  const wasOpen = useRef(rowOpen);
+  // Before the paint, so a row that simply appears, for a reader who has
+  // asked for nothing to move, is held in the same frame (afterGrow).
+  useLayoutEffect(() => {
+    if (!rowOpen) {
+      wasOpen.current = false;
+      return;
+    }
+    if (wasOpen.current) return;
+    wasOpen.current = true;
+    return afterGrow(reHold);
+  }, [rowOpen, reHold]);
+
+  // Logos come in after the first paint, and a row of wide ones, or of
+  // names standing in for ones that failed, can wrap to a second line
+  // once they have, after the box was held. So while the row is open the
+  // box is held again whenever the row's height changes, before that
+  // frame is painted, so the taller box is never seen past the edge. The
+  // inner row is watched rather than its grid wrapper, so the wrapper's
+  // own grow and fold set nothing off.
+  useEffect(() => {
+    const row = streamRow.current?.querySelector('.cd-preview-stream-row');
+    if (!rowOpen || !row) return;
+    let was = row.getBoundingClientRect().height;
+    const seen = new ResizeObserver(() => {
+      const h = row.getBoundingClientRect().height;
+      if (h === was) return;
+      was = h;
+      flushSync(reHold);
+    });
+    seen.observe(row);
+    return () => seen.disconnect();
+  }, [rowOpen, reHold]);
+
   // The synopsis folds as the trailer opens, and its line clamp follows
   // only once the fold has finished, so the ellipsis does not snap to
   // its new line mid-move. Closing puts the clamp back first, then the
@@ -180,6 +275,12 @@ export function MapPreview({
           height: el.getBoundingClientRect().height,
           grow: wellHeight('preview', videoHeight(W)) - PLAYER.preview.pad,
           synH: syn.current ? syn.current.getBoundingClientRect().height : null,
+          streamH: streamShare(
+            streamRow.current && {
+              height: streamRow.current.getBoundingClientRect().height,
+              marginTop: parseFloat(getComputedStyle(streamRow.current).marginTop) || 0,
+            },
+          ),
         },
         bounds(false),
         bounds(true),
@@ -272,6 +373,159 @@ export function MapPreview({
         player={player}
         onPlay={onPlay}
       />
+      {rowPhase && peekRow && (
+        <PreviewStream ref={streamRow} shown={peekRow.shown} more={peekRow.more} theme={theme} phase={rowPhase} />
+      )}
+    </div>
+  );
+}
+
+/** How the preview's Stream row is drawn: closed, about to grow in for
+ *  an answer that came after the preview opened (`out`); open (`in`); or
+ *  folded away while a trailer is set in the preview (`folded`). */
+export type StreamPhase = 'out' | 'in' | 'folded';
+
+/** Whether a preview's Stream row starts open: for an answer in as the
+ *  preview opened, and for a reader who has asked for nothing to move,
+ *  whose row simply appears. Otherwise it is drawn closed first, and
+ *  grows in. */
+export function streamStartsGrown(answeredAtOpen: boolean, still: boolean): boolean {
+  return answeredAtOpen || still;
+}
+
+/** How the preview's Stream row is drawn now, or null for no row:
+ *  nothing to stream, or an answer that came while the preview was
+ *  leaving, which waits rather than growing as the box fades, and grows
+ *  in if the preview is taken back. One that has grown goes with the
+ *  preview's leave, folding nothing on its own. */
+export function streamPhaseOf(
+  hasRow: boolean,
+  grown: boolean,
+  leaving: Props['leaving'],
+  trailerSet: boolean,
+): StreamPhase | null {
+  if (!hasRow || (!grown && leaving != null)) return null;
+  return !grown ? 'out' : trailerSet ? 'folded' : 'in';
+}
+
+/** Whether a preview is held inside the map again for its Stream row,
+ *  once the row has opened out and whenever its height changes: only
+ *  while the row is open, and not while the preview is leaving, which
+ *  fades where it stands. */
+export function rowHolds(phase: StreamPhase | null, leaving: Props['leaving']): boolean {
+  return phase === 'in' && leaving == null;
+}
+
+/** Opens a Stream row drawn closed a moment after it is drawn, so its
+ *  grow has the closed state to run from; at once for a reader who has
+ *  asked for nothing to move. A timer, as the preview's own entrance
+ *  uses, rather than a frame. Returns what cancels it. */
+export function growSoon(open: () => void): () => void {
+  const t = window.setTimeout(open, stillNow() ? 0 : ENTER_MS);
+  return () => window.clearTimeout(t);
+}
+
+/** Runs `then` once a Stream row opening out has finished, and a little
+ *  over. For a reader who has asked for nothing to move, the row is open
+ *  as soon as it is drawn, so `then` runs there and then: called before
+ *  a paint, the box is never seen past the edge. Returns what cancels
+ *  it. */
+export function afterGrow(then: () => void): () => void {
+  if (stillNow()) {
+    then();
+    return () => {};
+  }
+  const t = window.setTimeout(then, STREAM_GROW_MS + 20);
+  return () => window.clearTimeout(t);
+}
+
+/** Where a preview that has grown taller goes, held inside the map
+ *  again (holdInside): `held`, its new place, while no trailer has
+ *  opened in it; once one has, it is held by its top at the lift's `y0`,
+ *  and `lift` is that lift with `y0` moved. Neither when it still fits
+ *  where it is. */
+export function holdAgain(
+  spot: PreviewPlace,
+  lift: Lift | null,
+  height: number,
+  b: PreviewBounds,
+  plotH: number,
+): { held?: PreviewPlace; lift?: Lift } {
+  if (lift) {
+    const at = holdInside({ ...spot, top: lift.y0, bottom: null }, height, b, plotH);
+    return at.top != null && at.top !== lift.y0 ? { lift: { ...lift, y0: at.top } } : {};
+  }
+  const at = holdInside(spot, height, b, plotH);
+  return at === spot ? {} : { held: at };
+}
+
+/** Where a preview goes as its Stream row starts to grow in, `added`
+ *  taller once it has: held by its bottom, where its bottom is now, when
+ *  it is held by its top and the row would take it past the bottom of
+ *  the room, so it grows upwards rather than down past the edge and back.
+ *  Null, leaving it where it is, when it is held by its bottom already,
+ *  a trailer has opened in it (`lift`), the row fits below, or growing
+ *  upwards would take it past the top; holdAgain settles any of those
+ *  once the row has grown. */
+export function growsUp(
+  spot: PreviewPlace,
+  lift: Lift | null,
+  height: number,
+  added: number,
+  b: PreviewBounds,
+  plotH: number,
+): PreviewPlace | null {
+  if (lift || spot.top == null) return null;
+  const foot = spot.top + height;
+  if (foot + added <= b.vb || spot.top - added < b.vt) return null;
+  return { ...spot, top: null, bottom: plotH - foot };
+}
+
+/** The preview's last line: "Stream", up to three services the movie
+ *  streams on with a subscription or for free, each opening it there in
+ *  a new tab, and a count of the rest. It grows in and folds away on a
+ *  grid row going between 0fr and 1fr, its margin taking back the box's
+ *  gap above it as it closes. Closed or folded, it is inert as well as
+ *  hidden, so a keyboard never lands on a link that cannot be seen and a
+ *  screen reader does not read one out. */
+export function PreviewStream({
+  ref,
+  shown,
+  more,
+  theme,
+  phase,
+}: {
+  ref?: Ref<HTMLDivElement>;
+  shown: WatchOffer[];
+  more: number;
+  theme: Theme;
+  phase: StreamPhase;
+}) {
+  return (
+    <div
+      ref={ref}
+      className={`cd-preview-stream${phase === 'in' ? '' : ` cd-preview-stream-${phase}`}`}
+      inert={phase !== 'in' || undefined}
+      aria-hidden={phase !== 'in' || undefined}
+    >
+      <div className="cd-preview-stream-clip">
+        <div className="cd-preview-stream-row">
+          <span className="cd-preview-stream-label">Stream</span>
+          {shown.map((o) => (
+            <a
+              key={o.id}
+              className="cd-preview-stream-chip"
+              href={o.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={offerLabel('stream', o)}
+            >
+              <WatchLogo offer={o} theme={theme} logoClass="cd-preview-stream-logo" nameClass="cd-preview-stream-name" />
+            </a>
+          ))}
+          {more > 0 && <span className="cd-preview-stream-more">+{more}</span>}
+        </div>
+      </div>
     </div>
   );
 }

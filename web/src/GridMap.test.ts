@@ -45,6 +45,17 @@ import {
 import type { Player } from './TrailerRow';
 import { startPlay, stopPlay, type Play } from './trailer';
 
+// Where to watch, asked for as the pointer begins to rest on a card.
+// Recorded rather than sent.
+const asked = vi.hoisted(() => [] as string[]);
+vi.mock('./whereToWatch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./whereToWatch')>()),
+  askWhereToWatch: (id: string) => {
+    asked.push(id);
+    return Promise.resolve(null);
+  },
+}));
+
 /** A card whose spine says it holds these places in the chip row. */
 function card(people: number[] = [], id = 'tt0000001', isAnchor = false): Placed {
   return {
@@ -639,7 +650,7 @@ function words(id: string): GridFilm {
  *  `slots`, the chips it lights in `lit`, and what it asks of the player
  *  in `did`. The pointer moves with `onto` and `off`, as the cards'
  *  events move it, and `set` sets the player in a card's preview. */
-function previewing() {
+function previewing(over: Partial<PreviewMap> = {}) {
   const slots = { peek: null as Peek | null, gone: null as Peek | null, held: null as string | null };
   const lit: string[][] = [];
   const did: string[] = [];
@@ -669,6 +680,7 @@ function previewing() {
     said: words,
     light: (people) => lit.push(people),
     player,
+    ...over,
   };
   const showing = { current: null as string | null };
   const under = { current: null as string | null };
@@ -748,6 +760,45 @@ function previewing() {
 
 /** The classes on an opening tag. */
 const classes = (tag: string) => tag.match(/class="([^"]*)"/)?.[1].split(' ') ?? [];
+
+describe('where to watch, as the pointer begins to rest on a card', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', globalThis);
+    asked.length = 0;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('is asked for at once, before the preview opens, so its Stream row is mostly there from its first paint', () => {
+    const t = previewing();
+    t.onto(A);
+    expect(asked).toEqual([A]);
+    expect(t.slots.peek).toBeNull();
+    vi.advanceTimersByTime(PREVIEW_REST_MS);
+    expect(t.slots.peek?.id).toBe(A);
+    // Asked once: the preview's own ask joins it (see whereToWatch).
+    expect(asked).toEqual([A]);
+    // And for each card the pointer rests on after.
+    t.off();
+    t.onto(B);
+    expect(asked).toEqual([A, B]);
+  });
+
+  it('is not asked for a card whose preview could not open: filtered out, words not yet come, or the map blocked', () => {
+    const filtered = previewing({ minRating: 10 });
+    filtered.onto(A);
+    const wordless = previewing({ said: () => undefined });
+    wordless.onto(A);
+    const blocked = previewing({ blocked: true });
+    blocked.onto(A);
+    vi.advanceTimersByTime(PREVIEW_REST_MS);
+    expect(asked).toEqual([]);
+    expect([filtered, wordless, blocked].map((t) => t.slots.peek)).toEqual([null, null, null]);
+  });
+});
 
 describe('the hover preview’s lifetime (usePreview)', () => {
   beforeEach(() => {

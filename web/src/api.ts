@@ -345,6 +345,38 @@ export async function fetchPeoplePhotos(
   return out;
 }
 
+/** One service a movie can be watched on, as the server sends it. */
+export interface WatchOfferBody {
+  id?: string;
+  name?: string;
+  /** The movie's page on that service. */
+  link?: string;
+  logo?: { dark?: string; light?: string };
+  /** Only on rent and buy. */
+  price?: string;
+  /** Only on an add-on: the service it is bought through. */
+  via?: string;
+}
+
+/** Where a movie can be watched, as the server sends it. A country
+ *  without coverage comes with `covered: false` and nothing else. */
+export interface WhereToWatchBody {
+  country?: string;
+  countryName?: string;
+  covered?: boolean;
+  stream?: WatchOfferBody[];
+  free?: WatchOfferBody[];
+  rent?: WatchOfferBody[];
+  buy?: WatchOfferBody[];
+}
+
+/** Where a movie can be watched in the reader's country. The server
+ *  works the country out from the request itself: nothing here names
+ *  one. See whereToWatch.ts for how the answers are kept. */
+export function fetchWhereToWatch(imdbId: string): Promise<WhereToWatchBody> {
+  return getJSON<WhereToWatchBody>(`/where-to-watch/${encodeURIComponent(imdbId)}`);
+}
+
 export interface FirstRunHit {
   id: string;
   title: string;

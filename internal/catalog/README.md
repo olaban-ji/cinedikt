@@ -180,3 +180,104 @@ poster is set back to none, with its colour and any release
 date TMDb filled in where OMDb had none (`released_tmdb`), and its
 stamp is cleared, so the fallback can ask again. An address or date
 from OMDb, and its status, are never touched.
+
+## Where to watch
+
+`WhereToWatch` answers `GET /api/where-to-watch/{tconst}` for a
+reader's country. It keeps the Streaming Availability API's answers,
+shaped by `internal/streaming`, in `meta.where_to_watch`, one row per
+movie and country, empty answers included and failures never. A pair
+nobody has asked about is asked in the request, once however many
+readers arrive together (a singleflight on `tconst/country`, detached
+from the reader who started it, with five seconds), and kept. A kept
+answer is served as it stands, and kept until the changes feed says the
+movie changed in that country, one of its options leaves, or it is
+`WatchFresh` (30 days) old; then it is still served, and a
+`where_to_watch_refresh` job is queued behind it. A movie the catalog
+does not hold is `ErrNotFound`, and never asked about. The API
+failing to answer is `ErrUpstream`, which the route answers 502; any
+other error is the store's, answered 500. Only the movies readers open
+are ever asked about: there is no sweep.
+
+Keeping an answer and scheduling its next ask are one transaction. When
+an answer has options with an `expiresOn` still to come, a refresh is
+inserted, scheduled for the first of them (`expires_at`), with the
+answer's row. The job asks again, as of that moment, so an option the
+API still lists after its day is left out; keeps the answer; and
+schedules the next. A refresh finds nothing to do when an answer was
+kept after it fell due, and a refused key cancels it rather than
+retrying it with the same key.
+
+`streaming_changes` (`watchchanges.go`) keeps kept answers right from
+the API's `/changes` feed. It looks every hour and reads each covered
+country with kept answers once its last run is `ChangesEvery` (a day)
+old: the `new`, `removed` and `updated` changes to movies, oldest
+first, from where that country's last run got to (`meta.streaming_sync`)
+until now. A first run starts a day back, or at the country's oldest
+kept answer when that is older; no run starts more than the feed's 31
+days back, and one cut to that says so. Each change is matched to a
+tconst by its show's `imdbId`, and only pairs kept for that country are
+touched, each once a run. A show carrying its options for the country
+is shaped and written through `keep`, which schedules its next expiry;
+one carrying none is refreshed, since the feed saying nothing is not
+the movie being on nothing. The three feeds are read a page at a time in
+turn, up to `ChangesMaxPages` pages a country (never fewer than one of
+each), and a run records the end of its window when every feed got
+there, or the earliest any unfinished one reached when the cap stopped
+it, so the next carries on. A failed page ends the country's run and
+records only what every feed got past, and the country waits a day; a
+run that got past nothing is recorded too once it read a page, so a
+page that keeps failing does not have the pages before it read again on
+every try. One that read no page, or was stopped, records nothing and
+is tried again. A refused key cancels the job. Each run logs its pages,
+changes, writes and refreshes, and warns when the cap stopped it, when
+a change named a show its page did not carry, or when a page said there
+were more and gave no cursor.
+
+`meta.streaming_countries` is the API's list of covered countries and
+their names. The first reader who needs it fills it; the daily
+`streaming_countries` job asks again once it is a week old, and never
+replaces it with an empty list. A country not on it is answered as
+uncovered without the API being asked.
+
+`meta.geoip` is GeoLite2 Country itself, with MaxMind's
+`Last-Modified` for the build. The `geoip_check` job sends a `HEAD`
+twice a day and downloads only a different build, which
+`internal/geoip` unpacks, opens and verifies before it is kept and
+swapped in. Only the queue's leader queues the check, so only one
+process downloads; every process loads the kept database at start and
+looks at its stamp every ten minutes to pick up a build another one
+fetched.
+
+## The queue
+
+Those four jobs run on River (`queue.go`), in the API process, with
+its tables in a `river` schema of their own that the daily swap never
+names. `OpenQueue` migrates them under an advisory lock (`0x63696e72`),
+so two containers starting together take turns, and gives River a pool
+of four connections: one is held for River's `LISTEN` for as long as it
+runs, which should be neither a reader's nor one a bulk `COPY` holds.
+The jobs write through the store they are given.
+
+A refresh is unique by its arguments among unfinished jobs: movie,
+country, and the moment it is for, zero for a stale answer's. Readers
+finding the same old answer insert it once, and so do two containers
+scheduling the same expiry, while an expiry's refresh and a stale one
+never stand in for each other. The periodic jobs are inserted by River's
+leader alone, on start and on their period, and are unique among
+unfinished jobs, so a new leader cannot stack a second check on one
+already running, and two processes never read the same changes. Every
+job is claimed by one worker. On shutdown River stops fetching and
+gives running jobs five seconds before cancelling them, inside a
+draining container's ten.
+
+River's logger passes only its warnings and errors, and River reports
+a failed job at info and a cancelled one at debug, so each job logs its
+own failure (`logJob`): a refused key as an error, since only a person
+can fix it, and anything else as a warning. A job cut short by a stop
+logs nothing. A job that panics is logged by the queue's error handler.
+
+The tests work the jobs by hand against a queue that is not started,
+and two start it to see a refresh and a read of the changes run end to
+end. The changes feed is an httptest stand-in, served through the real
+client.

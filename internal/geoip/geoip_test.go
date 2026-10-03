@@ -1,0 +1,357 @@
+package geoip_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"cinedikt/internal/geoip"
+	"cinedikt/internal/geoip/geoiptest"
+)
+
+// Networks MaxMind's own test data places, in a database built here.
+var networks = map[string]string{
+	"81.2.69.0/24":    "GB",
+	"216.160.83.0/24": "US",
+	"2001:480::/32":   "US",
+}
+
+func TestTheLookupPlacesAnAddressInACountry(t *testing.T) {
+	var l geoip.Lookup
+	if _, ok := l.Country(netip.MustParseAddr("81.2.69.142")); ok || l.Ready() {
+		t.Fatal("a lookup with no database placed an address")
+	}
+	if err := l.Load(geoiptest.Database(t, networks), "Sat, 03 Oct 2026 00:00:00 GMT"); err != nil {
+		t.Fatal(err)
+	}
+	for addr, want := range map[string]string{
+		"81.2.69.142":        "gb",
+		"216.160.83.56":      "us",
+		"2001:480::1":        "us",
+		"::ffff:81.2.69.142": "gb",
+	} {
+		if got, ok := l.Country(netip.MustParseAddr(addr)); !ok || got != want {
+			t.Errorf("%s = %q %v, want %q", addr, got, ok, want)
+		}
+	}
+	if got, ok := l.Country(netip.MustParseAddr("8.8.8.8")); ok {
+		t.Errorf("an address the database has no network for = %q", got)
+	}
+	if got, ok := l.Country(netip.Addr{}); ok {
+		t.Errorf("no address = %q", got)
+	}
+	if l.LastModified() != "Sat, 03 Oct 2026 00:00:00 GMT" {
+		t.Errorf("stamp = %q", l.LastModified())
+	}
+}
+
+func TestTheLookupRefusesWhatIsNotACountryDatabase(t *testing.T) {
+	var l geoip.Lookup
+	good := geoiptest.Database(t, networks)
+	if err := l.Load(good, "first"); err != nil {
+		t.Fatal(err)
+	}
+	for name, bad := range map[string][]byte{
+		"empty":        nil,
+		"not a mmdb":   []byte("hello"),
+		"cut short":    good[:len(good)/2],
+		"another kind": geoiptest.WrongEdition(t),
+	} {
+		if err := l.Load(bad, "second"); err == nil {
+			t.Errorf("%s was loaded", name)
+		}
+	}
+	if l.LastModified() != "first" {
+		t.Errorf("a refused database replaced the one in use: %q", l.LastModified())
+	}
+	if got, _ := l.Country(netip.MustParseAddr("81.2.69.142")); got != "gb" {
+		t.Errorf("after the refusals = %q", got)
+	}
+}
+
+// memStore keeps the database the way meta.geoip does, in memory.
+type memStore struct {
+	mu    sync.Mutex
+	stamp string
+	mmdb  []byte
+	keeps int
+	fail  error
+}
+
+func (m *memStore) GeoIP(context.Context) (string, []byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stamp, m.mmdb, nil
+}
+
+func (m *memStore) GeoIPStamp(context.Context) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stamp, nil
+}
+
+func (m *memStore) KeepGeoIP(_ context.Context, stamp string, mmdb []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fail != nil {
+		return m.fail
+	}
+	m.stamp, m.mmdb = stamp, mmdb
+	m.keeps++
+	return nil
+}
+
+func updater(srv *geoiptest.Server, store geoip.Store, l *geoip.Lookup, account string) *geoip.Updater {
+	return &geoip.Updater{
+		AccountID:    account,
+		LicenseKey:   geoiptest.License,
+		Store:        store,
+		Lookup:       l,
+		HTTP:         srv.Client(),
+		PermalinkURL: srv.PermalinkURL(),
+		LegacyURL:    srv.LegacyURL(),
+	}
+}
+
+// TestTheDatabaseIsDownloadedOnlyWhenItsBuildChanges: every check asks
+// with a HEAD, and only a new Last-Modified is worth a GET.
+func TestTheDatabaseIsDownloadedOnlyWhenItsBuildChanges(t *testing.T) {
+	ctx := context.Background()
+	built := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), built)
+	store := &memStore{}
+	var l geoip.Lookup
+	u := updater(srv, store, &l, geoiptest.Account)
+
+	updated, err := u.Check(ctx)
+	if err != nil || !updated {
+		t.Fatalf("first check: updated %v, err %v", updated, err)
+	}
+	if srv.Heads() != 1 || srv.Gets() != 1 || store.keeps != 1 {
+		t.Errorf("first check: %d HEAD, %d GET, %d kept", srv.Heads(), srv.Gets(), store.keeps)
+	}
+	if got, _ := l.Country(netip.MustParseAddr("81.2.69.142")); got != "gb" {
+		t.Errorf("after the download = %q", got)
+	}
+
+	for range 3 {
+		if updated, err := u.Check(ctx); err != nil || updated {
+			t.Fatalf("an unchanged build: updated %v, err %v", updated, err)
+		}
+	}
+	if srv.Heads() != 4 || srv.Gets() != 1 {
+		t.Errorf("unchanged: %d HEAD, %d GET; want a HEAD each and no more GETs", srv.Heads(), srv.Gets())
+	}
+
+	// A new build, placing the address elsewhere, is fetched and used.
+	srv.Set(geoiptest.Archive(t, geoiptest.Database(t, map[string]string{"81.2.69.0/24": "IE"})), built.Add(96*time.Hour))
+	if updated, err := u.Check(ctx); err != nil || !updated {
+		t.Fatalf("a new build: updated %v, err %v", updated, err)
+	}
+	if srv.Gets() != 2 || store.keeps != 2 {
+		t.Errorf("new build: %d GET, %d kept", srv.Gets(), store.keeps)
+	}
+	if got, _ := l.Country(netip.MustParseAddr("81.2.69.142")); got != "ie" {
+		t.Errorf("after the new build = %q", got)
+	}
+	if store.stamp != built.Add(96*time.Hour).Format("Mon, 02 Jan 2006 15:04:05 GMT") || l.LastModified() != store.stamp {
+		t.Errorf("kept %q, in use %q", store.stamp, l.LastModified())
+	}
+}
+
+// TestABadDownloadKeepsTheDatabaseInUse: whatever is wrong with what came
+// down, nothing is kept and nothing is swapped.
+func TestABadDownloadKeepsTheDatabaseInUse(t *testing.T) {
+	ctx := context.Background()
+	built := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), built)
+	store := &memStore{}
+	var l geoip.Lookup
+	u := updater(srv, store, &l, geoiptest.Account)
+	if _, err := u.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	good := store.stamp
+
+	archive := geoiptest.Archive(t, geoiptest.Database(t, networks))
+	for name, body := range map[string][]byte{
+		"not gzip":      []byte("<html>maintenance</html>"),
+		"cut short":     archive[:len(archive)/2],
+		"no database":   geoiptest.ArchiveWithoutDatabase(t),
+		"empty mmdb":    geoiptest.Archive(t, []byte{}),
+		"wrong edition": geoiptest.Archive(t, geoiptest.WrongEdition(t)),
+		"garbage mmdb":  geoiptest.Archive(t, []byte("not a database at all")),
+	} {
+		built = built.Add(time.Hour)
+		srv.Set(body, built)
+		if updated, err := u.Check(ctx); err == nil || updated {
+			t.Errorf("%s: updated %v, err %v", name, updated, err)
+		}
+		if store.stamp != good || l.LastModified() != good {
+			t.Errorf("%s: kept %q, in use %q, want the good one %q", name, store.stamp, l.LastModified(), good)
+		}
+		if got, _ := l.Country(netip.MustParseAddr("81.2.69.142")); got != "gb" {
+			t.Errorf("%s: lookups now say %q", name, got)
+		}
+	}
+
+	// A good download that cannot be kept is not put in use either:
+	// every process reads the kept copy, and they would disagree.
+	srv.Set(geoiptest.Archive(t, geoiptest.Database(t, map[string]string{"81.2.69.0/24": "IE"})), built.Add(time.Hour))
+	store.fail = errors.New("database down")
+	if updated, err := u.Check(ctx); err == nil || updated {
+		t.Errorf("an unkept download: updated %v, err %v", updated, err)
+	}
+	if got, _ := l.Country(netip.MustParseAddr("81.2.69.142")); got != "gb" {
+		t.Errorf("an unkept download was used: %q", got)
+	}
+}
+
+// TestASecondProcessReadsTheKeptDatabase: it neither downloads nor even
+// asks, and it follows a build another process fetched.
+func TestASecondProcessReadsTheKeptDatabase(t *testing.T) {
+	ctx := context.Background()
+	built := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), built)
+	store := &memStore{}
+	var first geoip.Lookup
+	if _, err := updater(srv, store, &first, geoiptest.Account).Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	heads, gets := srv.Heads(), srv.Gets()
+
+	var second geoip.Lookup
+	other := updater(srv, store, &second, geoiptest.Account)
+	if err := other.LoadStored(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := second.Country(netip.MustParseAddr("216.160.83.56")); got != "us" {
+		t.Errorf("second process = %q", got)
+	}
+	if srv.Heads() != heads || srv.Gets() != gets {
+		t.Errorf("loading the kept copy asked MaxMind: %d HEAD, %d GET", srv.Heads()-heads, srv.Gets()-gets)
+	}
+
+	// The first process fetches a new build; the second follows it.
+	srv.Set(geoiptest.Archive(t, geoiptest.Database(t, map[string]string{"216.160.83.0/24": "CA"})), built.Add(96*time.Hour))
+	if _, err := updater(srv, store, &first, geoiptest.Account).Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	followCtx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		other.Follow(followCtx, 5*time.Millisecond)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for second.LastModified() != store.stamp && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	stop()
+	<-done
+	if got, _ := second.Country(netip.MustParseAddr("216.160.83.56")); got != "ca" {
+		t.Errorf("after following = %q", got)
+	}
+}
+
+// TestTheLegacyAddressTakesTheKeyAlone, and neither address puts the key
+// into an error a caller would log.
+func TestTheLegacyAddressTakesTheKeyAlone(t *testing.T) {
+	ctx := context.Background()
+	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), time.Now())
+	var l geoip.Lookup
+	if updated, err := updater(srv, &memStore{}, &l, "").Check(ctx); err != nil || !updated {
+		t.Fatalf("legacy: updated %v, err %v", updated, err)
+	}
+
+	for _, account := range []string{"", geoiptest.Account} {
+		u := updater(srv, &memStore{}, &geoip.Lookup{}, account)
+		u.LicenseKey = "wrong-licence-key"
+		_, err := u.Check(ctx)
+		if !errors.Is(err, geoip.ErrKey) {
+			t.Errorf("account %q with a bad key: err = %v, want ErrKey", account, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "wrong-licence-key") {
+			t.Errorf("the error carries the key: %v", err)
+		}
+	}
+
+	// Nor does a host that does not answer.
+	u := updater(srv, &memStore{}, &geoip.Lookup{}, "")
+	u.LegacyURL = "http://127.0.0.1:1/app/geoip_download?edition_id=GeoLite2-Country&suffix=tar.gz"
+	if _, err := u.Check(ctx); err == nil || strings.Contains(err.Error(), geoiptest.License) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// TestThePermalinkIsFollowedToItsStorage: MaxMind's permalink answers a
+// HEAD and a GET alike with a redirect to the file on its storage. Both
+// are followed by the client the updater makes for itself, the stamp
+// read is the storage's, and the credentials stay with MaxMind's host.
+func TestThePermalinkIsFollowedToItsStorage(t *testing.T) {
+	ctx := context.Background()
+	built := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	archive := geoiptest.Archive(t, geoiptest.Database(t, networks))
+	var heads, gets atomic.Int32
+	var leaked atomic.Bool
+	storage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			leaked.Store(true)
+		}
+		w.Header().Set("Last-Modified", built.Format(http.TimeFormat))
+		switch r.Method {
+		case http.MethodHead:
+			heads.Add(1)
+		case http.MethodGet:
+			gets.Add(1)
+			_, _ = w.Write(archive)
+		}
+	}))
+	defer storage.Close()
+	// The same machine by another name, so the redirect leaves the
+	// permalink's host the way MaxMind's leaves for its storage.
+	elsewhere := strings.Replace(storage.URL, "127.0.0.1", "localhost", 1)
+	permalink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, pass, ok := r.BasicAuth(); !ok || user != geoiptest.Account || pass != geoiptest.License {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, r, elsewhere+"/GeoLite2-Country.tar.gz?signature=made-up", http.StatusFound)
+	}))
+	defer permalink.Close()
+
+	store := &memStore{}
+	var l geoip.Lookup
+	u := &geoip.Updater{
+		AccountID:    geoiptest.Account,
+		LicenseKey:   geoiptest.License,
+		Store:        store,
+		Lookup:       &l,
+		PermalinkURL: permalink.URL + geoiptest.PermalinkPath + "?suffix=tar.gz",
+	}
+	if updated, err := u.Check(ctx); err != nil || !updated {
+		t.Fatalf("first check: updated %v, err %v", updated, err)
+	}
+	if updated, err := u.Check(ctx); err != nil || updated {
+		t.Fatalf("an unchanged build: updated %v, err %v", updated, err)
+	}
+	if heads.Load() != 2 || gets.Load() != 1 {
+		t.Errorf("storage saw %d HEAD, %d GET; want two checks and one download", heads.Load(), gets.Load())
+	}
+	if store.stamp != built.Format(http.TimeFormat) {
+		t.Errorf("kept %q", store.stamp)
+	}
+	if got, _ := l.Country(netip.MustParseAddr("81.2.69.142")); got != "gb" {
+		t.Errorf("after the download = %q", got)
+	}
+	if leaked.Load() {
+		t.Error("the credentials went with the redirect to the storage")
+	}
+}

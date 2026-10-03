@@ -9,12 +9,21 @@ import matrix from './fixtures/matrix-grid.json';
 import { initialsFor, layoutGrid, type GridFilm, type GridPayload, type GridPerson } from './grid';
 import {
   MapPreview,
+  PreviewStream,
   TrailerFocus,
+  afterGrow,
   faceEvents,
   faceTitle,
   facesRow,
+  growSoon,
+  growsUp,
+  holdAgain,
   leavingClass,
   previewPlay,
+  rowHolds,
+  streamPhaseOf,
+  streamStartsGrown,
+  type Lift,
 } from './MapPreview';
 import { faceAfter, faceStart, photoArrived } from './PersonFace';
 import {
@@ -22,6 +31,9 @@ import {
   PREVIEW_LEAVE_PLAYING_MS,
   PREVIEW_OUT_PLAYING_MS,
   PREVIEW_REST_MS,
+  STREAM_FOLD_MS,
+  STREAM_GROW_MS,
+  holdInside,
   previewScheduler,
   type PreviewClock,
   type PreviewPlace,
@@ -29,6 +41,7 @@ import {
 import { ENTER_MS } from './sheet';
 import { usePlayer, type Player } from './TrailerRow';
 import { TRAILER_GONE_MS, TRAILER_OPEN_MS, startPlay, stopPlay, type Play } from './trailer';
+import { logoBroke, type WatchOffer, type WatchState, type WhereToWatch } from './whereToWatch';
 
 // What the trailer lookup has already answered for the film on show,
 // which a first render shows straight away.
@@ -37,6 +50,14 @@ vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   trailerKnown: () => answer.key,
   fetchTrailer: () => new Promise<string | null>(() => {}),
+}));
+
+// Where the movie on show can be watched, as its preview first draws it.
+// Nothing yet, unless a test says otherwise.
+const watch = vi.hoisted(() => ({ state: { status: 'wait', data: null } as WatchState }));
+vi.mock('./whereToWatch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./whereToWatch')>()),
+  useWhereToWatch: () => watch.state,
 }));
 
 // The real module reaches for PostHog, which has nothing to do with
@@ -504,6 +525,393 @@ describe('a bigger photo from the hover preview’s faces', () => {
     }
     // Taken back, its faces open one again.
     expect(preview(KEY, people, undefined, null, photoOf, { back: true })).not.toContain('title="Keanu Reeves"');
+  });
+});
+
+/** A service, with a logo for each theme. */
+const service = (id: string, name: string, more: Partial<WatchOffer> = {}): WatchOffer => ({
+  id,
+  name,
+  link: `https://example.com/${id}/watch`,
+  logo: { dark: `https://img.example.com/${id}-dark.svg`, light: `https://img.example.com/${id}-light.svg` },
+  ...more,
+});
+
+/** An answer in the United States with these groups. */
+function streams(groups: Partial<Pick<WhereToWatch, 'stream' | 'free' | 'rent' | 'buy'>>): WatchState {
+  return {
+    status: 'ok',
+    data: { country: 'us', countryName: 'United States', covered: true, stream: [], free: [], rent: [], buy: [], ...groups },
+  };
+}
+
+const SIX = streams({
+  stream: [
+    service('netflix', 'Netflix'),
+    service('prime', 'Prime Video'),
+    service('max', 'Max'),
+    service('starz', 'Starz', { via: 'Prime Video' }),
+  ],
+  free: [service('tubi', 'Tubi'), service('pluto', 'Pluto TV')],
+  rent: [service('apple', 'Apple TV', { price: '3.99 USD' })],
+});
+
+/** The preview as its first render draws it, knowing where its movie can
+ *  be watched. */
+function withWatch(state: WatchState, ...rest: Parameters<typeof preview>): string {
+  watch.state = state;
+  try {
+    return preview(...rest);
+  } finally {
+    watch.state = { status: 'wait', data: null };
+  }
+}
+
+/** The Stream row, from its tag to the end of the preview. */
+const streamOf = (html: string) => {
+  const at = html.indexOf('<div class="cd-preview-stream');
+  return at < 0 ? '' : html.slice(at, html.lastIndexOf('</div>'));
+};
+
+describe('the hover preview’s Stream row', () => {
+  it('names three services and counts the rest, as the preview’s last line, under Watch trailer', () => {
+    const html = withWatch(SIX, KEY);
+    const row = streamOf(html);
+    expect(row).toMatch(/^<div class="cd-preview-stream"><div class="cd-preview-stream-clip"><div class="cd-preview-stream-row"><span class="cd-preview-stream-label">Stream<\/span><a /);
+    expect(row.match(/<a /g)).toHaveLength(3);
+    // Starz, Tubi and Pluto TV; rent is not streaming. And the last
+    // child: the row runs to the end of the box.
+    expect(row.endsWith('<span class="cd-preview-stream-more">+3</span></div></div></div>')).toBe(true);
+    expect(html.indexOf('cd-trailer cd-trailer-preview')).toBeLessThan(html.indexOf('cd-preview-stream'));
+  });
+
+  it('counts nothing when three or fewer stream, free ones after the rest, each service once', () => {
+    const row = streamOf(
+      withWatch(streams({ stream: [service('netflix', 'Netflix')], free: [service('tubi', 'Tubi'), service('netflix', 'Netflix')] }), KEY),
+    );
+    expect(row.match(/aria-label="([^"]*)"/g)).toEqual([
+      'aria-label="Stream on Netflix, opens in a new tab"',
+      'aria-label="Stream on Tubi, opens in a new tab"',
+    ]);
+    expect(row).not.toContain('cd-preview-stream-more');
+  });
+
+  it('opens each service’s page for the movie in a new tab, saying so to assistive tech', () => {
+    const row = streamOf(withWatch(SIX, KEY));
+    expect(row).toContain(
+      '<a class="cd-preview-stream-chip" href="https://example.com/netflix/watch" target="_blank" rel="noopener noreferrer" aria-label="Stream on Netflix, opens in a new tab">',
+    );
+    expect(row).toContain('aria-label="Stream on Prime Video, opens in a new tab"');
+  });
+
+  it('draws each logo for the theme, as decoration, since the chip already names the service', () => {
+    const dark = streamOf(withWatch(SIX, KEY));
+    expect(dark).toContain('<img class="cd-preview-stream-logo" src="https://img.example.com/netflix-dark.svg" alt="" decoding="async"/>');
+    const light = streamOf(withWatch(SIX, KEY, {}, undefined, null, undefined, { theme: 'light' }));
+    expect(light).toContain('src="https://img.example.com/netflix-light.svg"');
+    expect(light).not.toContain('-dark.svg');
+  });
+
+  it('shows the service’s name for a logo with no address, or one that has failed to load', () => {
+    logoBroke('https://img.example.com/max-dark.svg');
+    const row = streamOf(
+      withWatch(streams({ stream: [service('netflix', 'Netflix', { logo: {} }), service('max', 'Max')] }), KEY),
+    );
+    expect(row).toContain('aria-label="Stream on Netflix, opens in a new tab"><span class="cd-preview-stream-name">Netflix</span></a>');
+    expect(row).toContain('aria-label="Stream on Max, opens in a new tab"><span class="cd-preview-stream-name">Max</span></a>');
+    expect(row).not.toContain('<img');
+  });
+
+  it('is not there without anything to stream: rent and buy only, nothing at all, no coverage, no answer yet, or a failure', () => {
+    const none: WatchState[] = [
+      streams({ rent: [service('apple', 'Apple TV', { price: '3.99 USD' })], buy: [service('apple', 'Apple TV')] }),
+      streams({}),
+      { status: 'ok', data: { country: 'xx', covered: false, stream: [], free: [], rent: [], buy: [] } },
+      { status: 'wait', data: null },
+      { status: 'error', data: null },
+    ];
+    for (const state of none) {
+      const html = withWatch(state, KEY);
+      expect(html, JSON.stringify(state)).not.toContain('cd-preview-stream');
+      expect(html).toContain('cd-trailer cd-trailer-preview');
+    }
+  });
+
+  it('folds away while a trailer is set in the preview, opening, open or closing, and takes no pointer then', () => {
+    const opening = startPlay(null, 'preview', ID, true, 360, false)!;
+    const open: Play = { ...opening, open: true };
+    for (const play of [opening, open, stopPlay(open)!]) {
+      expect(streamOf(withWatch(SIX, KEY, {}, undefined, play))).toMatch(
+        /^<div class="cd-preview-stream cd-preview-stream-folded" inert="" aria-hidden="true">/,
+      );
+    }
+    expect(decls('.cd-preview-stream-folded').get('pointer-events')).toBe('none');
+    // Not for a player in the panel, nor another movie's.
+    const panel = startPlay(null, 'panel', ID, false, 430, true)!;
+    const other = { ...startPlay(null, 'preview', 'tt0088763', true, 360, true)! };
+    for (const play of [panel, other]) {
+      expect(streamOf(withWatch(SIX, KEY, {}, undefined, play))).toMatch(/^<div class="cd-preview-stream">/);
+    }
+  });
+
+  it('goes with the preview as it leaves, folding nothing on its own', () => {
+    for (const leaving of ['plain', 'playing', 'gone'] as const) {
+      const html = withWatch(SIX, KEY, {}, undefined, null, undefined, { leaving });
+      expect(streamOf(html), leaving).toMatch(/^<div class="cd-preview-stream">/);
+    }
+  });
+
+  it('is there from the first paint for an answer in as the preview opens', () => {
+    // An answer that comes later is drawn closed, and grows in (see below).
+    expect(streamOf(withWatch(SIX, KEY))).toMatch(/^<div class="cd-preview-stream">/);
+  });
+});
+
+describe('the Stream row arriving after the preview has opened', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', globalThis);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  // The row's opening tag. A server render puts a preload for its logo
+  // ahead of it.
+  const row = (phase: 'out' | 'in' | 'folded') =>
+    renderToStaticMarkup(
+      createElement(PreviewStream, {
+        shown: [service('netflix', 'Netflix')],
+        more: 0,
+        theme: 'dark',
+        phase,
+      }),
+    ).match(/<div class="cd-preview-stream[^>]*>/)?.[0];
+
+  it('is drawn closed, then grows in a moment later, once its closed state has been drawn', () => {
+    expect(row('out')).toBe('<div class="cd-preview-stream cd-preview-stream-out" inert="" aria-hidden="true">');
+    const open = vi.fn();
+    growSoon(open);
+    vi.advanceTimersByTime(ENTER_MS - 1);
+    expect(open).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(open).toHaveBeenCalledOnce();
+    expect(row('in')).toBe('<div class="cd-preview-stream">');
+    // A row taken away first never grows.
+    const gone = vi.fn();
+    growSoon(gone)();
+    vi.advanceTimersByTime(1000);
+    expect(gone).not.toHaveBeenCalled();
+  });
+
+  it('is not drawn while the preview has no answer: there is nothing to grow from', () => {
+    expect(preview(KEY)).not.toContain('cd-preview-stream');
+  });
+
+  it('starts closed for an answer that comes after the preview opened, and open for one in as it opened', () => {
+    // No answer as the preview opened: drawn closed once one comes, and
+    // open once growSoon has fired.
+    let grown = streamStartsGrown(false, false);
+    expect(grown).toBe(false);
+    expect(streamPhaseOf(false, grown, undefined, false)).toBeNull();
+    expect(streamPhaseOf(true, grown, undefined, false)).toBe('out');
+    const open = vi.fn(() => {
+      grown = true;
+    });
+    growSoon(open);
+    vi.advanceTimersByTime(ENTER_MS);
+    expect(open).toHaveBeenCalledOnce();
+    expect(streamPhaseOf(true, grown, undefined, false)).toBe('in');
+    // An answer in as it opened is open from the first paint, and so is
+    // any for a reader who has asked for nothing to move.
+    expect(streamStartsGrown(true, false)).toBe(true);
+    expect(streamPhaseOf(true, streamStartsGrown(true, false), undefined, false)).toBe('in');
+    expect(streamStartsGrown(false, true)).toBe(true);
+  });
+
+  it('waits on an answer that comes while the preview is leaving, and grows in if it is taken back', () => {
+    for (const leaving of ['plain', 'playing', 'gone'] as const) {
+      expect(streamPhaseOf(true, false, leaving, false), leaving).toBeNull();
+      // One that had grown goes with the leave, folding nothing.
+      expect(streamPhaseOf(true, true, leaving, false), leaving).toBe('in');
+    }
+    // Taken back: drawn closed, to grow in.
+    expect(streamPhaseOf(true, false, undefined, false)).toBe('out');
+  });
+
+  it('folds while a trailer is set in the preview, once it has grown', () => {
+    expect(streamPhaseOf(true, true, undefined, true)).toBe('folded');
+    expect(streamPhaseOf(true, false, undefined, true)).toBe('out');
+    expect(streamPhaseOf(false, true, undefined, true)).toBeNull();
+    expect(row('folded')).toBe('<div class="cd-preview-stream cd-preview-stream-folded" inert="" aria-hidden="true">');
+  });
+
+  it('is inert and hidden whenever it is not open, so no keyboard or screen reader reaches a link that cannot be seen', () => {
+    expect(row('in')).toBe('<div class="cd-preview-stream">');
+    for (const phase of ['out', 'folded'] as const) {
+      expect(row(phase), phase).toContain(' inert=""');
+      expect(row(phase), phase).toContain(' aria-hidden="true"');
+    }
+  });
+
+  it('holds the preview inside the map again once it has grown', () => {
+    const hold = vi.fn();
+    afterGrow(hold);
+    vi.advanceTimersByTime(STREAM_GROW_MS + 19);
+    expect(hold).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(hold).toHaveBeenCalledOnce();
+    // For a reader who has asked for nothing to move, the row is open as
+    // it is drawn: held there and then, with no timer to wait a paint on.
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(prefers-reduced-motion: reduce)' }));
+    const now = vi.fn();
+    afterGrow(now);
+    expect(now).toHaveBeenCalledOnce();
+  });
+
+  it('holds the preview again only while the row is open and the preview is not leaving, which fades where it stands', () => {
+    expect(rowHolds('in', undefined)).toBe(true);
+    for (const leaving of ['plain', 'playing', 'gone'] as const) {
+      expect(rowHolds('in', leaving), leaving).toBe(false);
+    }
+    for (const phase of ['out', 'folded', null] as const) {
+      expect(rowHolds(phase, undefined), String(phase)).toBe(false);
+    }
+  });
+
+  it('grows the preview held by its bottom upwards, held by its top from the axis if it would pass it', () => {
+    const b = { x0: 0, x1: 1440, vt: 1034, vb: 1718 };
+    const up: PreviewPlace = { x: 600, side: 1, top: null, bottom: 20000 - 1700 };
+    // Still room above: it stays held by its bottom, and so grew upwards.
+    expect(holdAgain(up, null, 344, b, 20000)).toEqual({});
+    // Past the axis: held by its top at the axis instead.
+    expect(holdAgain(up, null, 700, b, 20000)).toEqual({ held: { ...up, top: 1034, bottom: null } });
+    expect(holdAgain(up, null, 700, b, 20000).held).toEqual(holdInside(up, 700, b, 20000));
+  });
+
+  it('moves a preview held by its top up as far as it grew past the floating buttons’ strip', () => {
+    const b = { x0: 0, x1: 1440, vt: 1034, vb: 1718 };
+    const down: PreviewPlace = { x: 600, side: 1, top: 1400, bottom: null };
+    expect(holdAgain(down, null, 306, b, 20000)).toEqual({});
+    expect(holdAgain(down, null, 344, b, 20000)).toEqual({ held: { ...down, top: 1718 - 344 } });
+    // Once a trailer has opened in it, it is held by its top at y0, which
+    // moves instead.
+    const lift: Lift = { y0: 1400, y1: 1200, synLines: null };
+    expect(holdAgain(down, lift, 306, b, 20000)).toEqual({});
+    expect(holdAgain(down, lift, 344, b, 20000)).toEqual({ lift: { ...lift, y0: 1718 - 344 } });
+  });
+
+  it('grows a preview held by its top upwards, from where its bottom is, when the row would take it past the edge', () => {
+    const b = { x0: 0, x1: 1440, vt: 1034, vb: 1718 };
+    // Its bottom is at 1712, and 38px more would pass 1718: held by that
+    // bottom instead, so the row grows upwards with nothing moving first.
+    const down: PreviewPlace = { x: 600, side: 1, top: 1406, bottom: null };
+    expect(growsUp(down, null, 306, 38, b, 20000)).toEqual({ ...down, top: null, bottom: 20000 - 1712 });
+    // Once grown, it fits there, so holding it again moves nothing.
+    const up = growsUp(down, null, 306, 38, b, 20000)!;
+    expect(holdAgain(up, null, 344, b, 20000)).toEqual({});
+  });
+
+  it('leaves a preview where it is when the row fits below, it already grows upwards, a trailer has moved it, or it would pass the top', () => {
+    const b = { x0: 0, x1: 1440, vt: 1034, vb: 1718 };
+    // Room below for the row: it grows down.
+    expect(growsUp({ x: 600, side: 1, top: 1374, bottom: null }, null, 306, 38, b, 20000)).toBeNull();
+    // Held by its bottom already.
+    expect(growsUp({ x: 600, side: 1, top: null, bottom: 20000 - 1700 }, null, 306, 38, b, 20000)).toBeNull();
+    // Held at the lift's y0 since a trailer opened in it.
+    const lift: Lift = { y0: 1406, y1: 1200, synLines: null };
+    expect(growsUp({ x: 600, side: 1, top: 1406, bottom: null }, lift, 306, 38, b, 20000)).toBeNull();
+    // Taller than the room above as well: holdAgain settles it once grown.
+    expect(growsUp({ x: 600, side: 1, top: 1050, bottom: null }, null, 700, 38, b, 20000)).toBeNull();
+  });
+});
+
+describe('the Stream row as the stylesheet draws it', () => {
+  it('is a wrapping row with 6px gaps, its label 12px/600 in --t3 with 2px after it', () => {
+    expect(Object.fromEntries(decls('.cd-preview-stream-row'))).toEqual({
+      display: 'flex',
+      'flex-wrap': 'wrap',
+      'align-items': 'center',
+      gap: '6px',
+    });
+    expect(Object.fromEntries(decls('.cd-preview-stream-label'))).toEqual({
+      'margin-right': '2px',
+      'font-size': '12px',
+      'font-weight': '600',
+      color: 'var(--t3)',
+    });
+    // The box's own 12px gap is what separates it from Watch trailer.
+    expect(decls('.cd-preview').get('gap')).toBe('12px');
+  });
+
+  it('draws each chip 26px tall, 9px in, rounded 8px, in a 1px --ln3 ring, lit as Watch trailer is on hover', () => {
+    const chip = decls('.cd-preview-stream-chip');
+    expect(chip.get('height')).toBe('26px');
+    expect(chip.get('box-sizing')).toBe('border-box');
+    expect(chip.get('padding')).toBe('0 9px');
+    expect(chip.get('border-radius')).toBe('8px');
+    expect(chip.get('box-shadow')).toBe('inset 0 0 0 1px var(--ln3)');
+    expect(chip.get('font-size')).toBe('12.5px');
+    expect(chip.get('font-weight')).toBe('600');
+    expect(chip.get('transition')).toBe('background-color 0.15s ease, box-shadow 0.15s ease');
+    expect(Object.fromEntries(decls('.cd-preview-stream-chip:hover', '(hover: hover)'))).toEqual({
+      background: 'var(--accWash)',
+      'box-shadow': 'inset 0 0 0 1px var(--acc)',
+    });
+  });
+
+  it('draws each logo 14px tall and at most 72px wide, whole', () => {
+    expect(Object.fromEntries(decls('.cd-preview-stream-logo'))).toEqual({
+      display: 'block',
+      height: '14px',
+      'max-width': '72px',
+      'object-fit': 'contain',
+    });
+  });
+
+  it('counts the rest 12px/700 in --t3, in tabular figures', () => {
+    const more = decls('.cd-preview-stream-more');
+    expect(more.get('font-size')).toBe('12px');
+    expect(more.get('font-weight')).toBe('700');
+    expect(more.get('color')).toBe('var(--t3)');
+    expect(more.get('font-variant-numeric')).toBe('tabular-nums');
+  });
+
+  it('grows in from 0fr, cancelling the gap above it, over 260ms on the glide, the fade over 0.2s', () => {
+    expect(decls('.cd-preview-stream').get('grid-template-rows')).toBe('1fr');
+    expect(decls('.cd-preview-stream').get('transition')).toBe(
+      `grid-template-rows ${STREAM_GROW_MS}ms var(--ease-glide), margin-top ${STREAM_GROW_MS}ms var(--ease-glide), opacity 0.2s ease`,
+    );
+    expect(Object.fromEntries(decls('.cd-preview-stream-out'))).toEqual({
+      'grid-template-rows': '0fr',
+      'margin-top': '-12px',
+      opacity: '0',
+    });
+    expect(Object.fromEntries(decls('.cd-preview-stream-clip'))).toEqual({ 'min-height': '0', overflow: 'hidden' });
+    expect(STREAM_GROW_MS).toBe(260);
+  });
+
+  it('folds the same way over 320ms', () => {
+    const folded = decls('.cd-preview-stream-folded');
+    expect(folded.get('grid-template-rows')).toBe('0fr');
+    expect(folded.get('margin-top')).toBe('-12px');
+    expect(folded.get('opacity')).toBe('0');
+    expect(folded.get('transition')).toBe(
+      `grid-template-rows ${STREAM_FOLD_MS}ms var(--ease-glide), margin-top ${STREAM_FOLD_MS}ms var(--ease-glide), opacity 0.2s ease`,
+    );
+    expect(STREAM_FOLD_MS).toBe(320);
+  });
+
+  it('simply appears and goes for a reader who has asked for nothing to move', () => {
+    for (const selector of ['.cd-preview-stream', '.cd-preview-stream-folded', '.cd-preview-stream-chip']) {
+      expect(decls(selector, '(prefers-reduced-motion: reduce)').get('transition'), selector).toBe('none');
+    }
+  });
+
+  it('keeps each chip’s edge in forced colours, and its focus ring inside the clip', () => {
+    expect(decls('.cd-preview-stream-chip', '(forced-colors: active)').get('outline')).toBe('1px solid ButtonText');
+    expect(decls('.cd-preview-stream-chip:focus-visible').get('outline-offset')).toBe('-2px');
   });
 });
 

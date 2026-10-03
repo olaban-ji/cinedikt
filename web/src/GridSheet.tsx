@@ -27,9 +27,22 @@ import {
   scrollEase,
   type SynChange,
 } from './synopsis';
-import { useResolvedTheme } from './theme';
+import { useResolvedTheme, type Theme } from './theme';
 import { TrailerRow, useTrailer, type Player } from './TrailerRow';
 import { TRAILER_OPEN_MS, escapeCloses, isFor, videoHeight, type Play } from './trailer';
+import {
+  UNCOVERED_TEXT,
+  WATCH_LABEL,
+  logoBroke,
+  logoBroken,
+  logoFor,
+  nothingText,
+  offerLabel,
+  useWhereToWatch,
+  watchGroups,
+  type WatchOffer,
+  type WatchState,
+} from './whereToWatch';
 
 interface Props {
   film: GridFilm;
@@ -48,8 +61,8 @@ interface Props {
 }
 
 /** Everything a card cannot hold: the full title, what the film is
- *  about and its trailer, how the film sits against the searched one,
- *  and who put it on the grid.
+ *  about and its trailer, where to watch it, how the film sits against
+ *  the searched one, and who put it on the grid.
  *
  *  A panel down the right on a desktop, a tablet or a landscape phone,
  *  and a sheet from the bottom on a phone, each held in from the edges.
@@ -66,6 +79,7 @@ export function GridSheet({ film, payload, photoOf, onOnly, onRemap, onClose, cl
   useCloser(closer, leave);
   useFocusTrapped(ref);
   const trailer = useTrailer(film.id);
+  const watch = useWhereToWatch(film.id);
   // The trailer closes as the panel starts to go, however it was sent
   // away, so its sound stops at once.
   const { stop: stopTrailer, drop: dropTrailer } = player;
@@ -276,6 +290,8 @@ export function GridSheet({ film, payload, photoOf, onOnly, onRemap, onClose, cl
               onPlay={startTrailer}
             />
           </div>
+
+          <WatchSection watch={watch} theme={theme} />
 
           <VersusBlock film={film} anchor={payload.anchor} />
 
@@ -556,6 +572,86 @@ export function SheetSynopsis({
         </div>
       )}
     </div>
+  );
+}
+
+/** Where the movie can be watched in the reader's country, between the
+ *  trailer and the comparison: a row each for Stream, Free, Rent and Buy,
+ *  only the ones that have something, each service a chip that opens the
+ *  movie on that service in a new tab. Two placeholder bars while the
+ *  answer is on its way; a sentence when there is nowhere to watch it, or
+ *  no coverage in the reader's country; nothing at all when the server
+ *  could not say. */
+function WatchSection({ watch, theme }: { watch: WatchState; theme: Theme }) {
+  if (watch.status === 'error') return null;
+  const data = watch.data;
+  const groups = data ? watchGroups(data) : [];
+  return (
+    <div className="cd-sheet-wtw">
+      <div className="cd-sheet-heading">Where to watch</div>
+      {groups.map((g) => (
+        <div key={g.kind} className="cd-sheet-wtw-row">
+          <span className="cd-sheet-wtw-label">{WATCH_LABEL[g.kind]}</span>
+          <div className="cd-sheet-wtw-chips">
+            {g.offers.map((o) => (
+              <a
+                key={o.id}
+                className="cd-sheet-wtw-chip"
+                href={o.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={offerLabel(g.kind, o)}
+              >
+                <WatchLogo offer={o} theme={theme} logoClass="cd-sheet-wtw-logo" nameClass="cd-sheet-wtw-name" />
+                {o.via && <span className="cd-sheet-wtw-via">via {o.via}</span>}
+                {o.price && <span className="cd-sheet-wtw-price">{o.price}</span>}
+              </a>
+            ))}
+          </div>
+        </div>
+      ))}
+      {watch.status === 'wait' && (
+        <div className="cd-sheet-wtw-skel" aria-hidden="true">
+          <span className="cd-sheet-wtw-bar cd-sheet-wtw-bar-long" />
+          <span className="cd-sheet-wtw-bar cd-sheet-wtw-bar-short" />
+        </div>
+      )}
+      {data && data.covered && groups.length === 0 && <p className="cd-sheet-wtw-note">{nothingText(data)}</p>}
+      {data && !data.covered && <p className="cd-sheet-wtw-note">{UNCOVERED_TEXT}</p>}
+    </div>
+  );
+}
+
+/** A service's logo, drawn for the theme, in a chip that already says
+ *  which service it is to assistive tech. The service's name stands in
+ *  for a logo that has no address or fails to load. */
+export function WatchLogo({
+  offer,
+  theme,
+  logoClass,
+  nameClass,
+}: {
+  offer: Pick<WatchOffer, 'name' | 'logo'>;
+  theme: Theme;
+  logoClass: string;
+  nameClass: string;
+}) {
+  const src = logoFor(offer, theme);
+  // The address that failed, so a logo for the other theme still gets
+  // its chance.
+  const [failed, setFailed] = useState<string | null>(null);
+  if (!src || failed === src || logoBroken(src)) return <span className={nameClass}>{offer.name}</span>;
+  return (
+    <img
+      className={logoClass}
+      src={src}
+      alt=""
+      decoding="async"
+      onError={() => {
+        logoBroke(src);
+        setFailed(src);
+      }}
+    />
   );
 }
 

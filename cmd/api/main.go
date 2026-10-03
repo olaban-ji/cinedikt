@@ -28,8 +28,10 @@ import (
 	"cinedikt/internal/app"
 	"cinedikt/internal/catalog"
 	"cinedikt/internal/config"
+	"cinedikt/internal/geoip"
 	"cinedikt/internal/notify"
 	"cinedikt/internal/rediscache"
+	"cinedikt/internal/streaming"
 	"cinedikt/internal/telegram"
 	"cinedikt/internal/tmdb"
 )
@@ -47,7 +49,17 @@ const (
 	readTimeout       = 15 * time.Second
 	writeTimeout      = 60 * time.Second
 	idleTimeout       = 120 * time.Second
+	// shutdownBudget is how long a stopping process gives in-flight
+	// requests, and the queue its running jobs. Railway keeps a draining
+	// container for ten seconds.
+	shutdownBudget = 10 * time.Second
 )
+
+// geoipFollow is how often a process looks for a GeoLite2 build another
+// process has downloaded. MaxMind publishes twice a week, so a process
+// that is a few minutes behind places readers with the old build for
+// those few minutes.
+const geoipFollow = 10 * time.Minute
 
 func main() {
 	level := slog.LevelInfo
@@ -90,6 +102,9 @@ func run(logger *slog.Logger) error {
 	var meta movieMeta
 	var og http.Handler
 	var server *api.Server
+	// The queue, when where to watch is on. It is stopped beside the
+	// server's shutdown, inside the same draining window.
+	var queue *catalog.Queue
 	if cfg.DatabaseURL != "" {
 		store, err := catalog.Open(ctx, cfg.DatabaseURL, cfg.APIMaxConns)
 		if err != nil {
@@ -122,6 +137,31 @@ func run(logger *slog.Logger) error {
 			logger.Info("catalog search falls back to tmdb when nothing matches", "tmdb_rate", cfg.TMDBRatePerSecond)
 		} else {
 			logger.Info("tmdb search fallback is off", "reason", "no TMDB_API_KEY or TMDB_ACCESS_TOKEN")
+		}
+		// Where to watch: answered from what is kept, asked of the
+		// Streaming Availability API once per movie and country, and
+		// kept right by the queue. Without its key the route answers 503
+		// and the page leaves the section out.
+		if cfg.StreamingAPIKey != "" {
+			q, err := whereToWatch(ctx, cfg, store, catalogServer, logger)
+			if err != nil {
+				// The rest of the app does not depend on it. A map with no
+				// where-to-watch section is better than no map.
+				logger.Error("where to watch is off", "err", err)
+			}
+			if q != nil {
+				queue = q
+				// On any other way out. Registered after the store's
+				// Close, so it runs first: the jobs write through the
+				// store. A second Stop does nothing.
+				defer func() {
+					stopCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+					defer cancel()
+					q.Stop(stopCtx)
+				}()
+			}
+		} else {
+			logger.Info("where to watch is off", "reason", "no STREAMING_API_KEY")
 		}
 		server.WithCatalog(catalogServer)
 		server.WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping})
@@ -240,10 +280,81 @@ func run(logger *slog.Logger) error {
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		// The queue stops beside the server rather than after it, so
+		// both fit inside the draining window.
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			if queue != nil {
+				queue.Stop(shutdownCtx)
+			}
+		}()
+		err := srv.Shutdown(shutdownCtx)
+		<-stopped
+		return err
 	}
+}
+
+// whereToWatch builds the where-to-watch service, places readers with
+// GeoLite2 when there is a MaxMind license key, and starts the queue that
+// keeps answers right from the changes feed, refreshes them, and keeps
+// the GeoLite2 database current. The service is handed to the catalog
+// server only once all of that works.
+func whereToWatch(ctx context.Context, cfg config.Config, store *catalog.Store, cs *api.CatalogServer, logger *slog.Logger) (*catalog.Queue, error) {
+	watch := &catalog.WhereToWatch{
+		Store:           store,
+		API:             streaming.New(cfg.StreamingAPIKey, streaming.WithRate(cfg.StreamingRatePerSecond)),
+		Logger:          logger.With("component", "where-to-watch"),
+		ChangesMaxPages: cfg.StreamingChangesMaxPages,
+	}
+	// Nil without a license key, so only a CDN's country header places a
+	// reader. With one, the route answers 503 to a reader the lookup
+	// cannot place until it has a database, rather than telling them
+	// their country has no coverage.
+	var geo api.CountryLookup
+	var updater *geoip.Updater
+	if cfg.MaxMindLicenseKey != "" {
+		lookup := &geoip.Lookup{}
+		geo = lookup
+		updater = &geoip.Updater{
+			AccountID:  cfg.MaxMindAccountID,
+			LicenseKey: cfg.MaxMindLicenseKey,
+			Store:      store,
+			Lookup:     lookup,
+			Logger:     logger.With("component", "geoip"),
+		}
+		// What another process, or this one before a restart, already
+		// downloaded. The first check, which the queue's leader queues
+		// when it is elected, fetches one when there is none.
+		if err := updater.LoadStored(ctx); err != nil {
+			logger.Warn("load the kept GeoLite2 database", "err", err)
+		}
+	} else {
+		logger.Info("geoip is off; readers are placed only by a CDN's country header", "reason", "no MAXMIND_LICENSE_KEY")
+	}
+	queue, err := catalog.OpenQueue(ctx, catalog.QueueConfig{
+		DatabaseURL:  cfg.DatabaseURL,
+		Logger:       logger.With("component", "queue"),
+		WhereToWatch: watch,
+		GeoIP:        updater,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := queue.Start(ctx); err != nil {
+		queue.Stop(context.Background())
+		return nil, fmt.Errorf("start the queue: %w", err)
+	}
+	if updater != nil {
+		go updater.Follow(ctx, geoipFollow)
+	}
+	cs.WithWhereToWatch(watch, geo)
+	cs.WithGeoHeader(cfg.GeoCountryHeader)
+	logger.Info("where to watch is on", "streaming_rate", cfg.StreamingRatePerSecond,
+		"changes_max_pages", cfg.StreamingChangesMaxPages, "geoip", updater != nil)
+	return queue, nil
 }
 
 // limits applies any environment overrides to the API's defaults.

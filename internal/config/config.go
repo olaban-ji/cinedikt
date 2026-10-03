@@ -97,6 +97,34 @@ type Config struct {
 	// on a map a reader opens skip it.
 	PeopleSweepRate float64
 
+	// --- where to watch ---
+
+	// StreamingAPIKey is the Streaming Availability API's key, issued by
+	// Movie of the Night. Empty turns where to watch off: the route
+	// answers 503 and the page leaves the section out.
+	StreamingAPIKey string
+	// StreamingRatePerSecond is how many requests a second the process
+	// makes to that API.
+	StreamingRatePerSecond float64
+	// StreamingChangesMaxPages is the most pages of that API's changes
+	// feed the daily changes job reads for one country in one run. A run
+	// it stops carries on from there the next day.
+	StreamingChangesMaxPages int
+	// MaxMindLicenseKey downloads GeoLite2 Country, which places a
+	// reader's address in a country. Empty leaves every address
+	// unplaced, so only the trusted CDN header (GeoCountryHeader) places
+	// a reader.
+	MaxMindLicenseKey string
+	// MaxMindAccountID goes with the license key. Set, the database is
+	// downloaded from MaxMind's current address with both; unset, from
+	// the older one that takes the key alone. It is not a secret.
+	MaxMindAccountID string
+	// GeoCountryHeader names the one country header to trust, the one a
+	// CDN in front of the app sets, such as CF-IPCountry. Empty trusts
+	// none: Railway's edge sets no such header, so one arriving there was
+	// written by the reader.
+	GeoCountryHeader string
+
 	// TelegramBotToken and TelegramChatID turn on job notifications.
 	// Both empty leaves them off. The token is the bot's, from
 	// BotFather; the chat id is the private chat or group it posts into.
@@ -202,6 +230,20 @@ const (
 	// budget spent for most of a day, with every reader's trailer and
 	// photos queued behind it.
 	DefaultPeopleSweepRate = 5.0
+
+	// DefaultStreamingRatePerSecond is how fast the process asks the
+	// Streaming Availability API. It is metered per request, and what
+	// keeps that bill down is that every answer is kept and only the
+	// movies readers open are asked about; the rate only spreads out a
+	// burst of first asks, which a reader is waiting on.
+	DefaultStreamingRatePerSecond = 5.0
+
+	// DefaultStreamingChangesMaxPages caps the changes job's read of one
+	// country at a thousand changes a day, 25 to a page. Every page is a
+	// metered request, whether or not anything on it is kept. A country
+	// that reaches it is logged as a warning, and its next run carries on
+	// from where the cap stopped it.
+	DefaultStreamingChangesMaxPages = 40
 )
 
 func Load() (Config, error) {
@@ -290,6 +332,26 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: PEOPLE_SWEEP_RATE must be a number greater than 0, got %v", peopleRate)
 	}
 
+	streamingRate, err := envFloatOr("STREAMING_RATE_PER_SEC", DefaultStreamingRatePerSecond)
+	if err != nil {
+		return Config{}, err
+	}
+	// Zero would never ask, which is what an unset key is for, and an
+	// infinite rate would take away the one thing spreading a burst out.
+	if math.IsNaN(streamingRate) || math.IsInf(streamingRate, 0) || streamingRate <= 0 {
+		return Config{}, fmt.Errorf("config: STREAMING_RATE_PER_SEC must be a number greater than 0, got %v", streamingRate)
+	}
+	changesPages, err := envIntOr("STREAMING_CHANGES_MAX_PAGES", DefaultStreamingChangesMaxPages)
+	if err != nil {
+		return Config{}, err
+	}
+	// Zero would read no changes at all, and answers would go on as they
+	// were kept until they were 30 days old: not a limit but the job
+	// switched off, and an unset key already switches off the feature.
+	if changesPages <= 0 {
+		return Config{}, fmt.Errorf("config: STREAMING_CHANGES_MAX_PAGES must be greater than 0, got %d", changesPages)
+	}
+
 	env, err := environment()
 	if err != nil {
 		return Config{}, err
@@ -333,6 +395,13 @@ func Load() (Config, error) {
 		TrailerSweepMinVotes:  trailerVotes,
 		PeopleSweepMinVotes:   peopleVotes,
 		PeopleSweepRate:       peopleRate,
+
+		StreamingAPIKey:          strings.TrimSpace(os.Getenv("STREAMING_API_KEY")),
+		StreamingRatePerSecond:   streamingRate,
+		StreamingChangesMaxPages: changesPages,
+		MaxMindLicenseKey:        strings.TrimSpace(os.Getenv("MAXMIND_LICENSE_KEY")),
+		MaxMindAccountID:         strings.TrimSpace(os.Getenv("MAXMIND_ACCOUNT_ID")),
+		GeoCountryHeader:         strings.TrimSpace(os.Getenv("GEO_COUNTRY_HEADER")),
 	}
 	// A catalog is all either process needs. TMDb and Neo4j belong to
 	// the crawling map that the catalog replaced, and requiring their

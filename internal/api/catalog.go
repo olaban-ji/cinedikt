@@ -50,6 +50,12 @@ type CatalogServer struct {
 	// to find one for a person it has not reached yet.
 	photoStore   PhotoStore
 	photosLooked bool
+	// watch answers where a movie can be watched, and geo places a reader
+	// in a country for it. A nil watch answers 503; a nil geo places
+	// readers only by a CDN's country header.
+	watch     WhereToWatch
+	geo       CountryLookup
+	geoHeader string
 }
 
 // PosterLookup is TMDb's mapping from an IMDb title to a picture.

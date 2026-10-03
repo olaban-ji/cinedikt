@@ -28,6 +28,7 @@ import { screenOf, type ScreenClass } from './screen';
 import { ABOUT_GAP, MORE_ROW_H, SYN_LH, restingLines } from './synopsis';
 import type { Player } from './TrailerRow';
 import { PLAYER, startPlay, stopPlay, videoHeight, videoWidth, type Play } from './trailer';
+import { logoBroke, type WatchOffer, type WatchState, type WhereToWatch } from './whereToWatch';
 
 // What the trailer lookup has already answered for the film on show.
 // The panel's first render shows it straight away, which is what a
@@ -37,6 +38,14 @@ vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   trailerKnown: () => answer.key,
   fetchTrailer: () => new Promise<string | null>(() => {}),
+}));
+
+// Where the movie on show can be watched, as the panel first draws it.
+// Still on its way, unless a test says otherwise.
+const watch = vi.hoisted(() => ({ state: { status: 'wait', data: null } as WatchState }));
+vi.mock('./whereToWatch', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./whereToWatch')>()),
+  useWhereToWatch: () => watch.state,
 }));
 
 const anchor: GridFilm = { id: 'nm0000001', title: 'The Matrix', year: 1999, rating: 8.7, md: 0, people: [], isAnchor: true };
@@ -355,6 +364,277 @@ describe('Escape in the panel', () => {
     const did: string[] = [];
     sheetEscape(playerWith(null, did), ID, () => did.push('leave'));
     expect(did).toEqual(['leave']);
+  });
+});
+
+/** A service, with a logo for each theme. */
+const service = (id: string, name: string, more: Partial<WatchOffer> = {}): WatchOffer => ({
+  id,
+  name,
+  link: `https://example.com/${id}/watch`,
+  logo: { dark: `https://img.example.com/${id}-dark.svg`, light: `https://img.example.com/${id}-light.svg` },
+  ...more,
+});
+
+/** An answer in the United States with these groups. */
+function offers(groups: Partial<Pick<WhereToWatch, 'stream' | 'free' | 'rent' | 'buy'>>, countryName = 'United States'): WatchState {
+  return { status: 'ok', data: { country: 'us', countryName, covered: true, stream: [], free: [], rent: [], buy: [], ...groups } };
+}
+
+/** The panel's first render, knowing this much about where its movie can
+ *  be watched. */
+function panelWith(state: WatchState): string {
+  watch.state = state;
+  try {
+    return panel(KEY);
+  } finally {
+    watch.state = { status: 'wait', data: null };
+  }
+}
+
+/** The section, from its tag to the start of the comparison. */
+function section(html: string): string {
+  const at = html.indexOf('<div class="cd-sheet-wtw">');
+  if (at < 0) return '';
+  const end = html.indexOf('<div class="cd-sheet-versus">', at);
+  return html.slice(at, end < 0 ? undefined : end);
+}
+
+const EVERY = offers({
+  stream: [service('netflix', 'Netflix'), service('starz', 'Starz', { via: 'Prime Video' })],
+  free: [service('tubi', 'Tubi')],
+  rent: [service('prime', 'Prime Video', { price: '$3.99' }), service('apple', 'Apple TV', { price: '$3.99' })],
+  buy: [service('apple', 'Apple TV', { price: '$14.99' })],
+});
+
+describe('the panel’s Where to watch', () => {
+  it('sits after the trailer and before the comparison, headed as the people list is', () => {
+    const html = panelWith(EVERY);
+    const about = html.indexOf('cd-sheet-about');
+    const wtw = html.indexOf('<div class="cd-sheet-wtw">');
+    const versusAt = html.indexOf('cd-sheet-versus');
+    expect(about).toBeGreaterThan(-1);
+    expect(wtw).toBeGreaterThan(about);
+    expect(versusAt).toBeGreaterThan(wtw);
+    expect(section(html)).toMatch(/^<div class="cd-sheet-wtw"><div class="cd-sheet-heading">Where to watch<\/div>/);
+    // In the body's 20px gap, as every block there is.
+    expect(decls('.cd-sheet-body').get('gap')).toBe('20px');
+  });
+
+  it('lists Stream, Free, Rent and Buy in that order', () => {
+    const labels = [...section(panelWith(EVERY)).matchAll(/<span class="cd-sheet-wtw-label">([^<]*)<\/span>/g)].map((m) => m[1]);
+    expect(labels).toEqual(['Stream', 'Free', 'Rent', 'Buy']);
+  });
+
+  it('leaves out the groups with nothing in them', () => {
+    const html = section(panelWith(offers({ buy: [service('apple', 'Apple TV')], stream: [service('netflix', 'Netflix')] })));
+    const labels = [...html.matchAll(/<span class="cd-sheet-wtw-label">([^<]*)<\/span>/g)].map((m) => m[1]);
+    expect(labels).toEqual(['Stream', 'Buy']);
+    expect(html).not.toContain('cd-sheet-wtw-note');
+    expect(html).not.toContain('cd-sheet-wtw-skel');
+  });
+
+  it('opens each service’s page for the movie in a new tab, its logo drawn for the theme', () => {
+    const html = section(panelWith(EVERY));
+    expect(html).toContain(
+      '<a class="cd-sheet-wtw-chip" href="https://example.com/netflix/watch" target="_blank" rel="noopener noreferrer" aria-label="Stream on Netflix, opens in a new tab">' +
+        '<img class="cd-sheet-wtw-logo" src="https://img.example.com/netflix-dark.svg" alt="" decoding="async"/></a>',
+    );
+  });
+
+  it('follows a logo with the price, when there is one', () => {
+    const html = section(panelWith(EVERY));
+    expect(html).toContain(
+      'aria-label="Rent on Prime Video, $3.99, opens in a new tab"><img class="cd-sheet-wtw-logo" src="https://img.example.com/prime-dark.svg" alt="" decoding="async"/>' +
+        '<span class="cd-sheet-wtw-price">$3.99</span></a>',
+    );
+    expect(html).toContain('aria-label="Buy on Apple TV, $14.99, opens in a new tab"');
+    // Nothing to pay to stream.
+    expect(html).not.toMatch(/aria-label="Stream on Netflix[^"]*"><img[^>]*\/><span class="cd-sheet-wtw-price"/);
+  });
+
+  it('shows an add-on’s own logo and the service it comes through', () => {
+    expect(section(panelWith(EVERY))).toContain(
+      'aria-label="Stream on Starz via Prime Video, opens in a new tab"><img class="cd-sheet-wtw-logo" src="https://img.example.com/starz-dark.svg" alt="" decoding="async"/>' +
+        '<span class="cd-sheet-wtw-via">via Prime Video</span></a>',
+    );
+  });
+
+  it('shows the service’s name for a logo with no address, or one that has failed to load', () => {
+    logoBroke('https://img.example.com/max-dark.svg');
+    const html = section(panelWith(offers({ stream: [service('max', 'Max')], rent: [service('apple', 'Apple TV', { logo: {}, price: '$3.99' })] })));
+    expect(html).toContain('aria-label="Stream on Max, opens in a new tab"><span class="cd-sheet-wtw-name">Max</span></a>');
+    expect(html).toContain('<span class="cd-sheet-wtw-name">Apple TV</span><span class="cd-sheet-wtw-price">$3.99</span>');
+  });
+
+  it('holds two bars, as tall as a chip, while the answer is on its way', () => {
+    const html = section(panelWith({ status: 'wait', data: null }));
+    expect(html).toBe(
+      '<div class="cd-sheet-wtw"><div class="cd-sheet-heading">Where to watch</div>' +
+        '<div class="cd-sheet-wtw-skel" aria-hidden="true"><span class="cd-sheet-wtw-bar cd-sheet-wtw-bar-long"></span><span class="cd-sheet-wtw-bar cd-sheet-wtw-bar-short"></span></div></div>',
+    );
+    expect(decls('.cd-sheet-wtw-bar-long').get('width')).toBe('72%');
+    expect(decls('.cd-sheet-wtw-bar-short').get('width')).toBe('48%');
+    expect(decls('.cd-sheet-wtw-bar').get('background')).toBe('var(--skel)');
+    expect(declsIn('.cd-sheet-wtw-bar', null).get('height')).toBe(declsIn('.cd-sheet-wtw-chip', null).get('height'));
+    expect(declsIn('.cd-sheet-wtw-bar', TOUCH).get('height')).toBe(declsIn('.cd-sheet-wtw-chip', TOUCH).get('height'));
+  });
+
+  it('says so, naming the country, when it is nowhere to stream, rent or buy there', () => {
+    expect(section(panelWith(offers({})))).toBe(
+      '<div class="cd-sheet-wtw"><div class="cd-sheet-heading">Where to watch</div>' +
+        '<p class="cd-sheet-wtw-note">Not available to stream, rent or buy in the United States right now.</p></div>',
+    );
+    expect(section(panelWith(offers({}, 'France')))).toContain('in France right now.');
+  });
+
+  it('says so when the reader’s country has no coverage', () => {
+    expect(section(panelWith({ status: 'ok', data: { country: 'xx', covered: false, stream: [], free: [], rent: [], buy: [] } }))).toBe(
+      '<div class="cd-sheet-wtw"><div class="cd-sheet-heading">Where to watch</div>' +
+        '<p class="cd-sheet-wtw-note">Streaming info isn’t available in your country yet.</p></div>',
+    );
+  });
+
+  it('is gone entirely when the server could not say', () => {
+    const html = panelWith({ status: 'error', data: null });
+    expect(html).not.toContain('cd-sheet-wtw');
+    expect(html).not.toContain('Where to watch');
+    // The rest of the panel is as it was.
+    expect(html).toContain('cd-sheet-about');
+    expect(html).toContain('cd-sheet-versus');
+  });
+});
+
+/** The screen class sized for a finger, as grid.css writes it. */
+const TOUCH = '(max-width: 1023.98px), (max-height: 499.98px), (pointer: coarse)';
+
+/** The declarations of every rule with exactly this selector inside
+ *  this @media query (null: outside any), later ones winning. */
+function declsIn(selector: string, media: string | null): Map<string, string> {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const out = new Map<string, string>();
+  const open: { prelude: string; start: number }[] = [];
+  let mark = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '{') {
+      open.push({ prelude: text.slice(mark, i).trim(), start: i + 1 });
+      mark = i + 1;
+    } else if (text[i] === '}') {
+      const block = open.pop();
+      mark = i + 1;
+      if (!block || block.prelude.startsWith('@')) continue;
+      const at = open.find((b) => b.prelude.startsWith('@media'));
+      if ((at ? at.prelude.replace(/^@media\s+/, '') : null) !== media) continue;
+      if (!block.prelude.split(',').map((x) => x.trim()).includes(selector)) continue;
+      for (const d of text.slice(block.start, i).split(';')) {
+        const c = d.indexOf(':');
+        if (c > 0) out.set(d.slice(0, c).trim(), d.slice(c + 1).trim().replace(/\s+/g, ' '));
+      }
+    }
+  }
+  return out;
+}
+
+describe('the panel’s Where to watch as the stylesheet draws it', () => {
+  it('lays each row out as a 52px label beside its chips, 10px apart, rows 10px apart', () => {
+    expect(Object.fromEntries(declsIn('.cd-sheet-wtw', null))).toEqual({
+      display: 'flex',
+      'flex-direction': 'column',
+      gap: '10px',
+      'flex-shrink': '0',
+    });
+    expect(Object.fromEntries(declsIn('.cd-sheet-wtw-row', null))).toEqual({
+      display: 'grid',
+      'grid-template-columns': '52px minmax(0, 1fr)',
+      'align-items': 'start',
+      gap: '10px',
+    });
+    expect(Object.fromEntries(declsIn('.cd-sheet-wtw-chips', null))).toEqual({
+      display: 'flex',
+      'flex-wrap': 'wrap',
+      gap: '8px',
+    });
+  });
+
+  it('heads the section 12.5px/600 in --t3, its labels 13px/600 in --t2 on a 19px line', () => {
+    expect(Object.fromEntries(declsIn('.cd-sheet-heading', null))).toEqual({
+      'font-size': '12.5px',
+      'font-weight': '600',
+      color: 'var(--t3)',
+    });
+    const label = declsIn('.cd-sheet-wtw-label', null);
+    expect(label.get('font-size')).toBe('13px');
+    expect(label.get('font-weight')).toBe('600');
+    expect(label.get('line-height')).toBe('19px');
+    expect(label.get('color')).toBe('var(--t2)');
+  });
+
+  it('draws each chip 36px tall, 12px in, rounded 11px, on --c in a 1px --ln3 ring', () => {
+    const chip = declsIn('.cd-sheet-wtw-chip', null);
+    expect(chip.get('height')).toBe('36px');
+    expect(chip.get('box-sizing')).toBe('border-box');
+    expect(chip.get('padding')).toBe('0 12px');
+    expect(chip.get('border-radius')).toBe('11px');
+    expect(chip.get('background')).toBe('var(--c)');
+    expect(chip.get('box-shadow')).toBe('inset 0 0 0 1px var(--ln3)');
+    const logo = declsIn('.cd-sheet-wtw-logo', null);
+    expect([logo.get('height'), logo.get('max-width'), logo.get('object-fit')]).toEqual(['16px', '88px', 'contain']);
+    const price = declsIn('.cd-sheet-wtw-price', null);
+    expect([price.get('font-size'), price.get('font-weight'), price.get('color'), price.get('font-variant-numeric')]).toEqual([
+      '12.5px',
+      '500',
+      'var(--t3)',
+      'tabular-nums',
+    ]);
+    const via = declsIn('.cd-sheet-wtw-via', null);
+    expect([via.get('font-size'), via.get('color')]).toEqual(['12.5px', 'var(--t3)']);
+  });
+
+  it('centres each label on the first line of chips: 8.5px down, or 12.5px where they are a finger’s size', () => {
+    const lh = 19;
+    expect(declsIn('.cd-sheet-wtw-label', null).get('padding-top')).toBe(`${(36 - lh) / 2}px`);
+    expect(declsIn('.cd-sheet-wtw-label', TOUCH).get('padding-top')).toBe(`${(44 - lh) / 2}px`);
+  });
+
+  it('grows each chip to 44px where controls are a finger’s size', () => {
+    expect(declsIn('.cd-sheet-wtw-chip', TOUCH).get('height')).toBe('44px');
+  });
+
+  it('lights a chip on hover as the preview’s are, and presses it to 0.97, except for a reader who has asked for nothing to move', () => {
+    expect(Object.fromEntries(declsIn('.cd-sheet-wtw-chip:hover', '(hover: hover)'))).toEqual({
+      background: 'var(--accWash)',
+      'box-shadow': 'inset 0 0 0 1px var(--acc)',
+    });
+    expect(declsIn('.cd-sheet-wtw-chip', null).get('transition')).toBe(
+      'background-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease',
+    );
+    expect(declsIn('.cd-sheet-wtw-chip:active', null).get('transform')).toBe('scale(0.97)');
+    expect(declsIn('.cd-sheet-wtw-chip:active', '(prefers-reduced-motion: reduce)').get('transform')).toBe('none');
+    expect(declsIn('.cd-sheet-wtw-chip', '(prefers-reduced-motion: reduce)').get('transition')).toBe('none');
+  });
+
+  it('never draws a chip wider than its row: a long name or add-on’s service is cut short, the price never', () => {
+    expect(declsIn('.cd-sheet-wtw-chip', null).get('max-width')).toBe('100%');
+    for (const selector of ['.cd-sheet-wtw-name', '.cd-sheet-wtw-via']) {
+      expect(Object.fromEntries(declsIn(selector, null)), selector).toMatchObject({
+        'min-width': '0',
+        overflow: 'hidden',
+        'text-overflow': 'ellipsis',
+      });
+    }
+    expect(declsIn('.cd-sheet-wtw-price', null).get('flex-shrink')).toBe('0');
+    expect(declsIn('.cd-sheet-wtw-logo', null).get('flex-shrink')).toBe('0');
+  });
+
+  it('writes its sentences 14px in --t3', () => {
+    const note = declsIn('.cd-sheet-wtw-note', null);
+    expect(note.get('font-size')).toBe('14px');
+    expect(note.get('color')).toBe('var(--t3)');
+    expect(note.get('margin')).toBe('0');
+  });
+
+  it('keeps each chip’s edge in forced colours', () => {
+    expect(declsIn('.cd-sheet-wtw-chip', '(forced-colors: active)').get('outline')).toBe('1px solid ButtonText');
   });
 });
 

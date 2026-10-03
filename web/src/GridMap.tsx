@@ -58,6 +58,7 @@ import { canHover, canRest, useOffScreen, useTapGuard } from './tap';
 import type { Player } from './TrailerRow';
 import { useResolvedTheme, type Theme } from './theme';
 import { markAppScroll, type AppScroll } from './overHeader';
+import { askWhereToWatch } from './whereToWatch';
 import {
   AXIS_FADE_MS,
   EASE,
@@ -1481,14 +1482,16 @@ export function previewsDrawn(anchorId: string, gone: Peek | null, peek: Peek | 
     .map((p) => ({ key: `${anchorId}:${p.id}:${p.n}`, p, leaving: p === gone ? ('gone' as const) : p.out }));
 }
 
-/** What the scheduler asks of the map, for usePreview: opening a card's
- *  preview, letting it leave or taking it away at once, and bringing it
- *  back; and, for the pointer leaving a card, holding that card's hover
- *  state for its preview (`leftCard`). It draws through `put` (the live
- *  preview, which `now` reads back between renders), `gone` (the one
- *  giving way on a swap) and `held` (the card drawn as hovered for its
- *  preview). `showing` is the card whose preview is showing, as of now,
- *  and `under` the card the pointer is on. */
+/** What the scheduler asks of the map, for usePreview: asking where a
+ *  card's movie can be watched as the pointer begins to rest on it
+ *  (`resting`), opening a card's preview, letting it leave or taking it
+ *  away at once, and bringing it back; and, for the pointer leaving a
+ *  card, holding that card's hover state for its preview (`leftCard`).
+ *  It draws through `put` (the live preview, which `now` reads back
+ *  between renders), `gone` (the one giving way on a swap) and `held`
+ *  (the card drawn as hovered for its preview). `showing` is the card
+ *  whose preview is showing, as of now, and `under` the card the pointer
+ *  is on. */
 export function previewHost(o: {
   map: () => PreviewMap;
   bounds: (loose: boolean) => PreviewBounds;
@@ -1531,10 +1534,16 @@ export function previewHost(o: {
   // Only a card whose words have come has a preview to show. One that
   // is still an empty box opens nothing, and so neither counts as a
   // preview showing nor keeps its hover state for one.
-  const placeFor = (id: string): Peek | null => {
+  const opens = (id: string): Placed | null => {
     const { layout, blocked, selected, minRating, want, said } = o.map();
     const card = layout?.cards.find((c) => c.film.id === id);
     if (!layout || !card || blocked || filteredOut(card.film, selected, minRating, want) || !said(id)) return null;
+    return card;
+  };
+  const placeFor = (id: string): Peek | null => {
+    const card = opens(id);
+    const { layout } = o.map();
+    if (!card || !layout) return null;
     return { id, n: ++opened, place: placePreview(card, layout.metrics, o.bounds(false), layout.plotH), on: layout };
   };
   const show = (p: Peek) => {
@@ -1585,6 +1594,13 @@ export function previewHost(o: {
 
   return {
     showing: () => o.showing.current,
+    // Where to watch is asked for as the pointer begins to rest, rather
+    // than as the preview opens, so the preview's Stream row is mostly
+    // there from its first paint. Only for a card whose preview could
+    // open: the API behind it is paid for by the request.
+    resting: (id) => {
+      if (opens(id)) void askWhereToWatch(id);
+    },
     playing: () => o.map().player.now()?.where === 'preview',
     open: (id) => {
       const cur = o.now();

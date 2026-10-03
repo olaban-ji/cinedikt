@@ -23,12 +23,17 @@ export default defineRailway(() => {
       // stop. The API gives in-flight requests up to ten seconds, and
       // the notifier uses the first three of them to write its last
       // board and save what it said before the next container reads it.
+      // The queue gives its running jobs five, alongside, then cancels
+      // them for the next container to retry.
       drainingSeconds: 10,
       // How long the old container keeps serving after the new one is
       // healthy, before it is told to stop, so a request still on its
       // way to the old one is answered rather than dropped. Only one of
       // the two runs the catalog jobs and edits the Telegram board; the
       // other waits for the lease, so the overlap never doubles them.
+      // Both run the queue, which hands each job to one of them and lets
+      // only its elected leader queue the periodic ones, so that is never
+      // doubled either.
       overlapSeconds: 10,
       // The size the service runs at, set in the dashboard before this
       // file declared it. Named here because an apply resets anything
@@ -97,6 +102,23 @@ export default defineRailway(() => {
       // The zone the bot writes times in, such as Africa/Lagos. Unset
       // means UTC, and the board says so.
       NOTIFY_TIMEZONE: preserve(),
+      // Where to watch. The Streaming Availability API key, from Movie of
+      // the Night; unset, the section is left out. Its requests a second
+      // for the process; unset takes 5. The most pages of its changes
+      // feed the daily changes job reads per country per run, a dial on
+      // what that job costs; unset takes 40.
+      STREAMING_API_KEY: preserve(),
+      STREAMING_RATE_PER_SEC: preserve(),
+      STREAMING_CHANGES_MAX_PAGES: preserve(),
+      // GeoLite2 Country, which places a reader's address in a country.
+      // The service downloads it itself with these; without the key
+      // nobody is placed. The account id is not a secret, but it lives in
+      // Railway with the key it belongs to.
+      MAXMIND_LICENSE_KEY: preserve(),
+      MAXMIND_ACCOUNT_ID: preserve(),
+      // The one country header to trust, for when a CDN stands in front
+      // of the service; unset trusts none, which is right on Railway alone.
+      GEO_COUNTRY_HEADER: preserve(),
       WEB_DIR: preserve(),
     },
   });

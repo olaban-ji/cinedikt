@@ -2332,6 +2332,152 @@ button {
   pointer-events: none;
 }
 
+/* Where to watch, between the trailer and the comparison: a row each
+   for Stream, Free, Rent and Buy, the label in a 52px column beside its
+   chips. Each label is padded down to sit centred on the first line of
+   chips, (36 - 19) / 2, or (44 - 19) / 2 where they are a finger's
+   size. */
+.cd-sheet-wtw {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.cd-sheet-wtw-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.cd-sheet-wtw-label {
+  padding-top: 8.5px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 19px;
+  color: var(--t2);
+}
+
+.cd-sheet-wtw-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* A service: its logo, then the service an add-on comes through, then
+   the price to rent or buy. The name stands in for a logo that cannot
+   load, in the chip's own type. A chip is never wider than its row: a
+   long name, or a long add-on's service, is cut short first. */
+.cd-sheet-wtw-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  max-width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 11px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t);
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.1s ease;
+}
+
+.cd-sheet-wtw-chip:active {
+  transform: scale(0.97);
+}
+
+.cd-sheet-wtw-chip:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.cd-sheet-wtw-logo {
+  display: block;
+  flex-shrink: 0;
+  height: 16px;
+  max-width: 88px;
+  object-fit: contain;
+}
+
+.cd-sheet-wtw-name,
+.cd-sheet-wtw-via {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cd-sheet-wtw-via {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t3);
+}
+
+.cd-sheet-wtw-price {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* While the answer is on its way: two bars as tall as a chip. */
+.cd-sheet-wtw-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cd-sheet-wtw-bar {
+  display: block;
+  height: 36px;
+  border-radius: 11px;
+  background: var(--skel);
+}
+
+.cd-sheet-wtw-bar-long {
+  width: 72%;
+}
+
+.cd-sheet-wtw-bar-short {
+  width: 48%;
+}
+
+/* Nowhere to watch it, or no coverage in the reader's country. */
+.cd-sheet-wtw-note {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--t3);
+  text-wrap: pretty;
+}
+
+@media (max-width: 1023.98px), (max-height: 499.98px), (pointer: coarse) {
+  .cd-sheet-wtw-label {
+    padding-top: 12.5px;
+  }
+
+  .cd-sheet-wtw-chip,
+  .cd-sheet-wtw-bar {
+    height: 44px;
+  }
+}
+
+@media (hover: hover) {
+  .cd-sheet-wtw-chip:hover {
+    background: var(--accWash);
+    box-shadow: inset 0 0 0 1px var(--acc);
+  }
+}
+
 /* How the film sits against the searched one: a sentence and the two
    ratings, over a 4–9 scale with the film as a knob and the searched
    film as an accent tick. */
@@ -2574,7 +2720,8 @@ button {
   .cd-sheet-person,
   .cd-sheet-only,
   .cd-sheet-primary,
-  .cd-sheet-close {
+  .cd-sheet-close,
+  .cd-sheet-wtw-chip {
     outline: 1px solid ButtonText;
     outline-offset: -1px;
   }
@@ -2594,12 +2741,14 @@ button {
   .cd-sheet-syn-text,
   .cd-sheet-syn-more,
   .cd-sheet-primary,
-  .cd-sheet-person {
+  .cd-sheet-person,
+  .cd-sheet-wtw-chip {
     transition: none;
   }
 
   .cd-sheet-primary:active,
-  .cd-sheet-person:active {
+  .cd-sheet-person:active,
+  .cd-sheet-wtw-chip:active {
     transform: none;
   }
 }
@@ -3012,13 +3161,14 @@ button {
 
 /* ---- hover preview ----
 
-   A card's people, synopsis and trailer, beside it on the map, for a
-   pointer resting on it (MapPreview). It is placed in the plot by script
-   (placePreview in preview.ts): its left edge, and its top or its
-   bottom, whichever it grows from. Above every card, the axis and the
-   rail, and under the header, until a trailer is set in it. It comes in
-   from 6px nearer its card (.cd-preview-left when it is left of the
-   card), and leaves the same way (.cd-preview-out). */
+   A card's people, synopsis and trailer, and where its movie streams,
+   beside it on the map, for a pointer resting on it (MapPreview). It
+   is placed in the plot by script (placePreview in preview.ts): its
+   left edge, and its top or its bottom, whichever it grows from. Above
+   every card, the axis and the rail, and under the header, until a
+   trailer is set in it. It comes in from 6px nearer its card
+   (.cd-preview-left when it is left of the card), and leaves the same
+   way (.cd-preview-out). */
 .cd-preview {
   position: absolute;
   z-index: 12;
@@ -3240,11 +3390,124 @@ button {
   opacity: 0;
 }
 
+/* Where the movie streams, as the preview's last line: up to three
+   services and a count of the rest. Its grid row goes between 0fr and
+   1fr round a wrapper that clips, which is how it grows in for an answer
+   that came after the preview opened (-out until a moment after it is
+   drawn) and folds away while a trailer is set (-folded); its margin
+   takes back the box's 12px gap above it as it closes, so closed it
+   takes no room at all. Each state carries the transition into it. */
+.cd-preview-stream {
+  position: relative;
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 260ms var(--ease-glide),
+    margin-top 260ms var(--ease-glide),
+    opacity 0.2s ease;
+}
+
+.cd-preview-stream-out,
+.cd-preview-stream-folded {
+  grid-template-rows: 0fr;
+  margin-top: -12px;
+  opacity: 0;
+}
+
+.cd-preview-stream-folded {
+  pointer-events: none;
+  transition:
+    grid-template-rows 320ms var(--ease-glide),
+    margin-top 320ms var(--ease-glide),
+    opacity 0.2s ease;
+}
+
+.cd-preview-stream-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cd-preview-stream-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cd-preview-stream-label {
+  margin-right: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t3);
+}
+
+/* A service, opening the movie there. The name stands in for a logo
+   that cannot load, in the chip's own type, cut short rather than run
+   past the row. */
+.cd-preview-stream-chip {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  max-width: 100%;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t);
+  text-decoration: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+/* Inside the chip's edge: the wrapper it grows in clips anything drawn
+   outside the row. */
+.cd-preview-stream-chip:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: -2px;
+}
+
+.cd-preview-stream-logo {
+  display: block;
+  height: 14px;
+  max-width: 72px;
+  object-fit: contain;
+}
+
+.cd-preview-stream-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cd-preview-stream-more {
+  padding-left: 2px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (hover: hover) {
+  .cd-preview-stream-chip:hover {
+    background: var(--accWash);
+    box-shadow: inset 0 0 0 1px var(--acc);
+  }
+}
+
 /* Forced colours drop the ring and the shadow, which are the box's only
-   edge. */
+   edge, and the chips' rings. */
 @media (forced-colors: active) {
   .cd-preview {
     outline: 1px solid CanvasText;
+    outline-offset: -1px;
+  }
+
+  .cd-preview-stream-chip {
+    outline: 1px solid ButtonText;
     outline-offset: -1px;
   }
 }
@@ -3260,7 +3523,10 @@ button {
   .cd-preview.cd-preview-out-playing,
   .cd-preview.cd-preview-gone,
   .cd-preview-syn,
-  .cd-preview-trailer-open .cd-preview-syn {
+  .cd-preview-trailer-open .cd-preview-syn,
+  .cd-preview-stream,
+  .cd-preview-stream-folded,
+  .cd-preview-stream-chip {
     transition: none;
   }
 }

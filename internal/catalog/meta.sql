@@ -1,7 +1,7 @@
 -- meta is never renamed by the daily swap. It holds what must outlive a
 -- generation: the stamps that gate the next import, and the poster
--- addresses, release dates, synopses, trailers and people's photos that
--- cost an API call to learn.
+-- addresses, release dates, synopses, trailers, people's photos and
+-- where-to-watch answers that cost an API call to learn.
 
 CREATE SCHEMA IF NOT EXISTS meta;
 
@@ -332,4 +332,61 @@ CREATE TABLE IF NOT EXISTS meta.notify (
     id         int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     state      jsonb NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Where a movie can be watched in one country: the Streaming
+-- Availability API's answer, shaped the way the page shows it, into
+-- stream, free, rent and buy lists. A movie on nothing is kept the same
+-- way, as an answer; a failed ask is never kept. Only the movies readers
+-- open are ever asked about, so this grows with what people look at,
+-- never with the catalog.
+--
+-- An answer is served as it stands, and kept until something changes
+-- it. The daily changes job rewrites the answers the API's feed of
+-- changes says have changed (meta.streaming_sync). expires_at is when the
+-- first of its options leaves, when one is leaving; a River job is
+-- scheduled for that moment, so an answer does not go on offering a
+-- service the movie has left. One older than 30 days is still served,
+-- and a River job asks again behind it, for a change the feed missed.
+CREATE TABLE IF NOT EXISTS meta.where_to_watch (
+    tconst     text NOT NULL,
+    country    text NOT NULL,
+    answer     jsonb NOT NULL,
+    fetched_at timestamptz NOT NULL,
+    expires_at timestamptz,
+    PRIMARY KEY (tconst, country)
+);
+
+-- The countries the Streaming Availability API covers, by lowercased ISO
+-- code, with the name the page's sentence uses. A reader anywhere else
+-- is told there is no coverage without the API being asked. Refreshed
+-- once it is a week old.
+CREATE TABLE IF NOT EXISTS meta.streaming_countries (
+    code       text PRIMARY KEY,
+    name       text NOT NULL,
+    fetched_at timestamptz NOT NULL
+);
+
+-- How far the daily changes job has read the Streaming Availability
+-- API's feed of changes, per country: synced_to is where the next run
+-- starts, since every change before it has been handled, and updated_at
+-- is when a run last recorded it, which is what makes a country due
+-- again a day later. A country appears once somebody has an answer kept
+-- for it; one without is never read.
+CREATE TABLE IF NOT EXISTS meta.streaming_sync (
+    country    text PRIMARY KEY,
+    synced_to  timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+
+-- GeoLite2 Country itself, the build MaxMind last published, which
+-- places a reader's address in a country. Kept here so a restart, or a
+-- second container during a deploy, reads it instead of downloading it
+-- again. last_modified is MaxMind's stamp for the build: a check whose
+-- HEAD sees the same one has nothing to download.
+CREATE TABLE IF NOT EXISTS meta.geoip (
+    id            int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    last_modified text NOT NULL,
+    mmdb          bytea NOT NULL,
+    fetched_at    timestamptz NOT NULL
 );

@@ -24,6 +24,8 @@ import {
   SYN_LINE_H,
   SYN_LINES,
   SYN_SETTLE_MS,
+  STREAM_FOLD_MS,
+  STREAM_GROW_MS,
   fitTrailer,
   holdInside,
   leaveDelay,
@@ -32,6 +34,7 @@ import {
   previewFloatClear,
   previewScheduler,
   restDelay,
+  streamShare,
   type MapView,
   type PreviewNow,
 } from './preview';
@@ -327,6 +330,22 @@ describe('fitTrailer', () => {
     expect(seen).toEqual(['as it is', 'glide', 'over the axis', 'synopsis lines', 'no synopsis']);
   });
 
+  it('counts the Stream row as nothing, since it folds away while the trailer is set', () => {
+    // The row and the gap above it: 26 + 12.
+    const row = streamShare({ height: 26, marginTop: 0 });
+    for (const h of [786, 706, 478, 420]) {
+      const [strict, loose] = room(h);
+      const without = fitTrailer(now(THREE, 1100, 3 * SYN_LINE_H), strict, loose);
+      const withRow = fitTrailer({ ...now(THREE + row, 1100, 3 * SYN_LINE_H), streamH: row }, strict, loose);
+      expect(withRow, `${h}`).toEqual(without);
+    }
+    // Counted, it would have had to make room for a row that is not there.
+    const [strict, loose] = room(706);
+    expect(fitTrailer(now(THREE + row, 1400, 3 * SYN_LINE_H), strict, loose).top).toBeLessThan(
+      fitTrailer({ ...now(THREE + row, 1400, 3 * SYN_LINE_H), streamH: row }, strict, loose).top,
+    );
+  });
+
   it('never leaves the grown box in the floating buttons’ strip while it can help it', () => {
     // Down to the shortest window the box fits at with its synopsis
     // folded away: 8px above it, and the floating buttons' strip below.
@@ -343,6 +362,53 @@ describe('fitTrailer', () => {
         expect(fit.top, `${h}`).toBeGreaterThanOrEqual(loose.vt);
       }
     }
+  });
+});
+
+describe('the Stream row’s share of the preview', () => {
+  it('is its height and the gap above it, open', () => {
+    expect(streamShare({ height: 26, marginTop: 0 })).toBe(26 + SYN_GAP);
+    // Wrapped onto a second line of chips.
+    expect(streamShare({ height: 58, marginTop: 0 })).toBe(58 + SYN_GAP);
+  });
+
+  it('is nothing closed, its margin taking back the gap, and partway between as it moves', () => {
+    expect(streamShare({ height: 0, marginTop: -SYN_GAP })).toBe(0);
+    expect(streamShare({ height: 13, marginTop: -6 })).toBe(19);
+    expect(streamShare(null)).toBe(0);
+  });
+
+  it('grows in over 260ms and folds over 320ms', () => {
+    expect(STREAM_GROW_MS).toBe(260);
+    expect(STREAM_FOLD_MS).toBe(320);
+  });
+});
+
+describe('the scheduler as the pointer begins to rest on a card', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal('window', globalThis);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('tells the map at once, before the preview opens, so what it needs can be asked for', () => {
+    const did: string[] = [];
+    const sched = previewScheduler({
+      showing: () => null,
+      playing: () => false,
+      resting: (id) => did.push(`resting ${id}`),
+      open: (id) => did.push(`open ${id}`),
+      close: () => {},
+      keep: () => {},
+    });
+    sched.rest('a');
+    expect(did).toEqual(['resting a']);
+    vi.advanceTimersByTime(PREVIEW_REST_MS);
+    expect(did).toEqual(['resting a', 'open a']);
+    sched.dispose();
   });
 });
 

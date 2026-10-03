@@ -42,13 +42,20 @@ export const PREVIEW_ROOM = 300;
 export const SYN_LINE_H = 20.25;
 /** The most lines of it the preview shows. */
 export const SYN_LINES = 6;
-/** The box's gap, which a synopsis folded away entirely takes back. */
+/** The box's gap, which a synopsis folded away entirely takes back, and
+ *  the Stream row's margin takes back while it is closed. */
 export const SYN_GAP = 12;
 /** How long the synopsis takes to fold, and a little over: its line
  *  clamp, with the ellipsis, moves only after this, so nothing snaps.
  *  The fold moves with the player opening, so this is the player's own
  *  settle, the same one the panel's synopsis waits for. */
 export const SYN_SETTLE_MS = FOLD_SETTLE_MS;
+
+/** The preview's Stream row growing in, for an answer that came after
+ *  the preview had opened, and opening out again as a trailer clears. */
+export const STREAM_GROW_MS = 260;
+/** The same row folding away as a trailer is set in the preview. */
+export const STREAM_FOLD_MS = 320;
 
 /** A pointer resting this long on a card opens its preview. */
 export const PREVIEW_REST_MS = 480;
@@ -159,6 +166,18 @@ export interface PreviewNow {
   grow: number;
   /** The synopsis's height, or null when there is no synopsis line. */
   synH: number | null;
+  /** The Stream row's share of its height now (streamShare). The row
+   *  folds away while the trailer is set, so the room the trailer needs
+   *  counts it as nothing. */
+  streamH?: number;
+}
+
+/** How much of the preview's height the Stream row takes as it stands:
+ *  its own height and the box's gap above it, less whatever of that gap
+ *  its margin is taking back partway through growing in or folding.
+ *  Nothing when there is no row. */
+export function streamShare(row: { height: number; marginTop: number } | null): number {
+  return row ? Math.max(0, row.height + SYN_GAP + row.marginTop) : 0;
 }
 
 /** How a preview makes room for its trailer, in this order, stopping as
@@ -166,13 +185,14 @@ export interface PreviewNow {
  *  the pinned rating axis; the synopsis folds to fewer lines, or away
  *  entirely. `top` is where its top glides to; `synLines` is how many
  *  lines the synopsis folds to (0 for none), or null when it keeps them
- *  all. Its bottom always stays inside the strict bounds. */
+ *  all. Its bottom always stays inside the strict bounds. The Stream
+ *  row, folded away while the trailer is set, takes none of the room. */
 export function fitTrailer(
   now: PreviewNow,
   strict: PreviewBounds,
   loose: PreviewBounds,
 ): { top: number; synLines: number | null } {
-  let grown = now.height + now.grow;
+  let grown = now.height - (now.streamH ?? 0) + now.grow;
   let top = strict.vt;
   if (grown > strict.vb - top) top = loose.vt;
   let synLines: number | null = null;
@@ -226,6 +246,10 @@ export function leaveDelay(playing: boolean): number {
 export interface PreviewHost {
   /** The card whose preview is showing, if one is. */
   showing: () => string | null;
+  /** The pointer has begun to rest on this card. What its preview needs
+   *  from the server can be asked for now, so it is mostly in by the
+   *  time the preview opens. */
+  resting?: (id: string) => void;
   /** Whether the preview's trailer is open. */
   playing: () => boolean;
   /** Show this card's preview, in place of any other. */
@@ -285,6 +309,7 @@ export function previewScheduler(host: PreviewHost, clock: PreviewClock = pageCl
   return {
     rest: (id) => {
       cancel();
+      host.resting?.(id);
       const showing = host.showing();
       // Back on the card whose preview it is: it stays, or comes back if
       // it had begun to leave.

@@ -6,11 +6,12 @@ The searched film sits on a grid. **Y is the year. X is the rating**, low on the
 
 ```
 IMDb datasets --> Go importer --> Postgres --> Go API --> React grid (web/)
-                      |                ^
+                      |                ^          |
+                      |                |          +-- Streaming Availability, GeoLite2   where to watch
                       +-- OMDb / TMDb -+   posters, dates, synopses, trailers, photos, colours, id matches
 ```
 
-A reader's request never crawls, never calls TMDb to build the map, and never writes the tables it reads. Pictures, full release dates, synopses, trailers, people's photos, poster colours, and the IMDb-to-TMDb id map are filled in beside the catalog, into a `meta` schema that survives every daily swap. The map is computed live from the tables, so a poster learned an hour ago is on the next read.
+A reader's request never crawls, never calls TMDb to build the map, and never writes the tables it reads. Pictures, full release dates, synopses, trailers, people's photos, poster colours, and the IMDb-to-TMDb id map are filled in beside the catalog, into a `meta` schema that survives every daily swap. The map is computed live from the tables, so a poster learned an hour ago is on the next read. Where to watch also calls out from a reader's request, as the poster stand-in and the empty-search fallback do: a movie and country nobody has asked about is asked of the Streaming Availability API once, and the answer is kept.
 
 The whole movie catalog is a local copy of the [IMDb non-commercial datasets](https://developer.imdb.com/non-commercial-datasets/). Those five files are the source. Postgres is the only dependency the current app needs.
 
@@ -67,6 +68,14 @@ Tapping a card opens a dialog: a panel down the right on a desktop (430 wide), a
 **Map {title}** (or **Map this movie**, when the title is long) opens a new map centred on that film. The card makes the trip itself: it rises off the old map as that map fades, glides to where the new map will hold it, and settles into place as the searched card while the rest of the map spreads out around it. A map still loading keeps it waiting in the middle. It sits under the comparison; on a phone it is pinned to the foot of the sheet, where a thumb reaches it and a scroll cannot end on it. The people section is **Its cast and directors** on the anchor, and **Connected to {anchor} through** on every other card. Each person says what they did on the searched film: **Directed {anchor}**, **{character} in {anchor}**, or **In {anchor}**. **Show only** selects that chip.
 
 On a phone the sheet is dragged down to dismiss. Anywhere, the scrim, Escape, or the close button does it. Focus is trapped while it is open. The action — filter, or remap — runs after the sheet has animated out: 280ms, or at once for a reader who has asked for reduced motion.
+
+### Where to watch
+
+The sheet has a **Where to watch** section after the trailer and before the rating comparison: rows of **Stream**, **Free**, **Rent** and **Buy**, in that order, each only when it has something. Every service is a chip with its logo, the dark one in the dark theme and the light one in the light, that opens the movie on that service in a new tab. Rent and buy chips carry the price. An add-on channel shows its own logo and **via Prime Video** (or whichever service it comes through). While the answer is on its way the section shows two skeleton bars. A movie on nothing in a covered country says **Not available to stream, rent or buy in the United States right now.**, naming the reader's country, and a country the data does not cover says **Streaming info isn’t available in your country yet.** If the answer fails, the section is left out.
+
+The hover preview ends with a **Stream** row under Watch trailer: up to three services where the movie is included with a subscription or free, then **+N** for the rest. There is no row when nothing streams, when the country has no coverage, or until the answer has arrived. An answer that arrives after the preview has opened grows the row in; it folds away while the preview's trailer plays.
+
+The reader never picks a country. The server works it out from their address.
 
 ### Narrowing a map
 
@@ -145,6 +154,8 @@ internal/api/       handlers; catalog when a database is configured, graph other
 internal/config/    environment
 internal/omdb/      poster and release-date lookups
 internal/tmdb/      poster fallback, id matching, empty-search fallback
+internal/streaming/ the Streaming Availability API, and the shape of a where-to-watch answer
+internal/geoip/     GeoLite2 Country: placing an address, and keeping the database current
 internal/notify/    job notifications
 internal/telegram/  optional Telegram sink for those notifications
 internal/analytics/ PostHog, production only
@@ -163,6 +174,8 @@ createdb cinedikt
 ```
 
 `OMDB_API_KEY` (free at [omdbapi.com](https://www.omdbapi.com/)) is what puts pictures, full dates and synopses on the cards. Without it the catalog still serves: cards have no posters, and order inside a year falls back to the title id because every month-day is 0. `TMDB_API_KEY` or `TMDB_ACCESS_TOKEN` is the second chance for pictures OMDb does not have, the thing an empty search asks, and where trailers are found. Either credential is enough; the access token is preferred when both are set.
+
+`STREAMING_API_KEY` (from [Movie of the Night](https://www.movieofthenight.com/about/api)) turns on where to watch. `MAXMIND_LICENSE_KEY` and `MAXMIND_ACCOUNT_ID` (a free [GeoLite2](https://www.maxmind.com/en/geolite2/signup) account) let the server place a reader's address in a country. Without the streaming key the section is simply left out; without the MaxMind key every reader counts as a country without coverage, unless a CDN in front of the app says where they are in the header `GEO_COUNTRY_HEADER` names.
 
 ## Run
 
@@ -306,9 +319,69 @@ Votes do almost all of the ranking. They are the best proxy the dataset has for 
 
 A hit also has to be a film a map can be built from: the film test, plus at least one billed principal.
 
+## Where to watch
+
+The services that carry a movie come from the [Streaming Availability API](https://www.movieofthenight.com/about/api), by Movie of the Night (v4, `https://api.movieofthenight.com/v4`, the key in an `X-API-Key` header). It takes IMDb ids, so a map's `tconst` is asked about as it is: `GET /shows/{tconst}?country={cc}`. Only the server asks, and the key never reaches the browser. `internal/streaming` shapes the answer into four lists:
+
+- **stream** holds `subscription` and `addon` options. An add-on keeps its own name and logo and gains `via`, the service it is watched through.
+- Each list has one entry per service. The API lists a service once for every quality it carries.
+- **rent** and **buy** keep a service's lowest price, and the link that goes with it. Prices in two currencies are not compared.
+- Everything stays in the order the API gave it.
+- An option whose `expiresOn` has passed is left out, since the API can go on listing one for a while after it has gone.
+
+A show the API does not know (404) is on nothing, an answer like an empty list.
+
+### Kept, and asked once
+
+The API is metered per request, so its answers are kept in `meta.where_to_watch`, one row per movie and country, shaped, empty answers included. A failed ask is never kept: the reader is answered 502 and the page leaves the section out, and the next reader asks again. Only movies readers open are asked about. There is no sweep, and a map never asks about its cards.
+
+- **The first ask** for a movie and country happens in the reader's request, with five seconds to answer. Readers who arrive while it is in flight wait on the same ask. It is not cancelled when the reader who started it leaves, so the others still get the answer.
+- **A kept answer** is served as it stands, and kept until something changes it: the changes feed says the movie changed in that country (below), one of its options leaves, or it is 30 days old. A movie is not asked about again just because its answer is a day old.
+- **Options that are leaving** carry an `expiresOn`. When an answer is kept, a job is scheduled, in the same transaction, for the moment the first of them leaves (`expires_at`). It asks again, keeps the new answer, and schedules the next. So an answer stops offering a service the moment the movie leaves it.
+- **An answer 30 days old** is still served, and a refresh is queued behind it. It is only a safety net, for a change the feed missed or one from before the feed's 31 days.
+- **A movie the catalog does not hold** is 404, and never asked about.
+
+Requests go through one limiter per process, `STREAMING_RATE_PER_SEC` (5 a second by default), and are tried up to three times on 429, 5xx or a failed connection, with `Retry-After` honoured, unless the wait would outlast the caller's deadline (a reader's five seconds). A refused key (401 or 403) is its own error: it is not retried, it is logged, and a refresh job that meets it is cancelled rather than tried again with the same key. A redirect is not followed, since the key would go with it to whatever host it names.
+
+The covered countries, and the names the page's sentence uses, come from `GET /countries` and are kept in `meta.streaming_countries`. The first reader to need the list fills it. A daily job asks for it again once it is a week old; a list that comes back empty never replaces the kept one. A reader in a country the list does not have is answered `{"country":"ng","covered":false}` without the API being asked.
+
+### Kept right by the changes feed
+
+The API's `GET /changes` lists what changed, one country at a time: a service that started carrying a movie (`new`), stopped (`removed`), or changed how it carries it (`updated`). Once a day the `streaming_changes` job reads those three, for movies (`item_type=show`, `show_type=movie`), oldest first, in every covered country somebody has an answer kept for. A country nobody has kept an answer for is never asked about, and neither is one the API does not cover.
+
+- **The window** starts where that country's last run got to, kept in `meta.streaming_sync` (`synced_to`), and ends now. A country's first run starts a day back, or at its oldest kept answer when that is older. The feed goes back 31 days and no further, so a longer gap is cut to that, and logged; the 30-day safety net catches what it changed.
+- **A change to a kept movie** is matched to it by the show's `imdbId`, from the `shows` that come with each page. When the show carries its options for the country, they are shaped and written as they are, through the same keep as every other answer, which schedules the job for the first that leaves: no request beyond the page. When it carries none for the country, a refresh is queued, which asks once. A show without options is never taken for a movie on nothing. A movie changed several times in a run is handled once. A change to anything not kept for that country is passed over.
+- **The cost** is the size of each country's changes, not of what is kept: 25 changes a page, each page a request, kept or not. So it is at least three requests a day per country with kept answers, one more for every 25 changes, and one for each refresh queued. `STREAMING_CHANGES_MAX_PAGES` (40 by default) caps the pages one country's run reads, across the three feeds, which are read a page at a time in turn so the cap never starves the last. A run the cap stops records how far it got, the earliest any unfinished feed reached, and the next carries on from there; a run whose every page fell inside one second moves past it rather than read the same pages again. Each country's run logs its pages, the changes on them, the answers written and the refreshes queued. A capped run is a warning, and so is one with changes naming a show the page did not carry, or a page that says there are more and gives no cursor to ask for them.
+- **A page that fails** (a 429 or 5xx after the client's tries, or no connection) ends that country's run. What every feed got past before it is recorded, and the rest of the window waits for that country's next daily run. That is so even when they got past nothing, once a page was read, so a page that keeps failing costs the pages before it once a day rather than on every try. When no page was read, nothing is recorded: River tries the job twice more within seconds (each try up to three requests), and after that the country is read again at the next hourly look. A refused key cancels the job, since every country would meet it.
+
+The job looks every hour, which is a read of the database, and reads a country once its last run is a day old (`updated_at`). That way a deploy restarting the queue neither reads the changes early nor puts them off.
+
+### The country
+
+The page never sends a country. The server works it out, lowercased:
+
+1. The geo header named by `GEO_COUNTRY_HEADER`, the one a CDN put in front of the app sets on every request (for example `CF-IPCountry`). Cloudflare's `XX` (unknown) and `T1` (Tor) do not count. Unset, the default, no header is read: Railway's edge sets none, so one arriving there was written by the reader, who could name any covered country with it and have the metered API asked on its behalf.
+2. Otherwise the client's address, from `X-Real-IP` (which Railway's edge sets), then the last `X-Forwarded-For` entry (the one the nearest proxy appended; the first is the client's to write and is never read), then the connection, looked up in MaxMind's GeoLite2 Country. A network with no country falls back to where it is registered.
+3. A loopback, private or otherwise unroutable address, or one the database cannot place, counts as a country without coverage: `{"country":"xx","covered":false}`. So does everyone when there is no MaxMind license key, unless the trusted header placed them. That is also why a local development server, reached over loopback, always says there is no coverage. With a license key set but no build loaded yet (the first deploy with one, until its download is in, or a second process until it picks that download up), a reader no header placed is answered 503 instead, and the page leaves the section out: telling them their country has no coverage would be untrue, and their browser would keep it for an hour.
+
+The service downloads GeoLite2 Country itself. A job asks MaxMind with a `HEAD` twice a day, and when the process becomes the queue's leader. A `HEAD` does not count against MaxMind's download limits. Only a `Last-Modified` different from the kept build's leads to a `GET`, from the permalink with `MAXMIND_ACCOUNT_ID` and `MAXMIND_LICENSE_KEY` as Basic auth, or, without an account id, from the older address that takes the key alone. The `.mmdb` is read out of the tar.gz (at most 64 MB), opened and verified: a MaxMind database, a country edition, every node and record readable. Only then is it kept in `meta.geoip`, the database itself, and swapped in. A bad download keeps the database in use. Each process loads the kept one at start, so a restart or a second container never downloads it again, and looks at the kept build's stamp every ten minutes to pick up one another process fetched. Lookups read whichever database is in use and never wait for a swap.
+
+### The queue
+
+The refreshes, the changes feed, the GeoIP check and the country list are jobs on [River](https://riverqueue.com), run inside the API process whenever `STREAMING_API_KEY` is set, embedded importer or not. Its tables live in a `river` schema of their own, which the daily swap never touches, migrated at start under an advisory lock (`0x63696e72`) so two containers starting together take turns. It has its own pool of four connections: River holds one for as long as it runs to `LISTEN` for new jobs, and that should be neither a reader's connection nor one a bulk `COPY` is holding. The jobs themselves write through the reader pool, a row at a time.
+
+| Job | When | What it does |
+| --- | --- | --- |
+| `where_to_watch_refresh` | at an option's `expiresOn`, or as soon as possible for an answer 30 days old or one the changes feed said changed without carrying its options | asks the API again, keeps the answer, schedules the next leaving option. Skipped when an answer was kept after it fell due. Up to five tries |
+| `streaming_changes` | every hour, and when a process becomes leader | reads the changes feed for each covered country with kept answers whose last run is a day old, writes or refreshes the kept answers it names, and records how far it got. Up to three tries; a refused key is not retried |
+| `geoip_check` | every 12 hours, and when a process becomes leader | `HEAD`, and a `GET` only for a new build. Up to three tries; a refused key is not retried |
+| `streaming_countries` | every 24 hours, and when a process becomes leader | asks for the country list once the kept one is a week old. Up to three tries |
+
+Two containers during a deploy's overlap never double a download or a refresh. Each job is claimed by one worker (`FOR UPDATE SKIP LOCKED`). A refresh is unique by its arguments (movie, country, and the moment it is for) among the jobs not yet finished, so readers finding the same old answer, or both containers scheduling the same expiry, insert it once, while an expiry's job and a stale refresh never stand in for each other. The periodic jobs are inserted only by River's elected leader, and are unique among unfinished jobs, so a new leader's run-on-start cannot stack a second check on one already queued or running, and two containers never read the same changes. On shutdown River stops fetching, gives running jobs five seconds, then cancels them, inside the ten seconds a draining container has; a job cut short is retried by whichever container runs the queue next. River logs only its warnings and errors, and it reports a failed job below that, so each job logs its own failure: a refused key, Movie of the Night's or MaxMind's, as an error, anything else as a warning. A job that panics is logged as an error too.
+
 ## Routes
 
-Catalog routes, as the process sees them. In the browser they are the same paths under `/api`. Every catalog response is `Cache-Control: no-store`. A handler error is `{"error": "…"}`. Each API request has a 40 second deadline.
+Catalog routes, as the process sees them. In the browser they are the same paths under `/api`. Every catalog response is `Cache-Control: no-store`, except a where-to-watch answer. A handler error is `{"error": "…"}`. Each API request has a 40 second deadline.
 
 | Route | What it does |
 | --- | --- |
@@ -321,6 +394,7 @@ Catalog routes, as the process sees them. In the browser they are the same paths
 | `GET /posters/{tconst}` | `{"poster":"<url>"}` when a picture the browser could not load has a TMDb stand-in. The stand-in is written back, so the next read does not ask again. 404 when there is nothing, or TMDb is not configured. 502 when the lookup failed |
 | `GET /people/photos?ids=nm1,nm2` | `{"photos":{"nm0000206":"https://image.tmdb.org/t/p/w185/….jpg","nm0000401":null},"pending":["nm0000401"]}`: each person's photo, or `null` for none. `ids` is required, comma-separated, at most 50, each an IMDb name id, or 400. Only ever read from `meta.people`; it never asks TMDb. A person the people job has not answered yet is marked for it and listed in `pending`: ask again in a few seconds. A stored answer that has come due (past 150 days) is served as it is and marked the same way. A person the catalog does not hold is `null`, and so is every unanswered person when there are no TMDb credentials, with nothing pending. Never cached. 500 if it could not be read |
 | `GET /trailers/{tconst}` | `{"key":"vKQi3bBA1y8"}`, the YouTube id of the film's trailer, or `{"key":null}` when there is none that can be embedded. Only ever read from `meta.trailers`; it never asks TMDb or YouTube. A film the trailer job has not answered yet is marked for it and answered `{"key":null,"pending":true}`: ask again in a few seconds. A stored answer that has come due (a recent film's week-old null, or anything past 150 days) is served as it is and marked the same way. A title the catalog does not hold is `{"key":null}`, and so is every unanswered film when there are no TMDb credentials. Never cached. 400 if the id is not a `tconst`, 500 if it could not be read |
+| `GET /where-to-watch/{tconst}` | Where the movie can be watched in the reader's country, which the server works out from the request: `{"country":"us","countryName":"United States","covered":true,"stream":[…],"free":[],"rent":[…],"buy":[]}`. Each entry is `{id,name,link,logo:{dark,light},price?,via?}`: `price` on rent and buy (`"3.99 USD"`), `via` on an add-on (`"Prime Video"`). A reader who cannot be placed, or whose country has no coverage, is `{"country":"xx","covered":false}` (their own code when they were placed), and the API is not asked. Served from `meta.where_to_watch`; a movie and country nobody has asked about is asked once, in the request. `Cache-Control: private, max-age=3600` on an answer, `no-store` on an error. 400 if the id is not a `tconst`, 404 if the catalog does not hold it, 500 if it could not be read, 502 if the API could not answer (nothing is kept), 503 when there is no `STREAMING_API_KEY`, or while GeoLite2 is still being fetched. The API's own error never reaches the browser |
 | `GET /og/movie/{tconst}.png` | The share card. Not under `/api`. Its own, shorter budget |
 
 `c` on a search or cold-screen hit is the poster colour, present only once it has been worked out. A wrong colour is worse than none; the client has its own fallback.
@@ -392,6 +466,7 @@ React 19 and TypeScript, bundled with Vite 6. There is no router and no state li
 | `grid.ts` | Layout, what is lit, lane packing, the rating domain. Pure: a payload, a width, and the settings go in, and positions come out |
 | `trail.ts` | Which filters belong to this history entry, and which preferences belong to the reader |
 | `api.ts` | `/api` client. Sends PostHog's distinct id and session id once analytics is up. `fetchTrailer` asks `/api/trailers/{id}` once per film and keeps the answer for the visit. A pending answer is asked again after about 1.5, 3, 5 and 6 seconds while the panel or preview is still open, and is never kept. `fetchPeoplePhotos` asks `/api/people/photos` about the people a map came without photos for, fifty at a time, asks again about the pending ones on the same schedule until none are or the caller goes, and keeps each photo, or its "none", for the visit. A pending answer or a failure is left out and never kept |
+| `whereToWatch.ts` | `useWhereToWatch(imdbId)` asks `/api/where-to-watch/{id}`, at most once at a time per movie, and keeps the answer for the visit. A failure stands for two seconds, so a preview opening just after the ask made as the pointer came to rest does not ask again, and a later open does. The preview's request starts when the pointer begins resting on a card, so the answer is usually in by the time the preview opens |
 | `movieParam.ts` | `/movie/{tconst}-{slug}`, the tab title, the slug rules the server's `og:url` is kept in step with |
 | `firstRun.ts` | How many cold-screen tiles fit |
 | `PeopleChips.tsx`, `GridSheet.tsx`, `ViewPanel.tsx` | The chip row, the film sheet, the View panel |
@@ -428,6 +503,12 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 | `TRAILER_SWEEP_MIN_VOTES` | 0 | Vote floor for the trailer job's sweep. `0` sweeps every film. Below a higher floor a film is looked up only once a reader opens it, and that reader waits on the job |
 | `PEOPLE_SWEEP_MIN_VOTES` | 0 | Vote floor for the people job's sweep, on each person's best known movie a map can show. `0` sweeps everyone. Below a higher floor a person is looked up only once a map with them on it is opened |
 | `PEOPLE_SWEEP_RATE` | 5 | Lookups a second for the people job's sweep and re-asks, inside `TMDB_RATE_PER_SEC`. The people on a map a reader opens skip it. Must be more than 0 |
+| `STREAMING_API_KEY` | | The Streaming Availability API, from Movie of the Night. Turns on where to watch and the queue that keeps it right. Unset, the route answers 503 and the page leaves the section out |
+| `STREAMING_RATE_PER_SEC` | 5 | Requests a second to that API, for the process. It is metered per request; what keeps the bill down is that answers are kept. Must be more than 0 |
+| `STREAMING_CHANGES_MAX_PAGES` | 40 | The most pages of the changes feed the daily changes job reads for one country in one run, 25 changes and one metered request a page. A run it stops carries on from there the next day. At least one page of each of the three kinds of change is always read. Must be more than 0 |
+| `MAXMIND_LICENSE_KEY` | | Downloads GeoLite2 Country, which places a reader's address in a country. Unset, only a CDN's country header places anyone |
+| `MAXMIND_ACCOUNT_ID` | | The account the license key belongs to. Set, the database comes from MaxMind's permalink with both; unset, from the older address that takes the key alone. Not a secret |
+| `GEO_COUNTRY_HEADER` | | The one country header to trust, set by a CDN in front of the app (such as `CF-IPCountry`). Unset trusts none, which is right on Railway alone |
 | `TMDB_CACHE_TTL` | `168h` | Redis TTL for TMDb search responses, when `REDIS_URL` is set. Without it, those responses are not cached |
 | `REDIS_URL` | | Optional cache for that fallback only, prefix `cinedikt:tmdb` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | Job notifications, described below. Both empty, and nothing is sent. The token is from BotFather. The chat id is `message.chat.id` from `getUpdates` after Start — positive for a private chat, negative for a group. In a group the bot needs permission to pin messages |
@@ -455,6 +536,10 @@ Synopses, posters and release dates come from [OMDb](https://www.omdbapi.com/), 
 
 Trailers play from YouTube.
 
+Streaming availability by Movie of the Night.
+
+This product includes GeoLite2 Data created by MaxMind, available from [https://www.maxmind.com](https://www.maxmind.com).
+
 ## Logs
 
 In production the API writes single-line JSON to stdout (`config.NewLogger`). Locally it writes readable text to stderr. Railway turns anything on stderr into an error, so plain text there makes every served request look like a failure. JSON hands `method`, `path`, `status`, `duration_ms`, and `bytes` over as fields — `@status:>=500`, `@duration_ms:>500` — rather than a string to grep. The logger is built from `APP_ENV` before configuration has finished loading, so a bad variable can still be reported.
@@ -481,7 +566,7 @@ The [Dockerfile](Dockerfile) builds the map with Node 22, the API with Go 1.26 (
 
 The restart policy is left at Railway's default, `ON_FAILURE`, and the service is not allowed to sleep. Declaring either would leave `config plan` permanently dirty, because the platform stores a default as null. Both matter: the importer runs between requests, and a sleeping machine would drop that work.
 
-Variables to set on the service: `DATABASE_URL`, and, for pictures, synopses, trailers, people's photos and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` and `MIXPANEL_PROJECT_TOKEN` if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `WEB_DIR` only if it should differ from the path the image already sets.
+Variables to set on the service: `DATABASE_URL`, and, for pictures, synopses, trailers, people's photos and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` and `MIXPANEL_PROJECT_TOKEN` if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `STREAMING_API_KEY`, `MAXMIND_LICENSE_KEY` and `MAXMIND_ACCOUNT_ID` for where to watch. `WEB_DIR` only if it should differ from the path the image already sets.
 
 ## Tests
 
@@ -490,7 +575,7 @@ go test ./...
 cd web && npm test
 ```
 
-The catalog tests need a database of their own. They publish fixtures over `catalog` and empty `meta.posters`, so pointing them at a working catalog destroys it.
+The catalog tests need a database of their own. They publish fixtures over `catalog`, empty `meta.posters`, `meta.where_to_watch`, `meta.streaming_sync` and `meta.geoip`, and clear River's jobs, so pointing them at a working catalog destroys it. Nothing in the suite talks to the Streaming Availability API or MaxMind: both are stood in for, and the GeoLite2 databases the tests use are built by the tests.
 
 ```bash
 createdb cinedikt_test

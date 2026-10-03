@@ -318,3 +318,68 @@ func TestThePeopleSweepHasAFloorAndAPace(t *testing.T) {
 		}
 	}
 }
+
+// TestWhereToWatchIsReadAndOptional: without a Streaming Availability key
+// the feature is off and the process still starts; the rate has a small
+// default, and one that would never ask, or would not limit, is refused.
+func TestWhereToWatchIsReadAndOptional(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	for _, v := range []string{"STREAMING_API_KEY", "STREAMING_RATE_PER_SEC", "STREAMING_CHANGES_MAX_PAGES", "MAXMIND_LICENSE_KEY", "MAXMIND_ACCOUNT_ID", "GEO_COUNTRY_HEADER"} {
+		t.Setenv(v, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StreamingAPIKey != "" || cfg.MaxMindLicenseKey != "" || cfg.MaxMindAccountID != "" || cfg.GeoCountryHeader != "" {
+		t.Errorf("unset settings came back as %q %q %q %q", cfg.StreamingAPIKey, cfg.MaxMindLicenseKey, cfg.MaxMindAccountID, cfg.GeoCountryHeader)
+	}
+	if cfg.StreamingRatePerSecond != DefaultStreamingRatePerSecond || DefaultStreamingRatePerSecond != 5 {
+		t.Errorf("rate = %v, want 5", cfg.StreamingRatePerSecond)
+	}
+
+	t.Setenv("STREAMING_API_KEY", " streaming-key ")
+	t.Setenv("STREAMING_RATE_PER_SEC", "0.5")
+	t.Setenv("MAXMIND_LICENSE_KEY", "licence")
+	t.Setenv("MAXMIND_ACCOUNT_ID", "42")
+	t.Setenv("GEO_COUNTRY_HEADER", " CF-IPCountry ")
+	if cfg, err = Load(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StreamingAPIKey != "streaming-key" || cfg.StreamingRatePerSecond != 0.5 ||
+		cfg.MaxMindLicenseKey != "licence" || cfg.MaxMindAccountID != "42" || cfg.GeoCountryHeader != "CF-IPCountry" {
+		t.Errorf("set = %+v", cfg)
+	}
+
+	for _, bad := range []string{"0", "-1", "fast", "NaN", "Inf"} {
+		t.Setenv("STREAMING_RATE_PER_SEC", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("STREAMING_RATE_PER_SEC=%s was accepted", bad)
+		}
+	}
+}
+
+// TestTheChangesJobHasAPageCap: forty pages a country by default, any
+// positive number when set, and never none, which would not be a limit
+// but the job switched off.
+func TestTheChangesJobHasAPageCap(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("STREAMING_CHANGES_MAX_PAGES", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StreamingChangesMaxPages != DefaultStreamingChangesMaxPages || DefaultStreamingChangesMaxPages != 40 {
+		t.Errorf("unset = %d, want 40", cfg.StreamingChangesMaxPages)
+	}
+	t.Setenv("STREAMING_CHANGES_MAX_PAGES", "12")
+	if cfg, err = Load(); err != nil || cfg.StreamingChangesMaxPages != 12 {
+		t.Errorf("12 = %d, %v", cfg.StreamingChangesMaxPages, err)
+	}
+	for _, bad := range []string{"0", "-1", "many", "2.5"} {
+		t.Setenv("STREAMING_CHANGES_MAX_PAGES", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("STREAMING_CHANGES_MAX_PAGES=%s was accepted", bad)
+		}
+	}
+}
