@@ -1,0 +1,4 @@
+🔴 <b>Country lookup failing: unexpected error</b>
+<b>To fix:</b> tap Details below or check the Railway logs. Next try by tomorrow 02:20.
+It failed twice in a row with an error the app doesn't recognise, so it may need a code fix. Readers' countries come from the build already in use; where to watch still works.
+<blockquote expandable>Details: geoip: the download is not gzip: gzip: invalid header</blockquote>

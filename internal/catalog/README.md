@@ -247,7 +247,10 @@ twice a day and downloads only a different build, which
 swapped in. Only the queue's leader queues the check, so only one
 process downloads; every process loads the kept database at start and
 looks at its stamp every ten minutes to pick up a build another one
-fetched.
+fetched. The check tells the notifier how it ended: a new build, with
+when MaxMind built it, its size and the build it replaced, only from
+the check that kept it; the same build found again; or a failure, once
+River has given up on that run's tries, or at once for a refused key.
 
 ## The queue
 

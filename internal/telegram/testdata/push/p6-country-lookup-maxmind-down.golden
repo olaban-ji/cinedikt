@@ -1,0 +1,4 @@
+⚠️ <b>Country lookup failing since 02:20</b>
+Nothing for you to do yet. Next try by tomorrow 02:20.
+MaxMind's download server isn't answering (error 503). Readers' countries come from the build already in use; where to watch still works.
+<blockquote expandable>Details: geoip: HEAD the database: HTTP 503</blockquote>

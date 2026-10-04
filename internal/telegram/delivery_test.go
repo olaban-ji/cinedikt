@@ -604,3 +604,80 @@ func TestATakeoverAfterALostLeaseAttachesAgain(t *testing.T) {
 		t.Errorf("calls = %+v, want the saved board edited", got)
 	}
 }
+
+// TestAGeoIPCheckBeforeTheTakeoverIsSaidAfterIt: a new container's queue
+// runs its first check before its runner has the jobs, and on a fresh
+// database that check downloads the first build. Nothing is sent while
+// the process does not hold the jobs; once it does, the build is said
+// once and the board names it.
+func TestAGeoIPCheckBeforeTheTakeoverIsSaidAfterIt(t *testing.T) {
+	h := newHarness(t, false)
+	h.sink.Note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded, LiveSince: fridayBuild, Bytes: 9871234})
+	h.run(10 * time.Minute)
+	if n := len(h.api.all()); n != 0 {
+		t.Fatalf("%d calls from a process that does not hold the jobs, want none", n)
+	}
+	mem := &fakeMemory{}
+	h.attach(mem)
+	h.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
+	h.run(time.Minute)
+	var said, board int
+	for _, c := range h.api.of("sendMessage") {
+		if strings.Contains(c.body.Text, "Country lookup: first build downloaded</b>") {
+			said++
+			if !c.body.DisableNotification {
+				t.Error("the first build was said with a sound")
+			}
+		}
+		if strings.Contains(c.body.Text, "<b>Country lookup</b> · Friday&#39;s build in use · checked 14:20") {
+			board++
+		}
+	}
+	if said != 1 || board != 1 {
+		t.Errorf("the build was said %d times and on %d boards, want once each:\n%+v", said, board, h.api.all())
+	}
+	if got := mem.saved(t).Jobs[notify.JobGeoIP]; got == nil || !got.Built.Equal(fridayBuild) {
+		t.Errorf("saved country lookup = %+v, want Friday's build", got)
+	}
+
+	// Said, saved, and not said again by the next process.
+	next := newHarness(t, false)
+	next.attach(mem)
+	next.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
+	next.run(time.Minute)
+	for _, c := range next.api.of("sendMessage") {
+		if strings.Contains(c.body.Text, "first build downloaded") {
+			t.Errorf("the next process said the build again: %q", c.body.Text)
+		}
+	}
+}
+
+// TestAHeldGeoIPCheckTurnsTheLineOnBeforeTheTakeover: the last process
+// ran without the check, so the saved state has the country lookup off.
+// This one's check reports before its takeover, which is the usual order
+// at a deploy, and is said first once it attaches. The board names the
+// build that check found, not "waiting for the first download".
+func TestAHeldGeoIPCheckTurnsTheLineOnBeforeTheTakeover(t *testing.T) {
+	mem := &fakeMemory{}
+	prev := newHarness(t, false)
+	prev.attach(mem)
+	prev.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs[:len(allJobs)-1]})
+	prev.run(time.Minute)
+	if got := mem.saved(t).Jobs[notify.JobGeoIP]; got == nil || got.State != stOff {
+		t.Fatalf("saved country lookup = %+v, want it off", got)
+	}
+
+	h := newHarness(t, false)
+	h.sink.Note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Checked, LiveSince: fridayBuild})
+	h.run(time.Minute)
+	h.attach(mem)
+	h.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
+	h.run(time.Minute)
+	boards := h.api.of("editMessageText")
+	if len(boards) == 0 {
+		t.Fatalf("no board written: %+v", h.api.all())
+	}
+	if text := boards[len(boards)-1].body.Text; !strings.Contains(text, "<b>Country lookup</b> · Friday&#39;s build in use · checked 14:20") {
+		t.Errorf("board = %q, want the build the held check found", text)
+	}
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"cinedikt/internal/geoip"
 	"cinedikt/internal/notify"
 )
 
@@ -98,9 +99,20 @@ func classify(err error) (cause notify.Cause, provider string, status int, integ
 	var connect *pgconn.ConnectError
 	var pg *pgconn.PgError
 	var check *IntegrityError
+	var download *geoip.DownloadError
 	switch {
 	case errors.As(err, &key):
 		return notify.KeyRejected, key.Provider, 0, 0
+	case errors.Is(err, geoip.ErrKey):
+		return notify.KeyRejected, "MaxMind", 0, 0
+	case errors.As(err, &download):
+		// The same line as IMDb's: no answer, a rate limit or a server
+		// error is MaxMind's to fix and fixes itself; any other refusal
+		// is not one this knows.
+		if download.Status == 0 || download.Status == 429 || download.Status >= 500 {
+			return notify.ProviderDown, "MaxMind", download.Status, 0
+		}
+		return notify.Unknown, "MaxMind", download.Status, 0
 	case errors.As(err, &lookups):
 		return notify.AllFailed, lookups.Provider, 0, 0
 	case errors.As(err, &imdb):
@@ -126,7 +138,8 @@ func classify(err error) (cause notify.Cause, provider string, status int, integ
 
 // failure is the event for a job that failed with err. next is when it
 // will try again; liveSince, for the import, is when the catalog still
-// being served was built.
+// being served was built, and for the GeoIP check, when the build still
+// in use was.
 func failure(job string, err error, next, liveSince time.Time) notify.Event {
 	cause, provider, status, integrity := classify(err)
 	e := notify.Event{

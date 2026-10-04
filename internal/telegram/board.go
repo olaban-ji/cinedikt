@@ -185,6 +185,11 @@ func (s *state) line(id string, w writer) (string, string) {
 	if a := s.Alerts[alertDatabase]; a != nil {
 		return markPause, "on hold"
 	}
+	if (state == stStarting || state == stWaiting) && id == notify.JobGeoIP {
+		// The country lookup does not wait on the catalog. Until its
+		// first check reports, there is no build in use to name.
+		return markWork, "waiting for the first download"
+	}
 	if (state == stStarting || state == stWaiting) && s.LiveSince.IsZero() {
 		return markWork, "waiting for the first catalog"
 	}
@@ -365,6 +370,16 @@ func idleText(id string, j *job, w writer) string {
 	case notify.JobColours:
 		if j.LastErrors > 0 {
 			text += " · " + count(j.LastErrors) + " left without a colour"
+		}
+	case notify.JobGeoIP:
+		// The build in use, and when a check last said it is still the
+		// newest: a "checked" more than half a day old means the check
+		// has stopped running.
+		if !j.Built.IsZero() {
+			text = w.day(j.Built) + " build in use"
+		}
+		if !j.LastAt.IsZero() {
+			text += " · checked " + w.when(j.LastAt)
 		}
 	}
 	return text

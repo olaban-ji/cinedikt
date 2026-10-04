@@ -84,6 +84,11 @@ type Runner struct {
 	// the jobs report every fact, and the stale check reports every hour
 	// it is stale. Nil leaves all of that in the log.
 	Notify notify.Sink
+	// Queued is the jobs this process runs on its queue rather than
+	// here, that report to Notify too (Queue.Jobs): the GeoIP check, when
+	// there is a MaxMind key. The runner names them among its own when it
+	// takes the jobs, so the board shows them on rather than off.
+	Queued []string
 }
 
 // Start runs the whole cycle until ctx is done. It returns as soon as
@@ -138,6 +143,7 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	if client != nil {
 		enabled = append(enabled, notify.JobTMDbPosters, notify.JobTMDbIDs, notify.JobTrailers, notify.JobPeople)
 	}
+	enabled = append(enabled, r.Queued...)
 	report(r.Notify, notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: enabled})
 	var wg sync.WaitGroup
 	start := func(loop func()) {

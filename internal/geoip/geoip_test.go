@@ -130,9 +130,14 @@ func TestTheDatabaseIsDownloadedOnlyWhenItsBuildChanges(t *testing.T) {
 	var l geoip.Lookup
 	u := updater(srv, store, &l, geoiptest.Account)
 
-	updated, err := u.Check(ctx)
-	if err != nil || !updated {
-		t.Fatalf("first check: updated %v, err %v", updated, err)
+	first := geoiptest.Database(t, networks)
+	srv.Set(geoiptest.Archive(t, first), built)
+	res, err := u.Check(ctx)
+	if err != nil || !res.Downloaded {
+		t.Fatalf("first check: downloaded %v, err %v", res.Downloaded, err)
+	}
+	if res.Built != built.Format(http.TimeFormat) || res.Bytes != len(first) || res.Replaced != "" {
+		t.Errorf("first check = %+v; want the build, its size, and nothing replaced", res)
 	}
 	if srv.Heads() != 1 || srv.Gets() != 1 || store.keeps != 1 {
 		t.Errorf("first check: %d HEAD, %d GET, %d kept", srv.Heads(), srv.Gets(), store.keeps)
@@ -142,8 +147,8 @@ func TestTheDatabaseIsDownloadedOnlyWhenItsBuildChanges(t *testing.T) {
 	}
 
 	for range 3 {
-		if updated, err := u.Check(ctx); err != nil || updated {
-			t.Fatalf("an unchanged build: updated %v, err %v", updated, err)
+		if res, err := u.Check(ctx); err != nil || res.Downloaded || res.Built != store.stamp {
+			t.Fatalf("an unchanged build: %+v, err %v", res, err)
 		}
 	}
 	if srv.Heads() != 4 || srv.Gets() != 1 {
@@ -152,8 +157,8 @@ func TestTheDatabaseIsDownloadedOnlyWhenItsBuildChanges(t *testing.T) {
 
 	// A new build, placing the address elsewhere, is fetched and used.
 	srv.Set(geoiptest.Archive(t, geoiptest.Database(t, map[string]string{"81.2.69.0/24": "IE"})), built.Add(96*time.Hour))
-	if updated, err := u.Check(ctx); err != nil || !updated {
-		t.Fatalf("a new build: updated %v, err %v", updated, err)
+	if res, err := u.Check(ctx); err != nil || !res.Downloaded || res.Replaced != built.Format(http.TimeFormat) {
+		t.Fatalf("a new build: %+v, err %v; want it downloaded in place of the first", res, err)
 	}
 	if srv.Gets() != 2 || store.keeps != 2 {
 		t.Errorf("new build: %d GET, %d kept", srv.Gets(), store.keeps)
@@ -191,8 +196,8 @@ func TestABadDownloadKeepsTheDatabaseInUse(t *testing.T) {
 	} {
 		built = built.Add(time.Hour)
 		srv.Set(body, built)
-		if updated, err := u.Check(ctx); err == nil || updated {
-			t.Errorf("%s: updated %v, err %v", name, updated, err)
+		if res, err := u.Check(ctx); err == nil || res.Downloaded {
+			t.Errorf("%s: downloaded %v, err %v", name, res.Downloaded, err)
 		}
 		if store.stamp != good || l.LastModified() != good {
 			t.Errorf("%s: kept %q, in use %q, want the good one %q", name, store.stamp, l.LastModified(), good)
@@ -206,8 +211,8 @@ func TestABadDownloadKeepsTheDatabaseInUse(t *testing.T) {
 	// every process reads the kept copy, and they would disagree.
 	srv.Set(geoiptest.Archive(t, geoiptest.Database(t, map[string]string{"81.2.69.0/24": "IE"})), built.Add(time.Hour))
 	store.fail = errors.New("database down")
-	if updated, err := u.Check(ctx); err == nil || updated {
-		t.Errorf("an unkept download: updated %v, err %v", updated, err)
+	if res, err := u.Check(ctx); err == nil || res.Downloaded {
+		t.Errorf("an unkept download: downloaded %v, err %v", res.Downloaded, err)
 	}
 	if got, _ := l.Country(netip.MustParseAddr("81.2.69.142")); got != "gb" {
 		t.Errorf("an unkept download was used: %q", got)
@@ -238,6 +243,11 @@ func TestASecondProcessReadsTheKeptDatabase(t *testing.T) {
 	if srv.Heads() != heads || srv.Gets() != gets {
 		t.Errorf("loading the kept copy asked MaxMind: %d HEAD, %d GET", srv.Heads()-heads, srv.Gets()-gets)
 	}
+	// Its own check finds the build already kept. That is not a download
+	// it has news of: the process that kept the build had it.
+	if res, err := other.Check(ctx); err != nil || res.Downloaded || res.Built != store.stamp {
+		t.Errorf("the second process's check = %+v, %v; want the kept build and no download", res, err)
+	}
 
 	// The first process fetches a new build; the second follows it.
 	srv.Set(geoiptest.Archive(t, geoiptest.Database(t, map[string]string{"216.160.83.0/24": "CA"})), built.Add(96*time.Hour))
@@ -267,8 +277,8 @@ func TestTheLegacyAddressTakesTheKeyAlone(t *testing.T) {
 	ctx := context.Background()
 	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), time.Now())
 	var l geoip.Lookup
-	if updated, err := updater(srv, &memStore{}, &l, "").Check(ctx); err != nil || !updated {
-		t.Fatalf("legacy: updated %v, err %v", updated, err)
+	if res, err := updater(srv, &memStore{}, &l, "").Check(ctx); err != nil || !res.Downloaded {
+		t.Fatalf("legacy: downloaded %v, err %v", res.Downloaded, err)
 	}
 
 	for _, account := range []string{"", geoiptest.Account} {
@@ -288,6 +298,42 @@ func TestTheLegacyAddressTakesTheKeyAlone(t *testing.T) {
 	u.LegacyURL = "http://127.0.0.1:1/app/geoip_download?edition_id=GeoLite2-Country&suffix=tar.gz"
 	if _, err := u.Check(ctx); err == nil || strings.Contains(err.Error(), geoiptest.License) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// TestMaxMindBeingDownIsADownloadError: no answer, or a server error, is
+// MaxMind's trouble and fixes itself, and is typed as that, apart from a
+// refused key and from a download that is wrong.
+func TestMaxMindBeingDownIsADownloadError(t *testing.T) {
+	ctx := context.Background()
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "maintenance", http.StatusServiceUnavailable)
+	}))
+	defer down.Close()
+	u := &geoip.Updater{AccountID: geoiptest.Account, LicenseKey: geoiptest.License, Store: &memStore{}, Lookup: &geoip.Lookup{},
+		PermalinkURL: down.URL + geoiptest.PermalinkPath + "?suffix=tar.gz"}
+	var dl *geoip.DownloadError
+	_, err := u.Check(ctx)
+	if !errors.As(err, &dl) || dl.Status != http.StatusServiceUnavailable || dl.Method != http.MethodHead {
+		t.Errorf("a 503: err = %v, want a DownloadError for the HEAD with its status", err)
+	}
+	if err == nil || err.Error() != "geoip: HEAD the database: HTTP 503" {
+		t.Errorf("a 503 reads %q", err)
+	}
+
+	u.PermalinkURL = "http://127.0.0.1:1" + geoiptest.PermalinkPath + "?suffix=tar.gz"
+	if _, err := u.Check(ctx); !errors.As(err, &dl) || dl.Status != 0 {
+		t.Errorf("no answer: err = %v, want a DownloadError with no status", err)
+	}
+
+	srv := geoiptest.NewServer(t, []byte("<html>maintenance</html>"), time.Now())
+	u = updater(srv, &memStore{}, &geoip.Lookup{}, geoiptest.Account)
+	if _, err := u.Check(ctx); err == nil || errors.As(err, &dl) {
+		t.Errorf("a download that is not a database: err = %v, want an error that is not MaxMind being down", err)
+	}
+	u.LicenseKey = "wrong"
+	if _, err := u.Check(ctx); !errors.Is(err, geoip.ErrKey) || errors.As(err, &dl) {
+		t.Errorf("a refused key: err = %v, want ErrKey alone", err)
 	}
 }
 
@@ -336,11 +382,11 @@ func TestThePermalinkIsFollowedToItsStorage(t *testing.T) {
 		Lookup:       &l,
 		PermalinkURL: permalink.URL + geoiptest.PermalinkPath + "?suffix=tar.gz",
 	}
-	if updated, err := u.Check(ctx); err != nil || !updated {
-		t.Fatalf("first check: updated %v, err %v", updated, err)
+	if res, err := u.Check(ctx); err != nil || !res.Downloaded {
+		t.Fatalf("first check: downloaded %v, err %v", res.Downloaded, err)
 	}
-	if updated, err := u.Check(ctx); err != nil || updated {
-		t.Fatalf("an unchanged build: updated %v, err %v", updated, err)
+	if res, err := u.Check(ctx); err != nil || res.Downloaded {
+		t.Fatalf("an unchanged build: downloaded %v, err %v", res.Downloaded, err)
 	}
 	if heads.Load() != 2 || gets.Load() != 1 {
 		t.Errorf("storage saw %d HEAD, %d GET; want two checks and one download", heads.Load(), gets.Load())
@@ -353,5 +399,53 @@ func TestThePermalinkIsFollowedToItsStorage(t *testing.T) {
 	}
 	if leaked.Load() {
 		t.Error("the credentials went with the redirect to the storage")
+	}
+}
+
+// TestAGetBehindTheHeadIsNoDownload: the HEAD names a new build, but the
+// GET is served the one already kept, as storage still catching up with
+// a release can. Nothing new was fetched, so the check has no download to
+// report, and the next check, served the new build, does.
+func TestAGetBehindTheHeadIsNoDownload(t *testing.T) {
+	ctx := context.Background()
+	built := time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)
+	newer := built.Add(96 * time.Hour)
+	archive := geoiptest.Archive(t, geoiptest.Database(t, networks))
+	var mu sync.Mutex
+	headStamp, getStamp := built, built
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		stamp := headStamp
+		if r.Method == http.MethodGet {
+			stamp = getStamp
+		}
+		mu.Unlock()
+		w.Header().Set("Last-Modified", stamp.Format(http.TimeFormat))
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(archive)
+		}
+	}))
+	defer srv.Close()
+	store := &memStore{}
+	u := &geoip.Updater{AccountID: geoiptest.Account, LicenseKey: geoiptest.License, Store: store, Lookup: &geoip.Lookup{},
+		PermalinkURL: srv.URL + geoiptest.PermalinkPath + "?suffix=tar.gz"}
+	if res, err := u.Check(ctx); err != nil || !res.Downloaded {
+		t.Fatalf("first check: %+v, err %v", res, err)
+	}
+
+	mu.Lock()
+	headStamp = newer
+	mu.Unlock()
+	res, err := u.Check(ctx)
+	if err != nil || res.Downloaded || res.Built != built.Format(http.TimeFormat) {
+		t.Errorf("a GET behind the HEAD: %+v, err %v; want the kept build and no download", res, err)
+	}
+
+	mu.Lock()
+	getStamp = newer
+	mu.Unlock()
+	res, err = u.Check(ctx)
+	if err != nil || !res.Downloaded || res.Built != newer.Format(http.TimeFormat) || res.Replaced != built.Format(http.TimeFormat) {
+		t.Errorf("once the GET catches up: %+v, err %v; want the new build downloaded in place of the first", res, err)
 	}
 }

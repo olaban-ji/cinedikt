@@ -38,6 +38,7 @@ import (
 	"github.com/riverqueue/river/rivertype"
 
 	"cinedikt/internal/geoip"
+	"cinedikt/internal/notify"
 	"cinedikt/internal/streaming"
 )
 
@@ -121,6 +122,9 @@ type QueueConfig struct {
 	// GeoIP is the updater the twice-daily check runs. Nil runs no check:
 	// there is no license key to download with.
 	GeoIP *geoip.Updater
+	// Notify is told how each GeoIP check ended. Nil leaves that in the
+	// log.
+	Notify notify.Sink
 }
 
 // Queue is River, with its own pool.
@@ -128,6 +132,8 @@ type Queue struct {
 	pool     *pgxpool.Pool
 	client   *river.Client[pgx.Tx]
 	stopOnce sync.Once
+	// jobs is what Jobs returns.
+	jobs []string
 }
 
 // OpenQueue connects, brings River's tables up to date, and builds the
@@ -157,6 +163,7 @@ func OpenQueue(ctx context.Context, cfg QueueConfig) (*Queue, error) {
 
 	workers := river.NewWorkers()
 	var periodic []*river.PeriodicJob
+	var jobs []string
 	if w := cfg.WhereToWatch; w != nil {
 		river.AddWorker(workers, &watchRefreshWorker{w: w})
 		river.AddWorker(workers, &countriesWorker{w: w})
@@ -170,10 +177,11 @@ func OpenQueue(ctx context.Context, cfg QueueConfig) (*Queue, error) {
 				&river.PeriodicJobOpts{ID: StreamingChangesArgs{}.Kind(), RunOnStart: true}))
 	}
 	if cfg.GeoIP != nil {
-		river.AddWorker(workers, &geoIPWorker{u: cfg.GeoIP})
+		river.AddWorker(workers, &geoIPWorker{u: cfg.GeoIP, notify: cfg.Notify})
 		periodic = append(periodic, river.NewPeriodicJob(river.PeriodicInterval(GeoIPCheckEvery),
 			func() (river.JobArgs, *river.InsertOpts) { return GeoIPCheckArgs{}, nil },
 			&river.PeriodicJobOpts{ID: GeoIPCheckArgs{}.Kind(), RunOnStart: true}))
+		jobs = append(jobs, notify.JobGeoIP)
 	}
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Schema:          QueueSchema,
@@ -188,11 +196,22 @@ func OpenQueue(ctx context.Context, cfg QueueConfig) (*Queue, error) {
 		pool.Close()
 		return nil, fmt.Errorf("catalog: build the queue: %w", err)
 	}
-	q := &Queue{pool: pool, client: client}
+	q := &Queue{pool: pool, client: client, jobs: jobs}
 	if cfg.WhereToWatch != nil {
 		cfg.WhereToWatch.queue = q
 	}
 	return q, nil
+}
+
+// Jobs is the notifier's name for each job the queue runs that reports to
+// it: JobGeoIP, when there is a MaxMind key. A nil queue runs none. The
+// runner names them among its own when it takes the jobs, since the board
+// lists what one process runs, and a job it leaves out reads as off.
+func (q *Queue) Jobs() []string {
+	if q == nil {
+		return nil
+	}
+	return q.jobs
 }
 
 // Start runs the queue until Stop. It is not tied to ctx's cancellation:

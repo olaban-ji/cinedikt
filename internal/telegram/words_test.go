@@ -123,6 +123,24 @@ func messages() map[string][]part {
 	peopleDown.Provider, peopleDown.Lookups = "TMDb", 50
 	peopleDown.Detail = `catalog: all 50 lookups to TMDb failed; the last: tmdb: giving up after 4 attempts: tmdb: HTTP 503`
 
+	// The GeoIP check fails once per twelve-hourly check, so its streaks
+	// are twelve hours apart and its next try half a day away.
+	maxmindDown := failingJob(notify.ProviderDown, 2, 12*time.Hour)
+	maxmindDown.Provider, maxmindDown.Status, maxmindDown.Built = "MaxMind", 503, fridayBuild
+	maxmindDown.NextTry = testNow.Add(12 * time.Hour)
+	maxmindDown.Detail = "geoip: HEAD the database: HTTP 503"
+	maxmindGone := failingJob(notify.ProviderDown, 2, 12*time.Hour)
+	maxmindGone.Provider = "MaxMind"
+	maxmindGone.NextTry = testNow.Add(12 * time.Hour)
+	maxmindGone.Detail = "geoip: GET the database: dial tcp: lookup download.maxmind.com: no such host"
+	geoOdd := failingJob(notify.Unknown, 2, 12*time.Hour)
+	geoOdd.Built, geoOdd.NextTry = fridayBuild, testNow.Add(12*time.Hour)
+	geoOdd.Detail = "geoip: the download is not gzip: gzip: invalid header"
+	geoKey := &job{Detail: "geoip: MaxMind refused the license key (HTTP 401)", Built: fridayBuild}
+	geoKeyFirst := &job{Detail: "geoip: MaxMind refused the license key (HTTP 401)"}
+	newBuild := notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded, LiveSince: fridayBuild, PrevAt: tuesdayBuild, Bytes: 9871234}
+	firstBuild := notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded, LiveSince: fridayBuild, Bytes: 9871234}
+
 	return map[string][]part{
 		"p1-new-catalog":           {w.published(published, time.Time{})},
 		"p1-new-catalog-first":     {w.published(notify.Event{Films: 757802, People: 3120442, Took: 2 * time.Hour}, time.Time{})},
@@ -145,8 +163,8 @@ func messages() map[string][]part {
 		"p6-synopses-omdb-down":    {w.jobFailing(notify.JobSynopses, synopsesDown)},
 		"p6-trailers-tmdb-down":    {w.jobFailing(notify.JobTrailers, trailersDown)},
 		"p6-people-tmdb-down":      {w.jobFailing(notify.JobPeople, peopleDown)},
-		"p7-tmdb-key":              {w.keyRejected("TMDb", "tmdb: HTTP 401: Invalid API key: You must be granted a valid key.")},
-		"p7-omdb-key":              {w.keyRejected("OMDb", "catalog: OMDb refused the key: omdb: invalid API key")},
+		"p7-tmdb-key":              {w.keyRejected("TMDb", &job{Detail: "tmdb: HTTP 401: Invalid API key: You must be granted a valid key."})},
+		"p7-omdb-key":              {w.keyRejected("OMDb", &job{Detail: "catalog: OMDb refused the key: omdb: invalid API key"})},
 		"p8-posters-working-again": {w.workingAgain(notify.JobPosters, testNow.Add(-(2*time.Hour + 10*time.Minute)), yesterday, false)},
 		"p8-catalog-working-again": {w.workingAgain(notify.JobImport, testNow.Add(-(3*time.Hour + 5*time.Minute)), yesterday, true)},
 		"p8-tmdb-key-back":         {w.keyBack("TMDb", testNow.Add(-26*time.Hour))},
@@ -167,10 +185,25 @@ func messages() map[string][]part {
 		"p11-manual-failed":        {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Failed, Cause: notify.IMDbDown, Status: 503, Detail: "catalog: HEAD title.basics: HTTP 503"})},
 		"p11-manual-posters":       {mustManual(w, notify.Event{Job: notify.JobPosters, Kind: notify.Finished, Done: 1830, Errors: 12}, notify.Event{Job: notify.JobTMDbPosters, Kind: notify.Finished, Done: 214})},
 		"p11-manual-posters-limit": {mustManual(w, notify.Event{Job: notify.JobPosters, Kind: notify.Paused, Cause: notify.DailyLimit, Done: 950})},
+
+		// The country lookup's messages, from the GeoIP check on the queue.
+		"p12-country-lookup-updated":      {w.downloaded(newBuild, "")},
+		"p12-country-lookup-first":        {w.downloaded(firstBuild, "")},
+		"p12-country-lookup-fixed":        {w.downloaded(newBuild, w.fixedSentence(testNow.Add(-24*time.Hour)))},
+		"p6-country-lookup-maxmind-down":  {w.jobFailing(notify.JobGeoIP, maxmindDown)},
+		"p6-country-lookup-no-build":      {w.jobFailing(notify.JobGeoIP, maxmindGone)},
+		"p6-country-lookup-unexpected":    {w.jobFailing(notify.JobGeoIP, geoOdd)},
+		"p7-maxmind-key":                  {w.keyRejected("MaxMind", geoKey)},
+		"p7-maxmind-key-no-build":         {w.keyRejected("MaxMind", geoKeyFirst)},
+		"p8-maxmind-key-back":             {w.keyBack("MaxMind", testNow.Add(-36*time.Hour))},
+		"p8-country-lookup-working-again": {w.workingAgain(notify.JobGeoIP, testNow.Add(-24*time.Hour), time.Time{}, true)},
+		"p9-maxmind-key-reminder":         {w.reminder(&alert{Key: "key:maxmind", Since: testNow.Add(-24 * time.Hour), Severity: sevRed, Provider: "MaxMind"}, notify.JobGeoIP, geoKey)},
+		"p9-country-lookup-reminder":      {w.reminder(&alert{Key: "job:geoip", Since: testNow.Add(-36 * time.Hour), Severity: sevWarn}, notify.JobGeoIP, maxmindDown)},
+
 		// Three jobs with news in the same two seconds: a refused key, a
 		// failure that has lasted, and a long pass that ended.
 		"coalesced-key-failing-and-done": {w.longPass(notify.JobPosters, notify.Event{Done: 1830, None: 1204, Took: 34 * time.Minute}, ""),
-			w.jobFailing(notify.JobColours, colours), w.keyRejected("TMDb", "tmdb: HTTP 401: Invalid API key")},
+			w.jobFailing(notify.JobColours, colours), w.keyRejected("TMDb", &job{Detail: "tmdb: HTTP 401: Invalid API key"})},
 		// The import's second failed hour lands as the catalog turns a
 		// day and a half old: the stale alert says the cause, once.
 		"coalesced-import-failing-and-stale": {w.importFailing(mismatch, yesterday), w.stale(1, testNow.Add(-37*time.Hour), mismatch)},
@@ -192,6 +225,24 @@ func TestEveryPushReadsAsWritten(t *testing.T) {
 		text, _ := message(parts)
 		shapeOf(t, name, text)
 		golden(t, "push", name, text)
+	}
+}
+
+// TestADownloadNamesItsBuildWhateverItsDay: two builds on one day are
+// not named as the same day twice, and a build more than a week old
+// opens its sentence with a capital.
+func TestADownloadNamesItsBuildWhateverItsDay(t *testing.T) {
+	w := writer{loc: lagos, now: testNow}
+	same := w.downloaded(notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded,
+		LiveSince: fridayBuild, PrevAt: fridayBuild.Add(-2 * time.Hour), Bytes: 9871234}, "")
+	if body := stripTags(same.body); !strings.HasSuffix(body, "replacing an earlier build from the same day.") {
+		t.Errorf("two builds in a day: %q", body)
+	}
+	old := w.downloaded(notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded,
+		LiveSince: testNow.Add(-10 * 24 * time.Hour), PrevAt: testNow.Add(-14 * 24 * time.Hour), Bytes: 9871234}, "")
+	lines := strings.Split(stripTags(old.body), "\n")
+	if len(lines) < 2 || !strings.HasPrefix(lines[1], "The ") {
+		t.Errorf("a build from 17 Sep: %q, want its sentence to start \"The \"", lines)
 	}
 }
 

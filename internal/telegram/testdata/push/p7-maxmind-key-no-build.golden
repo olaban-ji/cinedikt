@@ -1,0 +1,4 @@
+🔴 <b>MaxMind turned down our key</b>
+<b>To fix:</b> check MAXMIND_LICENSE_KEY and MAXMIND_ACCOUNT_ID under Variables in Railway, then redeploy.
+Checks for new GeoLite2 builds have stopped. Until the first GeoLite2 build is downloaded, readers can't be placed in a country, so the site leaves out where to watch.
+<blockquote expandable>Details: geoip: MaxMind refused the license key (HTTP 401)</blockquote>

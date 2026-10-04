@@ -405,3 +405,124 @@ func TestOnlyALongPassIsNews(t *testing.T) {
 		t.Fatalf("a 31 minute pass: %+v, want one quiet milestone", fx.parts)
 	}
 }
+
+// TestANewGeoLite2BuildIsOneQuietMessageAndACheckIsNone: a download is
+// good news, said once and without a sound; a check that finds the same
+// build is no news, and only moves the line's "checked" time.
+func TestANewGeoLite2BuildIsOneQuietMessageAndACheckIsNone(t *testing.T) {
+	p := newPolicy(t)
+	p.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
+	fx := p.note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded, LiveSince: fridayBuild, PrevAt: tuesdayBuild, Bytes: 9871234})
+	if len(fx.parts) != 1 || sounds(fx) != 0 || fx.parts[0].sev != sevOK {
+		t.Fatalf("a new build: %+v, want one quiet good-news push", fx.parts)
+	}
+	if body := stripTags(fx.parts[0].body); !strings.Contains(body, "Country lookup: new build downloaded") || !strings.Contains(body, "replacing Tuesday's build") {
+		t.Errorf("push = %q", body)
+	}
+	fx = p.after(12 * time.Hour).note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Checked, LiveSince: fridayBuild})
+	if len(fx.parts) != 0 {
+		t.Fatalf("a check that found the same build pushed %+v", fx.parts)
+	}
+	if !fx.dirty {
+		t.Error("a check did not mark the board, so its checked time stands still")
+	}
+	if m, text := p.st.line(notify.JobGeoIP, writer{loc: lagos, now: p.now}); m != markOK || text != "Friday's build in use · checked 02:20" {
+		t.Errorf("line = %s %q", m, text)
+	}
+}
+
+// TestARefusedMaxMindKeyIsSaidAtOnceAndOnceAgainADayOn: like any other
+// provider's, a refused key is loud and red at the first check, is not
+// said again by the checks that follow, is reminded a day on, and its
+// end is one quiet message.
+func TestARefusedMaxMindKeyIsSaidAtOnceAndOnceAgainADayOn(t *testing.T) {
+	p := newPolicy(t)
+	key := notify.Event{Job: notify.JobGeoIP, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "MaxMind",
+		LiveSince: fridayBuild, Detail: "geoip: MaxMind refused the license key (HTTP 401)"}
+	key.NextTry = p.now.Add(12 * time.Hour)
+	fx := p.note(key)
+	if len(fx.parts) != 1 || sounds(fx) != 1 || fx.parts[0].sev != sevRed {
+		t.Fatalf("a refused key: %+v, want one loud red push", fx.parts)
+	}
+	if body := stripTags(fx.parts[0].body); !strings.Contains(body, "MaxMind turned down our key") ||
+		!strings.Contains(body, "MAXMIND_LICENSE_KEY and MAXMIND_ACCOUNT_ID under Variables in Railway") {
+		t.Errorf("push = %q", body)
+	}
+	key.NextTry = p.after(12 * time.Hour).now.Add(12 * time.Hour)
+	if fx := p.note(key); len(fx.parts) != 0 {
+		t.Fatalf("the next check said the key again: %+v", fx.parts)
+	}
+	key.NextTry = p.after(12 * time.Hour).now.Add(12 * time.Hour)
+	fx = p.note(key)
+	if len(fx.parts) != 1 || sounds(fx) != 1 || !strings.Contains(stripTags(fx.parts[0].body), "MaxMind key still turned down") {
+		t.Fatalf("a day on: %+v, want the one loud reminder", fx.parts)
+	}
+	fx = p.after(time.Hour).note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Checked, LiveSince: fridayBuild})
+	if len(fx.parts) != 1 || sounds(fx) != 0 || !strings.Contains(stripTags(fx.parts[0].body), "MaxMind key works again") {
+		t.Fatalf("the key back: %+v, want one quiet push", fx.parts)
+	}
+	if len(p.st.Alerts) != 0 {
+		t.Errorf("alerts left open: %v", p.st.Alerts)
+	}
+}
+
+// TestFailingGeoLite2ChecksAreSaidAtTheSecondCheck: a check is one
+// failure, twelve hours apart, so MaxMind being down is said at the
+// second failed check and not before, and the download that ends it says
+// the problem is over.
+func TestFailingGeoLite2ChecksAreSaidAtTheSecondCheck(t *testing.T) {
+	p := newPolicy(t)
+	down := notify.Event{Job: notify.JobGeoIP, Kind: notify.Failed, Cause: notify.ProviderDown, Provider: "MaxMind",
+		Status: 503, LiveSince: fridayBuild, Detail: "geoip: HEAD the database: HTTP 503"}
+	down.NextTry = p.now.Add(12 * time.Hour)
+	if fx := p.note(down); len(fx.parts) != 0 {
+		t.Fatalf("one failed check pushed %+v", fx.parts)
+	}
+	down.NextTry = p.after(12 * time.Hour).now.Add(12 * time.Hour)
+	fx := p.note(down)
+	if len(fx.parts) != 1 || sounds(fx) != 1 || fx.parts[0].sev != sevWarn {
+		t.Fatalf("the second failed check: %+v, want one loud amber push", fx.parts)
+	}
+	if body := stripTags(fx.parts[0].body); !strings.Contains(body, "Country lookup failing since yesterday 14:20") ||
+		!strings.Contains(body, "Readers' countries come from the build already in use") {
+		t.Errorf("push = %q", body)
+	}
+	fx = p.after(12 * time.Hour).note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded,
+		LiveSince: fridayBuild.Add(96 * time.Hour), PrevAt: fridayBuild, Bytes: 9871234})
+	if len(fx.parts) != 1 || sounds(fx) != 0 {
+		t.Fatalf("the download that ended it: %+v, want one quiet push", fx.parts)
+	}
+	if body := stripTags(fx.parts[0].body); !strings.Contains(body, "Country lookup: new build downloaded") || !strings.Contains(body, "The problem lasted 1 day") {
+		t.Errorf("push = %q, want the download with the recovery folded in", body)
+	}
+}
+
+// TestTheCountryLookupIsOffWithoutAKey: the runner names the check only
+// when this process's queue runs it, which takes a MaxMind key and where
+// to watch on, since the queue is where to watch's. The line names both,
+// so it never sends anyone to a key that is already set.
+func TestTheCountryLookupIsOffWithoutAKey(t *testing.T) {
+	p := newPolicy(t)
+	p.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: []string{notify.JobImport, notify.JobColours}})
+	w := writer{loc: lagos, now: p.now}
+	if m, text := p.st.line(notify.JobGeoIP, w); m != markPause || text != "off (no MaxMind key, or where to watch is off)" {
+		t.Errorf("without a key: %s %q", m, text)
+	}
+	p.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
+	if m, text := p.st.line(notify.JobGeoIP, w); m != markWork || text != "waiting for the first download" {
+		t.Errorf("with a key, before a check: %s %q", m, text)
+	}
+}
+
+// TestACheckWithoutABuildDateStillSaysItChecked: a stamp that is not an
+// HTTP date leaves the build's day unknown. The line still says the
+// lookup is up to date and when it was checked, rather than naming no
+// build at all.
+func TestACheckWithoutABuildDateStillSaysItChecked(t *testing.T) {
+	p := newPolicy(t)
+	p.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
+	p.note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Checked})
+	if m, text := p.st.line(notify.JobGeoIP, writer{loc: lagos, now: p.now}); m != markOK || text != "up to date · checked 14:20" {
+		t.Errorf("line = %s %q", m, text)
+	}
+}

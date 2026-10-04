@@ -12,10 +12,18 @@ import (
 var testPlace = place{env: "dev", commit: "d017008c9a4e"}
 
 var allJobs = []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobTMDbPosters, notify.JobTMDbIDs,
-	notify.JobSynopses, notify.JobTrailers, notify.JobPeople}
+	notify.JobSynopses, notify.JobTrailers, notify.JobPeople, notify.JobGeoIP}
+
+// The GeoLite2 builds the boards and pushes name: MaxMind's Tuesday and
+// Friday releases in the week of testNow, at the hours its stamps carry.
+var (
+	tuesdayBuild = time.Date(2026, 9, 22, 13, 2, 11, 0, time.UTC)
+	fridayBuild  = time.Date(2026, 9, 25, 14, 43, 7, 0, time.UTC)
+)
 
 // quietDay is a process that took over this morning, published last
-// night's catalog, and has every job up to date.
+// night's catalog, and has every job up to date, the country lookup on
+// Friday's build.
 func quietDay(t *testing.T) *policy {
 	p := newPolicy(t)
 	p.now = time.Date(2026, 9, 27, 6, 2, 0, 0, lagos)
@@ -36,10 +44,22 @@ func quietDay(t *testing.T) *policy {
 	p.note(notify.Event{Job: notify.JobPeople, Kind: notify.Started, Total: 2140})
 	p.note(notify.Event{Job: notify.JobPeople, Kind: notify.Finished, Done: 1893, None: 247, Took: 7 * time.Minute})
 	p.note(notify.Event{Job: notify.JobColours, Kind: notify.Checked})
+	p.note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Checked, LiveSince: fridayBuild})
 	p.now = testNow
 	p.note(notify.Event{Job: notify.JobImport, Kind: notify.Checked, NextTry: p.now.Add(40 * time.Minute),
 		LiveSince: time.Date(2026, 9, 27, 4, 58, 0, 0, lagos), Films: 757802})
 	return p
+}
+
+// checked is a job's pass that found nothing to do, as the job reports
+// it. The GeoIP check always names the build it found still the newest,
+// so its line reads as the owner will see it.
+func checked(id string) notify.Event {
+	e := notify.Event{Job: id, Kind: notify.Checked}
+	if id == notify.JobGeoIP {
+		e.LiveSince = fridayBuild
+	}
+	return e
 }
 
 func boards(t *testing.T) map[string]*policy {
@@ -71,7 +91,7 @@ func boards(t *testing.T) map[string]*policy {
 	stale := newPolicy(t)
 	stale.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 	for _, id := range allJobs[1:] {
-		stale.note(notify.Event{Job: id, Kind: notify.Checked})
+		stale.note(checked(id))
 	}
 	stale.note(notify.Event{Job: notify.JobImport, Kind: notify.Checked, NextTry: stale.now.Add(40 * time.Minute),
 		LiveSince: stale.now.Add(-(49*time.Hour + 20*time.Minute)), Films: 756598})
@@ -135,7 +155,7 @@ func boards(t *testing.T) map[string]*policy {
 	old := newPolicy(t)
 	old.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 	for _, id := range allJobs[1:] {
-		old.note(notify.Event{Job: id, Kind: notify.Checked})
+		old.note(checked(id))
 	}
 	built := old.now.Add(-(73*time.Hour + 5*time.Minute))
 	gone := notify.Event{Job: notify.JobImport, Kind: notify.Failed, Cause: notify.IMDbDown, Status: 503,
@@ -164,6 +184,32 @@ func boards(t *testing.T) map[string]*policy {
 	keyAndBusy.note(notify.Event{Job: notify.JobPeople, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "TMDb",
 		NextTry: keyAndBusy.now.Add(30 * time.Minute)})
 	out["tmdb-key-refused"] = keyAndBusy
+
+	// The country lookup in each state its line can be in. In use is
+	// quiet-day's; on hold is database-down's.
+	//
+	// Off: no MaxMind key, so the runner does not name the check.
+	off := quietDay(t)
+	off.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs[:len(allJobs)-1]})
+	out["country-lookup-off"] = off
+
+	// Waiting: a deploy with a new key, before its first check reports.
+	waiting := quietDay(t)
+	delete(waiting.st.Jobs, notify.JobGeoIP)
+	waiting.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
+	out["country-lookup-waiting"] = waiting
+
+	// Failing: MaxMind down at this check, Friday's build still in use.
+	geoDown := quietDay(t)
+	geoDown.note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Failed, Cause: notify.ProviderDown, Provider: "MaxMind",
+		Status: 503, Detail: "geoip: HEAD the database: HTTP 503", LiveSince: fridayBuild, NextTry: geoDown.now.Add(12 * time.Hour)})
+	out["country-lookup-failing"] = geoDown
+
+	// The key refused: only a person can fix it.
+	geoKey := quietDay(t)
+	geoKey.note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "MaxMind",
+		Detail: "geoip: MaxMind refused the license key (HTTP 401)", LiveSince: fridayBuild, NextTry: geoKey.now.Add(12 * time.Hour)})
+	out["country-lookup-key-refused"] = geoKey
 
 	// The people sweep's first pass: over a million people at a pace of
 	// its own, counted in people rather than films.

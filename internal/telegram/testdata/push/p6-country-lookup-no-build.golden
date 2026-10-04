@@ -1,0 +1,4 @@
+⚠️ <b>Country lookup failing since 02:20</b>
+Nothing for you to do yet. Next try by tomorrow 02:20.
+MaxMind's download server isn't answering. Until the first GeoLite2 build is downloaded, readers can't be placed in a country, so the site leaves out where to watch.
+<blockquote expandable>Details: geoip: GET the database: dial tcp: lookup download.maxmind.com: no such host</blockquote>

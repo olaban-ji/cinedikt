@@ -1,0 +1,4 @@
+⚠️ <b>Country lookup still failing</b>
+It hasn't fixed itself in a day. <b>To fix:</b> look at the Railway logs.
+Failing since yesterday 02:20 (1 day 12 hr). MaxMind's download server isn't answering (error 503). Readers' countries come from the build already in use; where to watch still works.
+<blockquote expandable>Details: geoip: HEAD the database: HTTP 503</blockquote>

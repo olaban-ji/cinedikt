@@ -93,11 +93,15 @@ type job struct {
 	Bytes     int64     `json:"bytes,omitempty"`
 	PassBegan time.Time `json:"pass_began,omitzero"`
 
-	// The last pass that ended.
+	// The last pass that ended. For the GeoIP check, LastAt is the last
+	// check that went well, and Built is when the build in use was built,
+	// zero for none: what its line names, and what decides whether its
+	// failures leave readers placed.
 	LastAt     time.Time `json:"last_at,omitzero"`
 	LastDone   int64     `json:"last_done,omitempty"`
 	LastNone   int64     `json:"last_none,omitempty"`
 	LastErrors int64     `json:"last_errors,omitempty"`
+	Built      time.Time `json:"built,omitzero"`
 
 	// The current failure streak. Fails counts consecutive failures;
 	// it survives the job starting a new pass and ends only when a pass
@@ -230,6 +234,21 @@ func (s *state) apply(e notify.Event, w writer) effects {
 			}
 			fx.force = true
 		}
+		if e.Job == notify.JobGeoIP {
+			// The same build found again: nothing to say, but the line's
+			// "checked" time moves, which is how it shows the check is
+			// alive.
+			j.LastAt = at
+			if !e.LiveSince.IsZero() {
+				j.Built = e.LiveSince
+			}
+			if j.State == stOff {
+				// The check runs in this process whatever the last one
+				// ran, and may report before this process's takeover,
+				// which then keeps it on.
+				j.State = stStarting
+			}
+		}
 		if j.State == stFailing && j.Cause == notify.AllFailed && at.Before(j.NextTry) {
 			// Nothing that failed has been asked again yet. The OMDb
 			// backfill holds a failed lookup back for a day, so the
@@ -272,6 +291,18 @@ func (s *state) apply(e notify.Event, w writer) effects {
 		}
 		fx.parts = append(fx.parts, w.published(e, fixed))
 		fx.force = true
+
+	case notify.Downloaded:
+		j := s.job(e.Job)
+		clearRunning(j)
+		j.State, j.Since, j.LastAt, j.Built = stIdle, at, at, e.LiveSince
+		rec := s.recover(e.Job, j, w)
+		fixed := ""
+		if rec.announced {
+			fixed = w.fixedSentence(rec.since)
+		}
+		fx.parts = append(fx.parts, w.downloaded(e, fixed))
+		fx.parts = append(fx.parts, rec.parts...)
 
 	case notify.Skipped:
 		j := s.job(notify.JobImport)
@@ -318,6 +349,11 @@ func (s *state) apply(e notify.Event, w writer) effects {
 		j.Cause, j.Provider, j.Status, j.Integrity, j.Detail = e.Cause, e.Provider, e.Status, e.Integrity, e.Detail
 		j.Lookups = e.Errors
 		j.NextTry = e.NextTry
+		if e.Job == notify.JobGeoIP {
+			// Whether the process that failed still has a build to place
+			// readers with, which is what its messages say about them.
+			j.Built = e.LiveSince
+		}
 		if j.Fails == 0 {
 			j.FailSince = at
 		}
@@ -465,7 +501,7 @@ func (s *state) announce(id string, j *job, now time.Time, w writer) []part {
 	s.Alerts[key] = a
 	switch {
 	case j.Cause == notify.KeyRejected:
-		return []part{w.keyRejected(a.Provider, j.Detail)}
+		return []part{w.keyRejected(a.Provider, j)}
 	case id == notify.JobImport:
 		return []part{w.importFailing(j, s.LiveSince)}
 	default:

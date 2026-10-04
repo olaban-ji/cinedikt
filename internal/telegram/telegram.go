@@ -62,6 +62,10 @@ const (
 	// saveWarnEvery keeps a database that is down from filling the log
 	// with the same warning.
 	saveWarnEvery = time.Hour
+	// maxHeld bounds the queue's events kept for a process that does not
+	// hold the jobs yet. The GeoIP check reports once in twelve hours, so
+	// this is days of them.
+	maxHeld = 20
 )
 
 // Config is where to send, and how to write times.
@@ -198,6 +202,9 @@ type Sink struct {
 	heard     []notify.Event
 	savedWarn time.Time
 	pinWarned bool
+	// held is what the queue's jobs said while this process did not hold
+	// the jobs, to be said once it does.
+	held []notify.Event
 }
 
 type attachment struct {
@@ -409,6 +416,11 @@ func (s *Sink) applyAttach(att *attachment) {
 	s.memory = att.memory
 	s.lost = false
 	s.dirty = true
+	held := s.held
+	s.held = nil
+	for _, e := range held {
+		s.handle(e)
+	}
 }
 
 // applyDetach saves what was said one last time and lets go of the
@@ -441,6 +453,22 @@ func (s *Sink) handle(e notify.Event) {
 	if e.At.IsZero() {
 		e.At = s.now()
 	}
+	if s.memory == nil && !s.manual && queued(e.Job) {
+		// The queue runs in every process, so its jobs can report from
+		// one that does not hold the jobs. A new container's queue starts
+		// while the old container still holds them, and its runner takes
+		// them only once that one lets go; the GeoIP check its queue runs
+		// on start, which on a fresh database downloads the first build,
+		// lands in that gap. What they say is kept and said once this
+		// process holds the jobs, by this process alone, since the queue
+		// runs each check in one process. A process that never takes the
+		// jobs lets it go.
+		s.held = append(s.held, e)
+		if len(s.held) > maxHeld {
+			s.held = s.held[1:]
+		}
+		return
+	}
 	w := s.writer()
 	fx := s.st.apply(e, w)
 	if s.manual {
@@ -462,6 +490,10 @@ func (s *Sink) handle(e notify.Event) {
 		s.force = s.force || fx.force
 	}
 }
+
+// queued says whether a job runs on the queue, in whichever process
+// claims it, rather than in the process that holds the jobs.
+func queued(id string) bool { return id == notify.JobGeoIP }
 
 // enqueue turns the parts gathered so far into one message.
 func (s *Sink) enqueue() {

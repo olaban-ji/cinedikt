@@ -35,6 +35,44 @@ const (
 // Only a person can fix it.
 var ErrKey = errors.New("geoip: MaxMind refused the license key")
 
+// DownloadError is MaxMind not answering, or answering with an error that
+// is not about the key. Status is zero when no answer came back at all: a
+// refused connection, a timeout. It is typed so the notifier can tell
+// MaxMind being down, which fixes itself, from a fault in the download.
+// Its text never quotes the address, since the older one carries the
+// license key in its query.
+type DownloadError struct {
+	Method string
+	Status int
+	Err    error
+}
+
+func (e *DownloadError) Error() string {
+	if e.Status != 0 {
+		return fmt.Sprintf("geoip: %s the database: HTTP %d", e.Method, e.Status)
+	}
+	return fmt.Sprintf("geoip: %s the database: %v", e.Method, e.Err)
+}
+
+func (e *DownloadError) Unwrap() error { return e.Err }
+
+// Result is what one check found.
+type Result struct {
+	// Built is MaxMind's stamp for the build in use once the check is
+	// done.
+	Built string
+	// Downloaded is a new build this check fetched, kept and put in use.
+	// Loading the build another process kept is not one: only the check
+	// that kept a build has news about it. Nor is a download that turned
+	// out to be the build already kept.
+	Downloaded bool
+	// Bytes is the downloaded database's size, unpacked.
+	Bytes int
+	// Replaced is the stamp of the kept build the download replaced, or
+	// "" when there was none.
+	Replaced string
+}
+
 // Store is where the database is kept between processes and restarts.
 type Store interface {
 	// GeoIP is the kept database and its stamp, or "" and nil for none.
@@ -71,33 +109,35 @@ type Updater struct {
 // as often as it likes.
 //
 // A download that is not a whole country database is refused, and the
-// database in use stays. updated is whether a new one was put in use.
-func (u *Updater) Check(ctx context.Context) (updated bool, err error) {
+// database in use stays.
+func (u *Updater) Check(ctx context.Context) (Result, error) {
 	kept, err := u.Store.GeoIPStamp(ctx)
 	if err != nil {
-		return false, err
+		return Result{}, err
 	}
 	head, err := u.fetch(ctx, http.MethodHead)
 	if err != nil {
-		return false, err
+		return Result{}, err
 	}
 	_ = head.Body.Close()
 	built := strings.TrimSpace(head.Header.Get("Last-Modified"))
 	if built == "" {
-		return false, errors.New("geoip: MaxMind sent no Last-Modified")
+		return Result{}, errors.New("geoip: MaxMind sent no Last-Modified")
 	}
 	if built == kept {
 		// Nothing new to fetch. This process may still be without the
 		// kept copy, the first time it checks.
 		if u.Lookup.LastModified() != kept {
-			return false, u.LoadStored(ctx)
+			if err := u.LoadStored(ctx); err != nil {
+				return Result{}, err
+			}
 		}
-		return false, nil
+		return Result{Built: kept}, nil
 	}
 
 	resp, err := u.fetch(ctx, http.MethodGet)
 	if err != nil {
-		return false, err
+		return Result{}, err
 	}
 	defer resp.Body.Close()
 	// The file's own stamp, when it has one: a build that landed between
@@ -107,20 +147,23 @@ func (u *Updater) Check(ctx context.Context) (updated bool, err error) {
 	}
 	mmdb, err := extract(io.LimitReader(resp.Body, maxDownload))
 	if err != nil {
-		return false, err
+		return Result{}, err
 	}
 	r, err := open(mmdb)
 	if err != nil {
-		return false, err
+		return Result{}, err
 	}
 	if err := u.Store.KeepGeoIP(ctx, built, mmdb); err != nil {
-		return false, err
+		return Result{}, err
 	}
 	u.Lookup.use(r, built)
 	if u.Logger != nil {
 		u.Logger.Info("downloaded GeoLite2 Country", "built", built, "bytes", len(mmdb))
 	}
-	return true, nil
+	// A GET served the build already kept, by storage still behind on
+	// the release the HEAD saw, has fetched nothing new. It is kept
+	// again, harmlessly, and the next check fetches the newer build.
+	return Result{Built: built, Downloaded: built != kept, Bytes: len(mmdb), Replaced: kept}, nil
 }
 
 // LoadStored puts the kept database in use, without asking MaxMind. It is
@@ -195,7 +238,7 @@ func (u *Updater) fetch(ctx context.Context, method string) (*http.Response, err
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return nil, fmt.Errorf("geoip: %s the database: %w", method, err)
+		return nil, &DownloadError{Method: method, Err: err}
 	}
 	switch {
 	case resp.StatusCode == http.StatusOK:
@@ -205,7 +248,7 @@ func (u *Updater) fetch(ctx context.Context, method string) (*http.Response, err
 		return nil, fmt.Errorf("%w (HTTP %d)", ErrKey, resp.StatusCode)
 	default:
 		resp.Body.Close()
-		return nil, fmt.Errorf("geoip: %s the database: HTTP %d", method, resp.StatusCode)
+		return nil, &DownloadError{Method: method, Status: resp.StatusCode}
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // count is a number a person can read at a glance: 757802 is a log
@@ -135,6 +137,26 @@ func possessive(t, now time.Time, loc *time.Location) string {
 	default:
 		return "the " + t.In(loc).Format("2 Jan")
 	}
+}
+
+// size is a file's size as a person reads it: megabytes to one decimal,
+// the unit a GeoLite2 build comes in, and kilobytes below one megabyte,
+// where "0.0 MB" would read as nothing at all.
+func size(n int64) string {
+	if n < 1<<20 {
+		return count(max(n/1024, 1)) + " KB"
+	}
+	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
+}
+
+// upperFirst starts a fragment with a capital, for a sentence that opens
+// on one: "the 12 Sep" becomes "The 12 Sep".
+func upperFirst(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	if n == 0 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[n:]
 }
 
 // hhmm is the bare clock time.

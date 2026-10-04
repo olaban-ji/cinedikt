@@ -142,3 +142,27 @@ func TestAJobThatWasStoppedSaysNothing(t *testing.T) {
 		t.Fatalf("events = %+v, want one Checked and nothing for the stopped run", got)
 	}
 }
+
+// TestTakingOverNamesTheQueuesJobs: the GeoIP check runs on the queue,
+// not here, and the takeover names it with the runner's own jobs, so the
+// board shows it on; a job left out reads as off there.
+func TestTakingOverNamesTheQueuesJobs(t *testing.T) {
+	for _, queued := range [][]string{nil, {notify.JobGeoIP}} {
+		var sink recordingSink
+		r := &Runner{Store: lazyStore(t), Logger: quietLogger(), Notify: &sink, Queued: queued}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		r.run(ctx, newWakes())
+		took := sink.of(notify.TookOver)
+		if len(took) != 1 {
+			t.Fatalf("queued %v: %d takeovers, want 1", queued, len(took))
+		}
+		named := false
+		for _, id := range took[0].Jobs {
+			named = named || id == notify.JobGeoIP
+		}
+		if named != (len(queued) > 0) {
+			t.Errorf("queued %v: takeover named %v", queued, took[0].Jobs)
+		}
+	}
+}

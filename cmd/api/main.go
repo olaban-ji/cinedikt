@@ -138,12 +138,30 @@ func run(logger *slog.Logger) error {
 		} else {
 			logger.Info("tmdb search fallback is off", "reason", "no TMDB_API_KEY or TMDB_ACCESS_TOKEN")
 		}
+		// The chat the jobs report to, when this process runs them.
+		// Started before the queue, whose GeoIP check reports to it too,
+		// and which may run a check before the runner below has the
+		// lease; the sink keeps what it hears until then. Closed on the
+		// way out, so the last board and anything still queued are sent;
+		// the lease has usually done that already, and then this returns
+		// at once.
+		var sink notify.Sink
+		if cfg.EmbeddedImporter {
+			sink = telegram.Start(ctx, telegram.Config{
+				Token:    cfg.TelegramBotToken,
+				ChatID:   cfg.TelegramChatID,
+				Location: telegram.Zone(cfg.NotifyTimezone, logger),
+				Env:      cfg.RailwayEnvironment,
+				Commit:   cfg.RailwayCommit,
+			}, logger)
+			defer notify.Close(sink, 4*time.Second)
+		}
 		// Where to watch: answered from what is kept, asked of the
 		// Streaming Availability API once per movie and country, and
 		// kept right by the queue. Without its key the route answers 503
 		// and the page leaves the section out.
 		if cfg.StreamingAPIKey != "" {
-			q, err := whereToWatch(ctx, cfg, store, catalogServer, logger)
+			q, err := whereToWatch(ctx, cfg, store, catalogServer, sink, logger)
 			if err != nil {
 				// The rest of the app does not depend on it. A map with no
 				// where-to-watch section is better than no map.
@@ -189,18 +207,6 @@ func run(logger *slog.Logger) error {
 		// importer — the attempt is held under an advisory lock, and
 		// whoever loses it exits.
 		if cfg.EmbeddedImporter {
-			// The chat the jobs report to. Closed on the way out, so
-			// the last board and anything still queued are sent; the
-			// lease has usually done that already, and then this
-			// returns at once.
-			sink := telegram.Start(ctx, telegram.Config{
-				Token:    cfg.TelegramBotToken,
-				ChatID:   cfg.TelegramChatID,
-				Location: telegram.Zone(cfg.NotifyTimezone, logger),
-				Env:      cfg.RailwayEnvironment,
-				Commit:   cfg.RailwayCommit,
-			}, logger)
-			defer notify.Close(sink, 4*time.Second)
 			// Its own pool, not the one serving requests. A bulk load
 			// and a two-hour poster drain must not sit on the ten
 			// connections a search is waiting for.
@@ -227,6 +233,9 @@ func run(logger *slog.Logger) error {
 				PeopleSweepMinVotes:  cfg.PeopleSweepMinVotes,
 				PeopleSweepRate:      cfg.PeopleSweepRate,
 				Notify:               sink,
+				// The queue's jobs that report to the same sink, so the
+				// board counts them as running here.
+				Queued: queue.Jobs(),
 			}).Start(ctx); err != nil {
 				return err
 			}
@@ -300,9 +309,10 @@ func run(logger *slog.Logger) error {
 // whereToWatch builds the where-to-watch service, places readers with
 // GeoLite2 when there is a MaxMind license key, and starts the queue that
 // keeps answers right from the changes feed, refreshes them, and keeps
-// the GeoLite2 database current. The service is handed to the catalog
-// server only once all of that works.
-func whereToWatch(ctx context.Context, cfg config.Config, store *catalog.Store, cs *api.CatalogServer, logger *slog.Logger) (*catalog.Queue, error) {
+// the GeoLite2 database current, telling sink how each GeoLite2 check
+// ended. The service is handed to the catalog server only once all of
+// that works.
+func whereToWatch(ctx context.Context, cfg config.Config, store *catalog.Store, cs *api.CatalogServer, sink notify.Sink, logger *slog.Logger) (*catalog.Queue, error) {
 	watch := &catalog.WhereToWatch{
 		Store:           store,
 		API:             streaming.New(cfg.StreamingAPIKey, streaming.WithRate(cfg.StreamingRatePerSecond)),
@@ -339,6 +349,7 @@ func whereToWatch(ctx context.Context, cfg config.Config, store *catalog.Store, 
 		Logger:       logger.With("component", "queue"),
 		WhereToWatch: watch,
 		GeoIP:        updater,
+		Notify:       sink,
 	})
 	if err != nil {
 		return nil, err

@@ -38,6 +38,11 @@ const (
 	Stale Kind = "stale"
 	// TookOver is this process becoming the one that runs the jobs.
 	TookOver Kind = "took_over"
+	// Downloaded is a new build of a file the service keeps, fetched,
+	// checked and put in use: GeoLite2, for JobGeoIP. Only the check that
+	// kept the build says so; a process that loads it afterwards does
+	// not, so each build is news once.
+	Downloaded Kind = "downloaded"
 )
 
 // The jobs the catalog runs, and the two things that are not jobs but
@@ -54,8 +59,12 @@ const (
 	JobTrailers    = "trailers"
 	JobPeople      = "people"
 	JobColours     = "colours"
-	JobSystem      = "system"
-	JobDatabase    = "database"
+	// JobGeoIP is the GeoLite2 check. Unlike the jobs above it runs on
+	// the queue, in whichever process claims it, so it can report from a
+	// process that does not hold the lease.
+	JobGeoIP    = "geoip"
+	JobSystem   = "system"
+	JobDatabase = "database"
 )
 
 // Cause is why a job failed, paused or skipped, as one of the few kinds
@@ -73,6 +82,10 @@ const (
 	DailyLimit    Cause = "daily_limit"
 	KeyRejected   Cause = "key_rejected"
 	AllFailed     Cause = "all_failed"
+	// ProviderDown is a service a job downloads from not answering, or
+	// answering with a server error: MaxMind, for the GeoIP check.
+	// Status is its answer, zero when none came back.
+	ProviderDown Cause = "provider_down"
 	// Locked is an import that did not run because another one held
 	// the import lock. Only a Checked event carries it.
 	Locked  Cause = "locked"
@@ -103,7 +116,7 @@ type Event struct {
 	// Progress. Share is capped at 0.99 so a running pass never reads
 	// as finished; ETA stays zero until there is enough behind it to
 	// trust. Bytes is set instead of Share when a download's length is
-	// not known.
+	// not known. On Downloaded, Bytes is the size of the build.
 	Share float64
 	ETA   time.Time
 	Bytes int64
@@ -116,7 +129,8 @@ type Event struct {
 	File, Files int
 	Noun        string
 
-	// Published. Took is also set on Finished.
+	// Published. Took is also set on Finished. On Downloaded, PrevAt is
+	// when the build it replaced was built, and zero for the first.
 	Films, People, PrevFilms int64
 	PrevAt                   time.Time
 	Took                     time.Duration
@@ -130,8 +144,9 @@ type Event struct {
 	Detail    string
 
 	// NextTry is when the job will look again. LiveSince is when the
-	// catalog that is live now was built. Since is the first failed
-	// connection, for JobDatabase.
+	// catalog that is live now was built, or for JobGeoIP, when the
+	// GeoLite2 build in use was built, zero for none. Since is the first
+	// failed connection, for JobDatabase.
 	NextTry, LiveSince, Since time.Time
 
 	// Jobs is, on TookOver, every job this process runs. Anything left

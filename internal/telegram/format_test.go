@@ -117,6 +117,19 @@ func TestCutCountsRunesAndStaysValidUTF8(t *testing.T) {
 	}
 }
 
+func TestSizeAndUpperFirst(t *testing.T) {
+	for n, want := range map[int64]string{512: "1 KB", 800 << 10: "800 KB", 1 << 20: "1.0 MB", 9871234: "9.4 MB"} {
+		if got := size(n); got != want {
+			t.Errorf("size(%d) = %q, want %q", n, got, want)
+		}
+	}
+	for s, want := range map[string]string{"the 12 Sep": "The 12 Sep", "": ""} {
+		if got := upperFirst(s); got != want {
+			t.Errorf("upperFirst(%q) = %q, want %q", s, got, want)
+		}
+	}
+}
+
 func TestDetailIsEscapedAndRedacted(t *testing.T) {
 	w := writer{loc: lagos, now: testNow, token: "123:secret"}
 	p := w.push(sevWarn, true, "Posters failing since 12:00", `omdb: GET tt0133093: <html> & "quotes"`, "")

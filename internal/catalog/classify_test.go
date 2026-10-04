@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"cinedikt/internal/geoip"
 	"cinedikt/internal/notify"
 	"cinedikt/internal/omdb"
 	"cinedikt/internal/tmdb"
@@ -43,6 +44,11 @@ func TestClassifyNamesEveryKnownCause(t *testing.T) {
 		{"other sql", fmt.Errorf("catalog: x: %w", &pgconn.PgError{Code: "42P01"}), notify.Unknown, "", 0, 0},
 		{"mismatch", &IntegrityError{Share: 0.9731, Want: 0.99}, notify.FilesMismatch, "IMDb", 0, 0.9731},
 		{"empty load", &IntegrityError{Want: 0.99, Reason: "no titles loaded"}, notify.FilesMismatch, "IMDb", 0, 0},
+		{"maxmind key", fmt.Errorf("%w (HTTP 401)", geoip.ErrKey), notify.KeyRejected, "MaxMind", 0, 0},
+		{"maxmind 503", &geoip.DownloadError{Method: "HEAD", Status: 503}, notify.ProviderDown, "MaxMind", 503, 0},
+		{"maxmind 429", &geoip.DownloadError{Method: "GET", Status: 429}, notify.ProviderDown, "MaxMind", 429, 0},
+		{"maxmind unreachable", &geoip.DownloadError{Method: "HEAD", Err: refused}, notify.ProviderDown, "MaxMind", 0, 0},
+		{"maxmind 404", &geoip.DownloadError{Method: "GET", Status: 404}, notify.Unknown, "MaxMind", 404, 0},
 		{"anything else", errors.New("catalog: title.basics has no Last-Modified"), notify.Unknown, "", 0, 0},
 	} {
 		cause, provider, status, integrity := classify(c.err)

@@ -69,6 +69,10 @@ var jobList = []jobInfo{
 	{notify.JobTrailers, "Trailers", "Trailers", "no TMDb key"},
 	{notify.JobPeople, "People photos", "People photos", "no TMDb key"},
 	{notify.JobColours, "Opening colours", "Opening colours", ""},
+	// The check runs on where to watch's queue, so it is off with a
+	// MaxMind key set when where to watch is: no STREAMING_API_KEY, or a
+	// queue that would not start.
+	{notify.JobGeoIP, "Country lookup", "Country lookup", "no MaxMind key, or where to watch is off"},
 }
 
 func info(id string) jobInfo {
@@ -203,6 +207,11 @@ func causeSentence(f failure) string {
 		return fmt.Sprintf("All %s lookups to %s failed.", count(f.lookups), esc(provider(f.provider)))
 	case notify.KeyRejected:
 		return esc(provider(f.provider)) + " turned down our key."
+	case notify.ProviderDown:
+		if f.status != 0 {
+			return fmt.Sprintf("%s's download server isn't answering (error %d).", esc(provider(f.provider)), f.status)
+		}
+		return esc(provider(f.provider)) + "'s download server isn't answering."
 	default:
 		return "The error isn't one the app recognises, so it may need a code fix."
 	}
@@ -224,6 +233,11 @@ func shortCause(f failure) string {
 		return "IMDb files don't match yet"
 	case notify.KeyRejected:
 		return provider(f.provider) + " turned down our key"
+	case notify.ProviderDown:
+		if f.status != 0 {
+			return fmt.Sprintf("%s not answering (%d)", provider(f.provider), f.status)
+		}
+		return provider(f.provider) + " not answering"
 	case notify.AllFailed:
 		if f.provider == imageHosts {
 			return "poster images not loading"
@@ -250,8 +264,10 @@ func (w writer) siteSentence(liveSince time.Time) string {
 	return "The site is fine and still shows " + w.day(liveSince) + " catalog."
 }
 
-// impactSentence is the same for a background job.
-func impactSentence(id string) string {
+// impactSentence is the same for a background job. j is the job, for
+// the one sentence that turns on its state: whether the country lookup
+// has a build to place readers with. It may be nil.
+func impactSentence(id string, j *job) string {
 	switch id {
 	case notify.JobPosters:
 		return "No new posters are being saved; the site still works."
@@ -267,24 +283,39 @@ func impactSentence(id string) string {
 		return "People without a photo stay without one for now; the site still works."
 	case notify.JobColours:
 		return "New films on the opening screen show without their placeholder colour; nothing else is affected."
+	case notify.JobGeoIP:
+		if j == nil || j.Built.IsZero() {
+			return "Until the first GeoLite2 build is downloaded, readers can't be placed in a country, so the site leaves out where to watch."
+		}
+		return "Readers' countries come from the build already in use; where to watch still works."
 	default:
 		return ""
 	}
 }
 
 // keyVar is the variable to check when a provider refuses the key.
+// MaxMind's permalink takes the account id with the key, so a key that
+// is right under the wrong account is refused too.
 func keyVar(p string) string {
-	if p == "TMDb" {
+	switch p {
+	case "TMDb":
 		return "TMDB_ACCESS_TOKEN (or TMDB_API_KEY)"
+	case "MaxMind":
+		return "MAXMIND_LICENSE_KEY and MAXMIND_ACCOUNT_ID"
 	}
 	return "OMDB_API_KEY"
 }
 
 // keyImpact is what a refused key has stopped, and what the site shows
-// meanwhile, so "stopped" is not read as pictures vanishing.
-func keyImpact(p string) string {
-	if p == "TMDb" {
+// meanwhile, so "stopped" is not read as pictures vanishing. j is a job
+// on the key, for the country lookup's sentence about its build. It may
+// be nil.
+func keyImpact(p string, j *job) string {
+	switch p {
+	case "TMDb":
 		return "Backup posters, search matching, trailers and people photos have stopped. Films OMDb has no poster for stay blank until this is fixed."
+	case "MaxMind":
+		return "Checks for new GeoLite2 builds have stopped. " + impactSentence(notify.JobGeoIP, j)
 	}
 	return "Poster and synopsis lookups have stopped. Posters already saved still show; new films will have none until this is fixed."
 }
@@ -435,9 +466,9 @@ func (w writer) jobFailing(id string, j *job) part {
 	if f.cause == notify.Unknown {
 		return w.push(sevRed, loudFor(id), in.failing+" failing: unexpected error", j.Detail,
 			w.unexpectedAction(j.Detail, " Next try by ", j.NextTry),
-			unexpectedSentence(j.Fails)+" "+impactSentence(id))
+			unexpectedSentence(j.Fails)+" "+impactSentence(id, j))
 	}
-	why := causeSentence(f) + " " + impactSentence(id)
+	why := causeSentence(f) + " " + impactSentence(id, j)
 	if f.cause == notify.DatabaseBusy {
 		why += " If it lasts, check the database's load in Railway."
 	}
@@ -445,12 +476,14 @@ func (w writer) jobFailing(id string, j *job) part {
 		"Nothing for you to do yet."+w.nextTry(" Next try by ", j.NextTry, "."), why)
 }
 
-// P7: a provider refused the key. Nothing fixes that but a person.
-func (w writer) keyRejected(p, detail string) part {
-	return w.push(sevRed, true, p+" turned down our key", detail, keyAction(p), keyImpact(p))
+// P7: a provider refused the key. Nothing fixes that but a person. j is
+// the job that met the refusal, for its details and its build.
+func (w writer) keyRejected(p string, j *job) part {
+	return w.push(sevRed, true, p+" turned down our key", j.Detail, keyAction(p), keyImpact(p, j))
 }
 
-// fixedSentence is how a recovery reads, inside P8 or folded into P10.
+// fixedSentence is how a recovery reads, inside P8 or folded into P10
+// or P12.
 // It names no subject, so it reads the same under any headline.
 func (w writer) fixedSentence(since time.Time) string {
 	return "The problem lasted " + human(w.now.Sub(since)) + " (" + w.when(since) + " to " + w.when(w.now) + ")."
@@ -472,8 +505,11 @@ func (w writer) workingAgain(id string, since time.Time, liveSince time.Time, vi
 // P8, for a key every job that uses it has stopped failing on.
 func (w writer) keyBack(p string, since time.Time) part {
 	back := "Poster lookups are running again."
-	if p == "TMDb" {
+	switch p {
+	case "TMDb":
 		back = "Backup posters, search matching, trailers and people photos are running again."
+	case "MaxMind":
+		back = "Checks for new GeoLite2 builds are running again."
 	}
 	return w.push(sevOK, false, p+" key works again", "", "",
 		"It was turned down from "+w.when(since)+" to "+w.when(w.now)+" ("+human(w.now.Sub(since))+"). "+back)
@@ -495,14 +531,14 @@ func (w writer) reminder(a *alert, id string, j *job) part {
 			detail = j.Detail
 		}
 		return w.push(sevRed, true, p+" key still turned down", detail, keyAction(p),
-			"Turned down since "+lasted+". "+keyImpact(p))
+			"Turned down since "+lasted+". "+keyImpact(p, j))
 	}
 	if j == nil {
 		return part{}
 	}
 	f := j.failure()
 	in := info(id)
-	why := "Failing since " + lasted + ". " + causeSentence(f) + " " + impactSentence(id)
+	why := "Failing since " + lasted + ". " + causeSentence(f) + " " + impactSentence(id, j)
 	if f.cause == notify.Unknown {
 		return w.push(sevRed, loudFor(id), in.failing+" still failing", j.Detail,
 			w.unexpectedAction(j.Detail, " Next try by ", j.NextTry), why)
@@ -646,6 +682,34 @@ func (w writer) manual(events []notify.Event) (part, bool) {
 		body += " OMDb's daily limit was reached; the rest will be filled in later."
 	}
 	return w.push(sevOK, false, "Manual poster fill done", "", "", body), true
+}
+
+// P12: a new GeoLite2 build was downloaded, checked and is in use. The
+// first one a database ever had says so, which is the difference between
+// "readers can be placed now" and "as usual". fixed, when set, is the
+// recovery sentence of an announced failure this download ended.
+func (w writer) downloaded(e notify.Event, fixed string) part {
+	build := "A new GeoLite2 build"
+	if !e.LiveSince.IsZero() {
+		build = upperFirst(w.day(e.LiveSince)) + " GeoLite2 build"
+	}
+	if e.Bytes > 0 {
+		build += " (" + size(e.Bytes) + ")"
+	}
+	head := "Country lookup: new build downloaded"
+	body := build + " is in use now"
+	switch {
+	case e.PrevAt.IsZero():
+		head = "Country lookup: first build downloaded"
+		body += ", so where to watch can tell which country each reader is in."
+	case !e.LiveSince.IsZero() && dayGap(e.PrevAt, e.LiveSince, w.loc) == 0:
+		// MaxMind put out two builds in a day. Naming the same day twice
+		// would read as the build replacing itself.
+		body += ", replacing an earlier build from the same day."
+	default:
+		body += ", replacing " + w.day(e.PrevAt) + " build."
+	}
+	return w.push(sevOK, false, head, "", "", body, fixed)
 }
 
 // message is what goes out for a batch of parts: the most urgent
