@@ -563,35 +563,6 @@ func TestRemovedEndpointsAreGone(t *testing.T) {
 	}
 }
 
-func TestAnalyticsConfig(t *testing.T) {
-	reader := &fakeReader{crawled: map[int]bool{}}
-	server := NewWithLimits(reader, &fakeExpander{reader: reader}, fakeSearcher{}, testLimits(), discardLogger())
-	server.WithAnalytics(AnalyticsConfig{Token: "phc_test", Host: "https://us.i.posthog.com", MixpanelToken: "mp_test"})
-	srv := httptest.NewServer(server.Handler())
-	t.Cleanup(srv.Close)
-
-	status, body := do(t, http.MethodGet, srv.URL+"/analytics-config")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d", status)
-	}
-	if body["token"] != "phc_test" || body["host"] != "https://us.i.posthog.com" || body["mixpanel_token"] != "mp_test" {
-		t.Errorf("body = %v", body)
-	}
-}
-
-func TestAnalyticsConfigLeavesOutAnUnsetMixpanelToken(t *testing.T) {
-	reader := &fakeReader{crawled: map[int]bool{}}
-	server := NewWithLimits(reader, &fakeExpander{reader: reader}, fakeSearcher{}, testLimits(), discardLogger())
-	server.WithAnalytics(AnalyticsConfig{Token: "phc_test", Host: "https://us.i.posthog.com"})
-	srv := httptest.NewServer(server.Handler())
-	t.Cleanup(srv.Close)
-
-	_, body := do(t, http.MethodGet, srv.URL+"/analytics-config")
-	if _, ok := body["mixpanel_token"]; ok {
-		t.Errorf("mixpanel_token is in the config with no token set: %v", body)
-	}
-}
-
 func waitFor(t *testing.T, limit time.Duration, done func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(limit)

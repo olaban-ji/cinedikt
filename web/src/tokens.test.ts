@@ -11,7 +11,7 @@ const DARK: Record<string, string> = {
   '--t': 'oklch(0.965 0.008 80)',
   '--t2': 'oklch(0.78 0.012 70)',
   '--t3': 'oklch(0.63 0.012 70)',
-  // The opening screen's footer: TMDB's logo, in white here.
+  // The About page's TMDB logo, in white here.
   '--tmdb': '#ffffff',
   '--ln': 'oklch(0.95 0.01 80 / 0.05)',
   '--ln2': 'oklch(0.95 0.01 80 / 0.08)',

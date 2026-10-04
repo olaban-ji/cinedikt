@@ -165,6 +165,13 @@ export function returnTileDelay(i: number): number {
   return RETURN_TILE_DELAY_MS + i * RETURN_TILE_STEP_MS;
 }
 
+/** The About page arriving: its intro, its credits and its footer each
+ *  fade up into place on the settle curve, one step behind the one
+ *  before. */
+export const ABOUT_IN_MS = 520;
+export const ABOUT_STEP_MS = 80;
+export const ABOUT_RISE_PX = 8;
+
 /** When each part of the opening happens, for a list that arrived at
  *  `listAt`. `fast` means none of it does. */
 export interface OpeningPlan {

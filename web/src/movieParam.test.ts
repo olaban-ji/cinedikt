@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ABOUT_PATH,
   filmHref,
   filmPath,
+  isAboutPath,
   movieIdFrom,
   movieIdFromPath,
   movieIdFromState,
   HOME_TITLE,
   pageTitle,
+  routeAt,
   routeFrom,
   slugify,
 } from './movieParam';
@@ -71,6 +74,40 @@ describe('movieIdFromPath', () => {
   });
 });
 
+describe('isAboutPath', () => {
+  it('is the About page at /about and /about/, and only there', () => {
+    expect(ABOUT_PATH).toBe('/about');
+    expect(isAboutPath('/about')).toBe(true);
+    expect(isAboutPath('/about/')).toBe(true);
+  });
+
+  it('is not anything else', () => {
+    for (const path of ['/', '', '/about/team', '/about//', '/aboutus', '/About', '/movie/tt0133093', '/x/about']) {
+      expect(isAboutPath(path), path).toBe(false);
+    }
+  });
+
+  it('is not a movie route either', () => {
+    expect(movieIdFromPath('/about')).toBeNull();
+    expect(routeFrom('https://x.test/about')).toEqual({ movieId: null, path: '/about' });
+  });
+});
+
+describe('routeAt', () => {
+  it('reads one of the three routes from a path', () => {
+    expect(routeAt('/')).toEqual({ movieId: null, about: false });
+    expect(routeAt('/about')).toEqual({ movieId: null, about: true });
+    expect(routeAt('/about/')).toEqual({ movieId: null, about: true });
+    expect(routeAt('/movie/tt0133093-the-matrix')).toEqual({ movieId: 'tt0133093', about: false });
+  });
+
+  it('takes anything else for the opening screen', () => {
+    for (const path of ['/about/team', '/movie/nope', '/film/tt0133093', '']) {
+      expect(routeAt(path), path).toEqual({ movieId: null, about: false });
+    }
+  });
+});
+
 describe('routeFrom', () => {
   it('keeps a movie route as it is', () => {
     expect(routeFrom('https://x.test/movie/tt0133093-the-matrix')).toEqual({
@@ -107,6 +144,15 @@ describe('pageTitle', () => {
     expect(pageTitle('')).toBe(HOME_TITLE);
     // A title that is only spaces would leave the tab reading " — everything…".
     expect(pageTitle('   ')).toBe(HOME_TITLE);
+  });
+
+  it('is About · Cinedikt on the About page', () => {
+    expect(pageTitle(undefined, true)).toBe('About · Cinedikt');
+    // Whatever map was last open: the About page names itself.
+    expect(pageTitle('The Matrix', true)).toBe('About · Cinedikt');
+    expect(pageTitle('The Matrix', false)).toBe(
+      'The Matrix — everything its cast and directors made · Cinedikt',
+    );
   });
 
   it('matches the tagline the page is served with', () => {

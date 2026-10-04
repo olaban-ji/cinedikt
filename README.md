@@ -19,7 +19,7 @@ An older map, crawled from TMDb into Neo4j, is still in the tree. Nothing uses i
 
 ## What you see
 
-The page title is **Cinedikt — a movie’s cast and directors, and everything they made**. A map's tab is `{title} — everything its cast and directors made · Cinedikt`.
+The page title is **Cinedikt — a movie’s cast and directors, and everything they made**. A map's tab is `{title} — everything its cast and directors made · Cinedikt`, and the About page's is **About · Cinedikt**.
 
 ### Opening
 
@@ -28,6 +28,12 @@ The page title is **Cinedikt — a movie’s cast and directors, and everything 
 The mark draws itself, then glides into the wordmark, unless the reader prefers reduced motion. Each tile is filled with the poster's average colour (`#rrggbb`) while the picture is still arriving, so a film shows its own colour before it shows itself. Until the server has worked that colour out, the client paints one derived from the title.
 
 If the suggestions cannot be loaded, the screen says so and leaves the search.
+
+The theme choice sits under the tiles, and under that, on one row, **About** and **hello@cinedikt.com**. The credits the data's sources ask for are on the About page, not here.
+
+### About
+
+`/about` (or `/about/`) says what Cinedikt is, then credits each source of its data with the notice it asks for, word for word: IMDb, OMDb, TMDB (its logo, smaller than Cinedikt's mark, white in the dark theme and in its own gradient in the light one), the Streaming Availability API by Movie of the Night, and MaxMind's GeoLite. Each source links to its site, and OMDb's notice to its CC BY-NC 4.0 licence, in a new tab. The opening screen's **About** link pushes it as a new history entry; a click with a modifier key is left to the browser. The header is whole from the first paint, as on a map, and the search works as on the opening screen: while the picked movie's map loads, the page dims behind the progress line. The intro, the credits and the footer fade up in turn, unless the reader prefers reduced motion.
 
 ### Search
 
@@ -103,13 +109,13 @@ The theme is separate, under `cinedikt.theme`: System, Light, or Dark. It is app
 
 ### Getting around
 
-Back, in the header, is the browser's own back. It is there on a map that has somewhere to go back to: not on the opening screen, and not on a map opened straight from a link. The wordmark goes home and clears the movie, keeping any query string and hash. The stack records a depth, so back from a film you remapped into returns you to the map you remapped from, filters and all.
+Back, in the header, is the browser's own back. It is there on a map or the About page that has somewhere to go back to: not on the opening screen, and not on a map or an About page opened straight from a link. The wordmark goes home, from a map or the About page, keeping any query string and hash. The stack records a depth, so back from a film you remapped into returns you to the map you remapped from, filters and all.
 
 On a phone, and on a short landscape phone, the header overlays the map as glass and hides as you scroll down past the first 80px. Scrolling back up, or coming within 40px of the top, brings it back. It never hides for a scroll the app makes itself — centring a new map, Recenter, rows closing up — and it stays put while the map is loading, while the sheet or the View panel is open, and while the search is focused.
 
 ### Sharing
 
-Every map has an address, so it can be shared. The API serves `index.html` for any path it does not have a file for, and rewrites the tags a scraper reads when the path is a movie: the title, the description (**See every movie {title}’s cast and directors made, arranged by year and rating.**), the canonical URL with the current slug, and a 1200×630 PNG of that film's poster beside its title. The card is drawn in Go, in the fonts the page uses, and it is dark in both themes — it appears in somebody else's chat window, where the app's theme means nothing. The lookup is given 300ms. Not knowing the film, or being too slow, leaves the generic tags alone.
+Every map has an address, so it can be shared. The API serves `index.html` for any path it does not have a file for. At `/about` it names the page **About · Cinedikt**, in the title and `og:title`, with `og:url` the canonical `/about`, and keeps the site's own description and card. It rewrites the tags a scraper reads when the path is a movie: the title, the description (**See every movie {title}’s cast and directors made, arranged by year and rating.**), the canonical URL with the current slug, and a 1200×630 PNG of that film's poster beside its title. The card is drawn in Go, in the fonts the page uses, and it is dark in both themes — it appears in somebody else's chat window, where the app's theme means nothing. The lookup is given 300ms. Not knowing the film, or being too slow, leaves the generic tags alone.
 
 The picture lives at `/og/movie/{tconst}.png?v={stamp}`. The stamp changes when the poster, the title, or the template does, which is how an unfurler that caches by address ever sees a new one. Rendered cards are stored in `meta.og_images`. As a map opens, the client fetches that address (unless the reader has asked for reduced data), so the picture exists before anyone copies the link.
 
@@ -386,7 +392,6 @@ Catalog routes, as the process sees them. In the browser they are the same paths
 | Route | What it does |
 | --- | --- |
 | `GET /healthz` | Pings Postgres and answers 503 if it cannot. `{"status":"ok","postgres":"ok"}` when it can. A stale catalog still passes |
-| `GET /analytics-config` | `{"token","host"}`. Both empty unless `APP_ENV=production` |
 | `GET /search/movies?q=matrix` | Up to ten movies. `q` must be at least two characters, or 400. 503 while the catalog has never been published. Body is `{"results":[{id,title,year,poster?,c?}]}` |
 | `GET /` | The cold screen. One film per era that has a live poster, a different set each visit. A database error here is an empty list and a log line, not an error page: an empty opening is better than a failure on the way in |
 | `GET /grid/{tconst}` | The whole map: anchor, people, spine, the genres legend, and `og_v`. The people on it with no photo answer, or one that has come due, are queued for the people job. 400 if the id is not `tt` plus digits. 404 if the catalog has no such title, or the title has nobody billed. 503 if the catalog is not published yet |
@@ -467,7 +472,8 @@ React 19 and TypeScript, bundled with Vite 6. There is no router and no state li
 | `trail.ts` | Which filters belong to this history entry, and which preferences belong to the reader |
 | `api.ts` | `/api` client. Sends PostHog's distinct id and session id once analytics is up. `fetchTrailer` asks `/api/trailers/{id}` once per film and keeps the answer for the visit. A pending answer is asked again after about 1.5, 3, 5 and 6 seconds while the panel or preview is still open, and is never kept. `fetchPeoplePhotos` asks `/api/people/photos` about the people a map came without photos for, fifty at a time, asks again about the pending ones on the same schedule until none are or the caller goes, and keeps each photo, or its "none", for the visit. A pending answer or a failure is left out and never kept |
 | `whereToWatch.ts` | `useWhereToWatch(imdbId)` asks `/api/where-to-watch/{id}`, at most once at a time per movie, and keeps the answer for the visit. A failure stands for two seconds, so a preview opening just after the ask made as the pointer came to rest does not ask again, and a later open does. The preview's request starts when the pointer begins resting on a card, so the answer is usually in by the time the preview opens |
-| `movieParam.ts` | `/movie/{tconst}-{slug}`, the tab title, the slug rules the server's `og:url` is kept in step with |
+| `movieParam.ts` | `/movie/{tconst}-{slug}`, `/about`, the tab title, the slug rules the server's `og:url` is kept in step with |
+| `AboutPage.tsx` | The About page: what Cinedikt is, and each source's credit and notice |
 | `firstRun.ts` | How many cold-screen tiles fit |
 | `PeopleChips.tsx`, `GridSheet.tsx`, `ViewPanel.tsx` | The chip row, the film sheet, the View panel |
 | `poster.ts`, `PosterImage.tsx` | Resize Amazon and TMDb poster URLs, retry a miss, ask `/api/posters/{id}` for a stand-in |
@@ -475,7 +481,7 @@ React 19 and TypeScript, bundled with Vite 6. There is no router and no state li
 | `screen.ts` | The screen classes — phone below 640px, short (under 500px tall), tablet below 1024px, desktop — and touch sizing. Below 1024px the rating rungs move into the panel. `grid.css` names the same classes as media queries |
 | `overHeader.ts` | The overlay header, and when it hides on scroll |
 | `sheet.ts` | Enter, exit, drag-to-close, focus trap |
-| `analytics.ts` | PostHog, in its own chunk. Loopback never initialises |
+| `analytics.ts` | PostHog and Mixpanel, each in its own chunk, set up from the `cinedikt-analytics` tag the server writes into the page. No tag, and neither loads and nothing is fetched. Loopback never initialises |
 
 `web/src/api.ts` still has a client for `GET /movies/{id}/pathways`. The grid does not call it. It belongs to the crawling map.
 
@@ -483,7 +489,7 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 
 ## Configuration
 
-`APP_ENV` is `development` (the default) or `production`. Only production reports to PostHog, and only with `ANALYTICS_ENABLED=true`. Nothing infers the environment from a hostname or a log level: a production deploy that happens to reach its database over localhost would otherwise go quiet. `dev` and `prod` are accepted. Anything else is a startup error. The Docker image sets `APP_ENV=production` itself.
+`APP_ENV` is `development` (the default) or `production`. Only production reports to PostHog, and only with `ANALYTICS_ENABLED=true`. Then, and only then, the server writes the trackers' tokens into the page it serves, as a `<meta name="cinedikt-analytics">` tag at the end of the head; otherwise the page has no tag, loads neither tracker, and fetches nothing to find out. Nothing infers the environment from a hostname or a log level: a production deploy that happens to reach its database over localhost would otherwise go quiet. `dev` and `prod` are accepted. Anything else is a startup error. The Docker image sets `APP_ENV=production` itself.
 
 `API_ADDR` wins over `PORT`. Unset, with no `PORT`, the process listens on `:8080`. `LOG_LEVEL=debug` turns on debug logs.
 
@@ -515,8 +521,8 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 | `NOTIFY_TIMEZONE` | UTC | The zone notification times are written in, such as `Africa/Lagos`. Unset or unknown, they are UTC and the board says so |
 | `WEB_DIR` | | Built frontend. The image sets `/app/web/dist` |
 | `ANALYTICS_ENABLED` | off | The switch for every tracker: PostHog and Mixpanel in the page, and PostHog's error reports from the server. Off unless `true`, whatever tokens are set, so they can stay in place while nothing is tracked |
-| `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | host `https://us.i.posthog.com` | Read only in production, and only with `ANALYTICS_ENABLED=true`. The API serves them to the page; the token is a write-only key. The page may instead be built with `VITE_POSTHOG_PROJECT_TOKEN` and `VITE_POSTHOG_HOST` |
-| `MIXPANEL_PROJECT_TOKEN` | | Read only in production, and only with `ANALYTICS_ENABLED=true`. The API serves it to the page, which then loads Mixpanel with autocapture and session recording (text and inputs masked); unset, the page never loads it. The page may instead be built with `VITE_MIXPANEL_PROJECT_TOKEN` |
+| `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | host `https://us.i.posthog.com` | Read only in production, and only with `ANALYTICS_ENABLED=true`. The server writes them into the page it serves, so nothing is fetched for them; the token is a write-only key. The page may instead be built with `VITE_POSTHOG_PROJECT_TOKEN` and `VITE_POSTHOG_HOST` |
+| `MIXPANEL_PROJECT_TOKEN` | | Read only in production, and only with `ANALYTICS_ENABLED=true`. The server writes it into the page it serves, which then loads Mixpanel with autocapture and session recording (text and inputs masked); unset, the page never loads it. The page may instead be built with `VITE_MIXPANEL_PROJECT_TOKEN` |
 | `NEO4J_*`, `CRAWL_THRESHOLD_BASE`, `CRAWL_ORDER_PENALTY`, `MAX_COLD_CRAWLS` | | The old map. Ignored while `DATABASE_URL` is set |
 
 If `DATABASE_URL` is empty, startup requires a TMDb credential and `NEO4J_PASSWORD`. A deployment with nothing but a database URL starts.
@@ -533,15 +539,19 @@ A one-off `cmd/importer -once` or `-posters-only` sends one quiet summary when i
 
 ## Credits
 
+The About page, `/about`, credits IMDb, OMDb, TMDB, Movie of the Night and MaxMind with the notices below, word for word.
+
+Information courtesy of IMDb (https://www.imdb.com). Used with permission.
+
 This product uses the TMDB API but is not endorsed or certified by TMDB. Backup posters, the list of trailers, people's photos and the fallback synopses come from [TMDB](https://www.themoviedb.org).
 
-Synopses, posters and release dates come from [OMDb](https://www.omdbapi.com/), whose data is licensed [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+OMDb’s content is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/). Synopses, posters and release dates come from [OMDb](https://www.omdbapi.com/).
 
 Trailers play from YouTube.
 
-Streaming availability by Movie of the Night.
+Streaming availability information is provided by [Streaming Availability API by Movie of the Night](https://www.movieofthenight.com/about/api).
 
-This product includes GeoLite2 Data created by MaxMind, available from [https://www.maxmind.com](https://www.maxmind.com).
+This product includes GeoLite Data created by MaxMind, available from [https://www.maxmind.com](https://www.maxmind.com).
 
 ## Logs
 

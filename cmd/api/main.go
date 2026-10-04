@@ -2,7 +2,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -259,20 +261,12 @@ func run(logger *slog.Logger) error {
 		go server.WarmFirstRun(ctx)
 		server.StartWarming(ctx, warmWorkers)
 	}
-	if cfg.Production() && cfg.AnalyticsEnabled {
-		// The map reports only when this process does, so a development
-		// build served from a LAN address cannot quietly send events, and
-		// with the switch off the page is handed no token and loads
-		// neither tracker.
-		server.WithAnalytics(api.AnalyticsConfig{
-			Token:         cfg.PostHogToken,
-			Host:          cfg.PostHogHost,
-			MixpanelToken: cfg.MixpanelToken,
-		})
-	}
+	// What the page is handed to report with, written into it rather
+	// than asked for, so a page with tracking off makes no request for it.
+	tracking := pageAnalyticsFor(cfg)
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           routes(server.Handler(), cfg.WebDir, meta, og, logger),
+		Handler:           routes(server.Handler(), cfg.WebDir, meta, og, tracking, logger),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -407,6 +401,71 @@ func searchFallback(ctx context.Context, cfg config.Config, limiter *rate.Limite
 	return tmdb.New(tmdb.Auth{APIKey: cfg.TMDBAPIKey, AccessToken: cfg.TMDBAccessToken}, opts...), closer, nil
 }
 
+// pageAnalytics is what the page needs to report to PostHog and to
+// Mixpanel. An empty token turns that service off in the page. Both
+// tokens are write-only keys, the same class of credential the SDKs would
+// otherwise be built with; handing them over here is what lets each
+// environment point at its own projects through its variables, with one
+// build for all of them.
+type pageAnalytics struct {
+	Token         string `json:"token"`
+	Host          string `json:"host"`
+	MixpanelToken string `json:"mixpanel_token,omitempty"`
+}
+
+// pageAnalyticsFor is what the page is handed to report with, or nil. The
+// map reports only when this process does, so a development build served
+// from a LAN address cannot quietly send events, and with the switch off
+// the page is handed nothing and loads neither tracker.
+func pageAnalyticsFor(cfg config.Config) *pageAnalytics {
+	if !cfg.Production() || !cfg.AnalyticsEnabled {
+		return nil
+	}
+	return &pageAnalytics{
+		Token:         cfg.PostHogToken,
+		Host:          cfg.PostHogHost,
+		MixpanelToken: cfg.MixpanelToken,
+	}
+}
+
+// analyticsMetaName names the tag the page reads its trackers from, in
+// web/src/analytics.ts.
+const analyticsMetaName = "cinedikt-analytics"
+
+// analyticsMeta is the tag that hands the page its trackers' settings, or
+// nil when there is nothing to hand it: tracking off, or on with neither
+// token set. Without the tag the page loads neither tracker and asks for
+// nothing. The JSON is escaped for an attribute, so no token or host can
+// end the attribute, or the tag, early.
+func analyticsMeta(a *pageAnalytics) []byte {
+	if a == nil || (a.Token == "" && a.MixpanelToken == "") {
+		return nil
+	}
+	// A struct of strings always marshals.
+	content, _ := json.Marshal(a)
+	return []byte(`<meta name="` + analyticsMetaName + `" content="` + html.EscapeString(string(content)) + `" />`)
+}
+
+// headEnd is where the trackers' tag goes, once every share-tag rewrite
+// is done, so none of them can ever match it.
+var headEnd = []byte("</head>")
+
+// withAnalyticsMeta puts tag at the end of the page's head. A page with
+// no head is left as it is, and reports nothing.
+func withAnalyticsMeta(body, tag []byte) []byte {
+	if len(tag) == 0 {
+		return body
+	}
+	i := bytes.Index(body, headEnd)
+	if i < 0 {
+		return body
+	}
+	out := make([]byte, 0, len(body)+len(tag))
+	out = append(out, body[:i]...)
+	out = append(out, tag...)
+	return append(out, body[i:]...)
+}
+
 // health adapts the app's dependencies to the API's health check.
 func health(a *app.App) []api.Dependency {
 	deps := a.Dependencies()
@@ -417,16 +476,17 @@ func health(a *app.App) []api.Dependency {
 	return out
 }
 
-// routes mounts the API at /api and, when webDir is set, the built
-// frontend at / (with index.html for any path it does not have, so the
-// app's own URLs work on reload). Without webDir the API also answers at /
-// so curl examples keep working.
 // movieMeta is a read of what a link preview needs: the movie's title,
 // its year, and the poster the share card is drawn from. It is a
 // function so a test can stand in for the catalog.
 type movieMeta func(ctx context.Context, tconst string) (title string, year int, poster string, err error)
 
-func routes(apiHandler http.Handler, webDir string, meta movieMeta, og http.Handler, logger *slog.Logger) http.Handler {
+// routes mounts the API at /api and, when webDir is set, the built
+// frontend at / (with index.html for any path it does not have, so the
+// app's own URLs work on reload). Without webDir the API also answers at /
+// so curl examples keep working. tracking, when it is not nil and holds a
+// token, is written into every index.html served.
+func routes(apiHandler http.Handler, webDir string, meta movieMeta, og http.Handler, tracking *pageAnalytics, logger *slog.Logger) http.Handler {
 	// Every API handler runs under a deadline, so a stalled dependency
 	// ends as a 503 rather than a connection held until the client or
 	// the platform gives up.
@@ -445,6 +505,8 @@ func routes(apiHandler http.Handler, webDir string, meta movieMeta, og http.Hand
 			logger.Warn("WEB_DIR has no index.html; build the frontend with `npm run build` in web/", "dir", webDir)
 		}
 		files := http.FileServer(http.Dir(webDir))
+		// Built once: the settings do not change while the process runs.
+		analyticsTag := analyticsMeta(tracking)
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			// Maps used to live at /film/. Links to them are out in the
 			// world for good, so they are moved rather than served: one
@@ -460,7 +522,7 @@ func routes(apiHandler http.Handler, webDir string, meta movieMeta, og http.Hand
 				return
 			}
 			setWebCache(w, false)
-			serveIndex(w, r, filepath.Join(webDir, "index.html"), meta)
+			serveIndex(w, r, filepath.Join(webDir, "index.html"), meta, analyticsTag)
 		})
 		logger.Info("serving frontend", "dir", webDir)
 	}
@@ -515,7 +577,10 @@ var ogImageTag = regexp.MustCompile(`content="` + regexp.QuoteMeta(ogImagePath) 
 // would be waiting for nothing at all.
 const previewTimeout = 300 * time.Millisecond
 
-func serveIndex(w http.ResponseWriter, r *http.Request, path string, meta movieMeta) {
+// serveIndex writes index.html with its share tags made absolute and, on
+// a movie's route or the About page, named for that page, and with
+// analyticsTag, when there is one, at the end of its head.
+func serveIndex(w http.ResponseWriter, r *http.Request, path string, meta movieMeta, analyticsTag []byte) {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		http.NotFound(w, r)
@@ -530,10 +595,13 @@ func serveIndex(w http.ResponseWriter, r *http.Request, path string, meta movieM
 		})
 		// A relative og:url helps no scraper. The site's own address is
 		// the truthful answer until a movie is known, and namePreview
-		// replaces it with that movie's canonical one when it is.
+		// replaces it with that movie's canonical one when it is, as
+		// nameAbout does with the About page's.
 		body = setMeta(body, ogURL, origin+"/")
 		body = namePreview(r.Context(), body, origin, r.URL.Path, meta)
+		body = nameAbout(body, origin, r.URL.Path)
 	}
+	body = withAnalyticsMeta(body, analyticsTag)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(body)
 }
@@ -613,6 +681,29 @@ func namePreview(ctx context.Context, body []byte, origin, path string, meta mov
 	// The canonical address, built from the stored title: a link pasted
 	// with a stale slug still previews as the one URL this map has.
 	body = setMeta(body, ogURL, origin+moviePath(tconst, title))
+	return body
+}
+
+// aboutTitle is the About page's title, in a preview of its link and in
+// its tab. ABOUT_TITLE in web/src/movieParam.ts is the tab's, and the
+// two must agree.
+const aboutTitle = "About · Cinedikt"
+
+// aboutPath is the About page's one address. It is also reached at
+// /about/, as isAboutPath in web/src/movieParam.ts reads it.
+const aboutPath = "/about"
+
+// nameAbout names the About page in the tags a scraper reads: its title,
+// and its address without the slash however it was reached. The
+// description and the share card stay the site's own: the page is about
+// the site.
+func nameAbout(body []byte, origin, path string) []byte {
+	if path != aboutPath && path != aboutPath+"/" {
+		return body
+	}
+	body = titleTag.ReplaceAllLiteral(body, []byte("<title>"+html.EscapeString(aboutTitle)+"</title>"))
+	body = setMeta(body, ogTitle, aboutTitle)
+	body = setMeta(body, ogURL, origin+aboutPath)
 	return body
 }
 

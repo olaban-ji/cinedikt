@@ -555,7 +555,7 @@ func TestMovieRouteCarriesThePerMovieCard(t *testing.T) {
 	api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	srv := httptest.NewServer(routes(api, dir, theMatrix, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	srv := httptest.NewServer(routes(api, dir, theMatrix, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(srv.Close)
 
 	head := fetchHead(t, srv, "/movie/tt0133093-the-matrix")

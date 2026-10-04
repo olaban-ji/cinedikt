@@ -44,8 +44,8 @@ type Config struct {
 	PostHogToken string
 	PostHogHost  string
 	// MixpanelToken is the Mixpanel project the map reports to. Like
-	// PostHog's, it is only served in production, and empty means the
-	// page never loads Mixpanel at all.
+	// PostHog's, it is only written into the page in production, and
+	// empty means the page never loads Mixpanel at all.
 	MixpanelToken string
 	// AnalyticsEnabled is the switch for every tracker: PostHog and
 	// Mixpanel in the page, and PostHog's error reports from the server.

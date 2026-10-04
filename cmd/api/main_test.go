@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"cinedikt/internal/api"
 	"cinedikt/internal/catalog"
 	"cinedikt/internal/config"
 	"cinedikt/internal/tmdb"
@@ -37,7 +41,7 @@ func TestWebCacheHeaders(t *testing.T) {
 	api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	srv := httptest.NewServer(routes(api, dir, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	srv := httptest.NewServer(routes(api, dir, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(srv.Close)
 
 	for _, tc := range []struct {
@@ -74,7 +78,7 @@ func TestShareImageIsAbsolute(t *testing.T) {
 	api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	srv := httptest.NewServer(routes(api, dir, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	srv := httptest.NewServer(routes(api, dir, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(srv.Close)
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/movie/tt0133093-the-matrix", nil)
@@ -120,7 +124,7 @@ func TestOldFilmLinksMoveToMovie(t *testing.T) {
 	api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	srv := httptest.NewServer(routes(api, dir, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	srv := httptest.NewServer(routes(api, dir, nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(srv.Close)
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -178,7 +182,7 @@ func previewServer(t *testing.T, meta movieMeta) *httptest.Server {
 	api := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	srv := httptest.NewServer(routes(api, indexFixture(t), meta, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	srv := httptest.NewServer(routes(api, indexFixture(t), meta, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -387,6 +391,63 @@ func TestGenericPageStillHasAnAbsoluteURL(t *testing.T) {
 	}
 }
 
+// The About page is named for a scraper at its one address, however it
+// was reached, and keeps the site's own description and card: it is a
+// page about the site, not about a movie.
+func TestTheAboutPageIsNamed(t *testing.T) {
+	var asked []string
+	var mu sync.Mutex
+	srv := previewServer(t, func(_ context.Context, tconst string) (string, int, string, error) {
+		mu.Lock()
+		asked = append(asked, tconst)
+		mu.Unlock()
+		return "The Matrix", 1999, matrixPoster, nil
+	})
+	generic := fetchHead(t, srv, "/")
+	for _, path := range []string{"/about", "/about/"} {
+		head := fetchHead(t, srv, path)
+		for _, want := range []string{
+			`<title>About · Cinedikt</title>`,
+			`<meta property="og:title" content="About · Cinedikt" />`,
+			`<meta property="og:url" content="https://cinedikt.com/about" />`,
+			// What stays the generic page's: the description, the card
+			// and what the card is said to be.
+			`content="Start from a movie and follow its cast and directors across a timeline of everything they went on to make."`,
+			`<meta property="og:image" content="https://cinedikt.com` + ogGeneric + `" />`,
+			`<meta name="twitter:image" content="https://cinedikt.com` + ogGeneric + `" />`,
+			`<meta property="og:image:alt" content="Cinedikt — a movie’s cast and directors, and everything they made" />`,
+		} {
+			if !strings.Contains(head, want) {
+				t.Errorf("GET %s is missing %s", path, want)
+			}
+		}
+		if strings.Contains(head, "<title>Cinedikt — ") || strings.Contains(head, `og:title" content="Cinedikt — `) {
+			t.Errorf("GET %s still has the tagline as its title", path)
+		}
+		// Nothing else about the page changes.
+		for _, tag := range []*regexp.Regexp{titleTag, ogTitle, ogURL} {
+			head = tag.ReplaceAllString(head, "")
+		}
+		want := generic
+		for _, tag := range []*regexp.Regexp{titleTag, ogTitle, ogURL} {
+			want = tag.ReplaceAllString(want, "")
+		}
+		if head != want {
+			t.Errorf("GET %s changed more than its title and address", path)
+		}
+	}
+	// Neither is a movie route, so nothing is looked up, and a path
+	// under it is not the About page.
+	if head := fetchHead(t, srv, "/about/team"); strings.Contains(head, "About · Cinedikt") || strings.Contains(head, "cinedikt.com/about") {
+		t.Error("a path under /about was named as the About page")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 0 {
+		t.Errorf("the catalog was read for %v on the About page", asked)
+	}
+}
+
 // TestTheRequestPathWaitsOnTheProcessLimiter: the search fallback and the
 // poster stand-in share the client this builds, and it has to draw on
 // the same budget as the catalog jobs.
@@ -405,5 +466,231 @@ func TestTheRequestPathWaitsOnTheProcessLimiter(t *testing.T) {
 	}
 	if c, _, _ := searchFallback(context.Background(), config.Config{}, limiter, slog.New(slog.NewTextHandler(io.Discard, nil))); c != nil {
 		t.Error("a client was built without credentials")
+	}
+}
+
+// plainIndex is a page with a head and nothing a share-tag rewrite
+// touches, so whatever is served that differs from it was put there by
+// the trackers' tag.
+const plainIndex = "<!doctype html>\n<html>\n  <head>\n    <title>Cinedikt</title>\n  </head>\n  <body><div id=\"root\"></div></body>\n</html>\n"
+
+func plainIndexDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(plainIndex), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// trackingServer serves dir's index.html with tracking, behind a stand-in
+// API.
+func trackingServer(t *testing.T, dir string, meta movieMeta, tracking *pageAnalytics) *httptest.Server {
+	t.Helper()
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(routes(stub, dir, meta, nil, tracking, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// trackersOn is a production process with the switch on and both
+// trackers' test tokens set.
+var trackersOn = config.Config{
+	Environment:      config.EnvProduction,
+	AnalyticsEnabled: true,
+	PostHogToken:     "phc_test",
+	PostHogHost:      "https://us.i.posthog.com",
+	MixpanelToken:    "mp_test",
+}
+
+var analyticsTagPattern = regexp.MustCompile(`<meta name="cinedikt-analytics" content="([^"]*)" />`)
+
+// servedAnalytics is the page's one trackers' tag, decoded the way the
+// page decodes it: the attribute unescaped, then the JSON parsed. It
+// fails unless there is exactly one, at the very end of the head.
+func servedAnalytics(t *testing.T, body string) (tag string, settings map[string]any) {
+	t.Helper()
+	if n := strings.Count(body, "cinedikt-analytics"); n != 1 {
+		t.Fatalf("the page names cinedikt-analytics %d times, want 1:\n%s", n, body)
+	}
+	m := analyticsTagPattern.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("the trackers' tag is not a whole, quoted meta tag:\n%s", body)
+	}
+	if !strings.Contains(body, m[0]+"</head>") {
+		t.Fatalf("the trackers' tag is not at the end of the head:\n%s", body)
+	}
+	if err := json.Unmarshal([]byte(html.UnescapeString(m[1])), &settings); err != nil {
+		t.Fatalf("the trackers' tag does not hold JSON: %v\n%s", err, m[1])
+	}
+	return m[0], settings
+}
+
+func TestThePageIsHandedTheTrackersOnlyWhenTrackingIsOn(t *testing.T) {
+	srv := trackingServer(t, plainIndexDir(t), nil, pageAnalyticsFor(trackersOn))
+	body := fetchHead(t, srv, "/")
+	tag, settings := servedAnalytics(t, body)
+	if want := strings.Replace(plainIndex, "</head>", tag+"</head>", 1); body != want {
+		t.Errorf("the page was changed beyond the trackers' tag:\n%s\nwant\n%s", body, want)
+	}
+	want := map[string]any{"token": "phc_test", "host": "https://us.i.posthog.com", "mixpanel_token": "mp_test"}
+	if len(settings) != len(want) {
+		t.Errorf("settings = %v, want %v", settings, want)
+	}
+	for k, v := range want {
+		if settings[k] != v {
+			t.Errorf("settings[%q] = %v, want %v", k, settings[k], v)
+		}
+	}
+
+	development := trackersOn
+	development.Environment = config.EnvDevelopment
+	switchedOff := trackersOn
+	switchedOff.AnalyticsEnabled = false
+	noTokens := trackersOn
+	noTokens.PostHogToken, noTokens.MixpanelToken = "", ""
+	for name, cfg := range map[string]config.Config{
+		"development":                 development,
+		"production, switched off":    switchedOff,
+		"production, on and no token": noTokens,
+	} {
+		// The page exactly as it is on disk.
+		srv := trackingServer(t, plainIndexDir(t), nil, pageAnalyticsFor(cfg))
+		for _, path := range []string{"/", "/movie/tt0133093-the-matrix"} {
+			if body := fetchHead(t, srv, path); body != plainIndex {
+				t.Errorf("%s: GET %s changed the page:\n%s", name, path, body)
+			}
+		}
+		// And the page as it ships, with its share tags rewritten exactly
+		// as they would be with no trackers' settings at all.
+		withTracking := trackingServer(t, indexFixture(t), theMatrix, pageAnalyticsFor(cfg))
+		without := trackingServer(t, indexFixture(t), theMatrix, nil)
+		for _, path := range []string{"/", "/movie/tt0133093-the-matrix"} {
+			body := fetchHead(t, withTracking, path)
+			if strings.Contains(body, "cinedikt-analytics") {
+				t.Errorf("%s: GET %s carries the trackers' tag", name, path)
+			}
+			if want := fetchHead(t, without, path); body != want {
+				t.Errorf("%s: GET %s differs from the page with tracking off", name, path)
+			}
+		}
+	}
+}
+
+// Mixpanel's token is left out when it is not set, as the page has always
+// been handed it, and either tracker alone is reason enough for the tag.
+func TestTheTrackersTagCarriesWhicheverTokensAreSet(t *testing.T) {
+	postHogOnly := trackersOn
+	postHogOnly.MixpanelToken = ""
+	_, settings := servedAnalytics(t, fetchHead(t, trackingServer(t, plainIndexDir(t), nil, pageAnalyticsFor(postHogOnly)), "/"))
+	if _, ok := settings["mixpanel_token"]; ok {
+		t.Errorf("mixpanel_token is in the tag with no token set: %v", settings)
+	}
+	if settings["token"] != "phc_test" || settings["host"] != "https://us.i.posthog.com" {
+		t.Errorf("settings = %v", settings)
+	}
+
+	mixpanelOnly := trackersOn
+	mixpanelOnly.PostHogToken = ""
+	_, settings = servedAnalytics(t, fetchHead(t, trackingServer(t, plainIndexDir(t), nil, pageAnalyticsFor(mixpanelOnly)), "/"))
+	if settings["token"] != "" || settings["mixpanel_token"] != "mp_test" {
+		t.Errorf("settings = %v", settings)
+	}
+}
+
+// A token or host is written into an attribute. Whatever it holds, it
+// comes back out as it went in, and nothing in it reaches the page as
+// markup.
+func TestTheTrackersTagIsEscaped(t *testing.T) {
+	tracking := &pageAnalytics{
+		Token:         `phc_"><script>alert(1)</script>&amp;`,
+		Host:          `https://ph.example/?a=1&b="2"'`,
+		MixpanelToken: `mp_<&>"' />`,
+	}
+	body := fetchHead(t, trackingServer(t, plainIndexDir(t), nil, tracking), "/")
+	tag, settings := servedAnalytics(t, body)
+	if settings["token"] != tracking.Token || settings["host"] != tracking.Host || settings["mixpanel_token"] != tracking.MixpanelToken {
+		t.Errorf("settings = %#v, want %#v", settings, tracking)
+	}
+	if rest := strings.Replace(body, tag, "", 1); rest != plainIndex {
+		t.Errorf("something outside the trackers' tag was written into the page:\n%s", rest)
+	}
+	if strings.Contains(body, "<script>") {
+		t.Errorf("a token was written into the page as markup:\n%s", body)
+	}
+}
+
+func TestTheTrackersTagSitsBesideTheShareTags(t *testing.T) {
+	srv := trackingServer(t, indexFixture(t), theMatrix, pageAnalyticsFor(trackersOn))
+	without := trackingServer(t, indexFixture(t), theMatrix, nil)
+
+	head := fetchHead(t, srv, "/movie/tt0133093-the-matrix")
+	tag, settings := servedAnalytics(t, head)
+	if settings["token"] != "phc_test" || settings["mixpanel_token"] != "mp_test" {
+		t.Errorf("settings = %v", settings)
+	}
+	for _, want := range []string{
+		"<title>The Matrix — everything its cast and directors made · Cinedikt</title>",
+		`<meta property="og:url" content="https://cinedikt.com/movie/tt0133093-the-matrix" />`,
+		"https://cinedikt.com/og/movie/tt0133093.png?v=" + catalog.OGVersion(matrixPoster, "The Matrix"),
+	} {
+		if !strings.Contains(head, want) {
+			t.Errorf("the movie's page lost %s beside the trackers' tag", want)
+		}
+	}
+	if rest := strings.Replace(head, tag, "", 1); rest != fetchHead(t, without, "/movie/tt0133093-the-matrix") {
+		t.Error("the trackers' tag changed the movie's page beyond itself")
+	}
+
+	head = fetchHead(t, srv, "/")
+	servedAnalytics(t, head)
+	if !strings.Contains(head, `<meta property="og:url" content="https://cinedikt.com/" />`) {
+		t.Error("the generic page left og:url relative beside the trackers' tag")
+	}
+}
+
+// A host the share tags cannot be made absolute from still gets the
+// trackers: the tag needs no origin, and a page without it would go
+// unreported.
+func TestTheTrackersTagDoesNotWaitOnAKnownOrigin(t *testing.T) {
+	srv := trackingServer(t, plainIndexDir(t), nil, pageAnalyticsFor(trackersOn))
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An underscore fails safeHost, so requestOrigin has no origin for it.
+	req.Host = "not_a_safe_host"
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", resp.StatusCode)
+	}
+	servedAnalytics(t, string(body))
+}
+
+// The page is handed its settings, so nothing answers for them any more,
+// whichever API the process serves.
+func TestTheAnalyticsConfigRouteIsGone(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	graphAPI := api.NewWithLimits(nil, nil, nil, api.DefaultLimits, logger)
+	catalogAPI := api.NewWithLimits(nil, nil, nil, api.DefaultLimits, logger)
+	catalogAPI.WithCatalog(api.NewCatalogServer(nil, logger))
+	for name, server := range map[string]*api.Server{"graph": graphAPI, "catalog": catalogAPI} {
+		srv := httptest.NewServer(routes(server.Handler(), plainIndexDir(t), nil, nil, pageAnalyticsFor(trackersOn), logger))
+		resp, err := http.Get(srv.URL + "/api/analytics-config")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		srv.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: GET /api/analytics-config = %d, want 404", name, resp.StatusCode)
+		}
 	}
 }

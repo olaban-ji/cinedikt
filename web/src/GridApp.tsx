@@ -54,7 +54,8 @@ import { isSearchShortcut, isTyping, searchPlaceholder } from './search';
 import { Toast, useToast } from './Toast';
 import { usePlayer } from './TrailerRow';
 import { dimsCards, hideEmptyToast } from './quickSwitch';
-import { filmPath, movieIdFromPath, routeFrom, usePageTitle } from './movieParam';
+import { ABOUT_PATH, filmPath, isAboutPath, movieIdFromPath, routeAt, routeFrom, usePageTitle } from './movieParam';
+import { AboutPage, MailLink } from './AboutPage';
 import {
   applyFilters,
   filtersFromState,
@@ -296,7 +297,7 @@ const SEARCH_DEBOUNCE_MS = 250;
  *  and nothing that has to be grown. */
 export function GridApp() {
   const adopt = useRef<(filters: MapFilters) => void>(() => {});
-  const [movieId, openMovie, canGoBack, goBack, goHome] = useFilmRoute(adopt);
+  const { movieId, about, canGoBack, openMovie, openAbout, goBack, goHome } = useFilmRoute(adopt);
   const screen = useScreen();
   // Only a phone drops "inedikt": a landscape phone has the width for it.
   const compactHeader = screen.phone;
@@ -339,11 +340,10 @@ export function GridApp() {
   const [theme, setTheme] = useTheme();
   // Where the opening load has got to. It drives the header, which is
   // why it lives here rather than in ColdStart: the mark ends up in
-  // the wordmark, and only this component renders both. A visit that
-  // begins on a map never plays the opening, not even when the reader
-  // later goes home: the header is complete from the first paint.
+  // the wordmark, and only this component renders both. See
+  // skipsOpening for the visits that never play it.
   const [opening, setOpening] = useState<Opening>(() => {
-    if (movieIdFromPath(location.pathname) !== null) {
+    if (skipsOpening(location.pathname)) {
       openingPlayed = true;
       return 'done';
     }
@@ -367,9 +367,14 @@ export function GridApp() {
   // of the opening screen first, and that screen's first-run request
   // would go out only to be cancelled as it unmounted.
   const [loading, setLoading] = useState(() => movieId !== null);
-  // A map is being fetched from the opening screen, which stays behind
-  // the progress line, dimmed, until it arrives.
+  // A map is being fetched from the opening screen or the About page,
+  // which stays behind the progress line, dimmed, until it arrives.
   const [fromCold, setFromCold] = useState(false);
+  // Which of the two pages without a map is drawn when there is no map
+  // to draw: the About page, or the opening screen (see drawsAbout).
+  const [aboutDrawn, setAboutDrawn] = useState(about);
+  const aboutShown = drawsAbout(movieId, about, aboutDrawn);
+  if (aboutShown !== aboutDrawn) setAboutDrawn(aboutShown);
   const drawnRef = useRef(drawn);
   drawnRef.current = drawn;
   const [error, setError] = useState<string | null>(null);
@@ -560,9 +565,9 @@ export function GridApp() {
     // of sight and out of reach, with skeletons where its chips were,
     // until the new one takes its place (see `leaving`).
     setLoading(true);
-    // From the opening screen with nothing drawn yet, that screen stays,
-    // dimmed, behind the progress line; a map opened from a link has
-    // nothing behind it, and loads into an empty plot.
+    // From the opening screen or the About page with nothing drawn yet,
+    // that page stays, dimmed, behind the progress line; a map opened
+    // from a link has nothing behind it, and loads into an empty plot.
     if (movieChanged) setFromCold((was) => drawnRef.current == null && (cameFrom === null || was));
     setError(null);
     const named = titleRef.current?.id === movieId ? titleRef.current.title : 'this movie';
@@ -1005,7 +1010,7 @@ export function GridApp() {
 
   // The panel wants the whole film, which is detail. Opening a card the
   // reader can see means its detail is already here.
-  usePageTitle(payload?.anchor.title);
+  usePageTitle(payload?.anchor.title, about);
 
   const open = openId == null ? null : (detail.get(openId) ?? null);
   // A sheet or popover is up, and the floating buttons belong to the map
@@ -1014,17 +1019,18 @@ export function GridApp() {
   // A header over a map — or over the empty plot one is loading into,
   // or over one being left — holds the chip row. It is ruled off from
   // the map from the first paint: the rule is what says the chips belong
-  // to the header and not to the plot. The opening screen and the error
-  // have nothing under the header to divide it from, and neither does
-  // the opening screen while a map loads from it: it stays as it was.
+  // to the header and not to the plot. The opening screen, the About
+  // page and the error have nothing under the header to divide it from,
+  // and neither does either page while a map loads from it: it stays as
+  // it was.
   const holdsChips = mapPayload != null || (loading && !fromCold);
   // On a phone, and on a landscape phone, the header lies over the map
   // and goes up out of the way as the reader travels down the years —
   // but never while they are waiting, reading a panel, typing, or moving
   // to another map. Only over a map, or the empty plot one is loading
-  // into: the opening screen and the error both keep the header in
-  // flow, on the ground, with nothing underneath it to pass under the
-  // glass.
+  // into: the opening screen, the About page and the error all keep the
+  // header in flow, on the ground, with nothing underneath it to pass
+  // under the glass.
   const overlay = screen.overlay && holdsChips;
   // Where the map starts under a header lying over it: the header row
   // and the chip row, which the stylesheet sets to fixed heights.
@@ -1115,6 +1121,7 @@ export function GridApp() {
     if (mapPayload && !stale && !leaving) liveDraw.current = { settings, selectedIdx, detail };
   });
   const frozen = mapPayload && (stale || leaving) ? liveDraw.current : null;
+  const back = backLabel({ movieId, about, canGoBack });
 
   return (
     // data-quick marks the quick switch as out, so that on a phone
@@ -1125,18 +1132,11 @@ export function GridApp() {
         className={headerClass({ map: holdsChips, over: overlay, away: headerAway, searching })}
       >
         <div className="cd-header-row">
-          {/* On a map, and only when there is a map to go back to. The
-              opening screen has its own way on — the tiles and the
-              search — and a map opened from a link has nothing behind
-              it; a permanently disabled button is a dead control in the
-              corner of every first visit. */}
-          {canGoBack && movieId !== null && (
-            <button
-              type="button"
-              className="cd-back"
-              aria-label="Back to the previous movie"
-              onClick={goBack}
-            >
+          {/* See backLabel for where it shows. A permanently disabled
+              button would be a dead control in the corner of every
+              first visit. */}
+          {back !== null && (
+            <button type="button" className="cd-back" aria-label={back} onClick={goBack}>
               <span className="cd-back-circle">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M15 18l-6-6 6-6" />
@@ -1150,9 +1150,10 @@ export function GridApp() {
             onClick={goHome}
             slotRef={markSlot}
             // Only the opening screen borrows the header's mark. A map
-            // has its wordmark whole from the first paint.
-            hollow={movieId === null && opening !== 'done'}
-            wordIn={movieId !== null || opening !== 'draw'}
+            // and the About page have the wordmark whole from the first
+            // paint.
+            hollow={movieId === null && !about && opening !== 'done'}
+            wordIn={movieId !== null || about || opening !== 'draw'}
           />
           <SearchField
             placeholder={searchPlaceholder(loading || gliding, loadingTitle, payload?.anchor.title)}
@@ -1266,9 +1267,12 @@ export function GridApp() {
         // plot stays empty rather than holding a message the reader
         // would have to read and then watch disappear.
         <div className="cd-scroller" ref={scrollerRef} aria-hidden="true" />
+      ) : aboutDrawn ? (
+        <AboutPage dim={loading} />
       ) : (
         <ColdStart
           onPick={setMovieId}
+          onAbout={openAbout}
           theme={theme}
           onTheme={onTheme}
           markSlot={markSlot}
@@ -1577,15 +1581,71 @@ function historyDepth(state: unknown): number {
   return typeof d === 'number' && d > 0 ? d : 0;
 }
 
-function useFilmRoute(adopt: { current: (filters: MapFilters) => void }): [
-  string | null,
-  (id: string, title?: string) => void,
-  boolean,
-  () => void,
-  (e?: MouseEvent<HTMLAnchorElement>) => void,
-] {
-  const [movieId, setId] = useState<string | null>(() => movieIdFromPath(location.pathname));
+/** A click the browser keeps: one with a modifier key held, or not with
+ *  the main button, opens the link in a new tab or window, or not at
+ *  all, as the reader asked. */
+function browserKeeps(e: MouseEvent<HTMLAnchorElement>): boolean {
+  return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
+}
+
+/** Where the reader is, and the ways to move. The route is one of three
+ *  things: a map (`movieId`), the About page (`about`), or, with
+ *  neither, the opening screen. */
+export interface FilmRoute {
+  movieId: string | null;
+  about: boolean;
+  /** This visit has an entry before this one to go back to. */
+  canGoBack: boolean;
+  openMovie: (id: string, title?: string) => void;
+  openAbout: (e?: MouseEvent<HTMLAnchorElement>) => void;
+  goBack: () => void;
+  goHome: (e?: MouseEvent<HTMLAnchorElement>) => void;
+}
+
+/** A visit that begins on a map or on the About page never plays the
+ *  opening, not even when the reader later goes home: the header is
+ *  complete from the first paint. */
+export function skipsOpening(pathname: string): boolean {
+  return movieIdFromPath(pathname) !== null || isAboutPath(pathname);
+}
+
+/** Whether the About page, rather than the opening screen, is the page
+ *  without a map that is drawn, given the route and what was drawn
+ *  before. It follows the route while there is no movie and holds once
+ *  one is picked, so a map picked from the About page's search loads
+ *  over the About page, as one picked on the opening screen loads over
+ *  that, and neither page is put down afresh in the render before the
+ *  load begins. */
+export function drawsAbout(movieId: string | null, about: boolean, was: boolean): boolean {
+  return movieId === null ? about : was;
+}
+
+/** What the header's Back says, or null where there is none. It is on a
+ *  map and on the About page, and only when there is somewhere to go
+ *  back to. The opening screen has its own ways on — the tiles and the
+ *  search — and a map or an About page opened from a link has nothing
+ *  behind it. */
+export function backLabel({
+  movieId,
+  about,
+  canGoBack,
+}: Pick<FilmRoute, 'movieId' | 'about' | 'canGoBack'>): string | null {
+  if (!canGoBack) return null;
+  if (movieId !== null) return 'Back to the previous movie';
+  return about ? 'Back' : null;
+}
+
+export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }): FilmRoute {
+  const [route, setRoute] = useState(() => routeAt(location.pathname));
   const [depth, setDepth] = useState(() => historyDepth(history.state));
+  // Every move ends here, once the address has changed: the route is
+  // read back from the address rather than set beside it, so the page
+  // drawn is always the one the address names. The same route again
+  // keeps the same object, and asks for no render.
+  const follow = useCallback(() => {
+    const now = routeAt(location.pathname);
+    setRoute((was) => (was.movieId === now.movieId && was.about === now.about ? was : now));
+  }, []);
   useEffect(() => {
     // An old /film/ link still opens the map; from here on the address
     // bar shows the one address a map has.
@@ -1598,13 +1658,13 @@ function useFilmRoute(adopt: { current: (filters: MapFilters) => void }): [
       history.replaceState(history.state, '', path);
     }
     const onPop = () => {
-      setId(movieIdFromPath(location.pathname));
+      follow();
       setDepth(historyDepth(history.state));
       adopt.current(filtersFromState(history.state));
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, [adopt]);
+  }, [adopt, follow]);
   const go = useCallback((id: string, title?: string) => {
     const next = historyDepth(history.state) + 1;
     const path = filmPath(id, title);
@@ -1615,15 +1675,29 @@ function useFilmRoute(adopt: { current: (filters: MapFilters) => void }): [
     // is stamped on the new entry so the one left behind stays as it was.
     if (movieIdFromPath(location.pathname) === id) {
       history.pushState({ movie: id, depth: next, filters: filtersFromState(history.state) }, '', path);
-      setId(id);
+      follow();
       setDepth(next);
       return;
     }
     history.pushState(forwardEntry(id, next), '', path);
-    setId(id);
+    follow();
     setDepth(next);
     adopt.current(freshFilters());
-  }, [adopt]);
+  }, [adopt, follow]);
+  // The About page, from the opening screen's footer: a new entry one
+  // deeper, as a map is, so Back returns to where the link was.
+  const openAbout = useCallback((e?: MouseEvent<HTMLAnchorElement>) => {
+    if (e) {
+      if (browserKeeps(e)) return;
+      e.preventDefault();
+    }
+    if (isAboutPath(location.pathname)) return;
+    const next = historyDepth(history.state) + 1;
+    history.pushState(forwardEntry(null, next), '', ABOUT_PATH);
+    follow();
+    setDepth(next);
+    adopt.current(freshFilters());
+  }, [adopt, follow]);
   const back = useCallback(() => {
     if (historyDepth(history.state) === 0) return;
     history.back();
@@ -1631,20 +1705,30 @@ function useFilmRoute(adopt: { current: (filters: MapFilters) => void }): [
   // Also called without an event, by "Pick another movie" on the error.
   const home = useCallback((e?: MouseEvent<HTMLAnchorElement>) => {
     if (e) {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      if (browserKeeps(e)) return;
       e.preventDefault();
     }
-    if (movieIdFromPath(location.pathname) === null) {
-      setId(null);
+    // Already home. The About page has no movie in its path either, but
+    // it is not home, so it moves like a map does.
+    if (movieIdFromPath(location.pathname) === null && !isAboutPath(location.pathname)) {
+      follow();
       return;
     }
     const next = historyDepth(history.state) + 1;
     history.pushState(forwardEntry(null, next), '', homeHref());
-    setId(null);
+    follow();
     setDepth(next);
     adopt.current(freshFilters());
-  }, [adopt]);
-  return [movieId, go, depth > 0, back, home];
+  }, [adopt, follow]);
+  return {
+    movieId: route.movieId,
+    about: route.about,
+    canGoBack: depth > 0,
+    openMovie: go,
+    openAbout,
+    goBack: back,
+    goHome: home,
+  };
 }
 
 type SetSettings = (s: GridSettings | ((was: GridSettings) => GridSettings)) => void;
@@ -2112,6 +2196,7 @@ const HEADLINE_FACE = '400 46px "Young Serif"';
 
 function ColdStart({
   onPick,
+  onAbout,
   theme,
   onTheme,
   markSlot,
@@ -2119,6 +2204,8 @@ function ColdStart({
   dim,
 }: {
   onPick: (id: string, title?: string) => void;
+  /** The router's way to the About page, for its link in the footer. */
+  onAbout: (e: MouseEvent<HTMLAnchorElement>) => void;
   theme: ThemePref;
   onTheme: (p: ThemePref) => void;
   /** The header's empty mark slot, which is where the loader is going. */
@@ -2483,10 +2570,12 @@ function ColdStart({
           lives here. It fades in after the sub-line rather than with the
           tiles: it is not one of the eight movies. */}
       <ThemePicker value={theme} onChange={onTheme} />
-      {/* Who to write to, and the credit TMDB asks for: its logo and its
-          notice, word for word. It fades in with the theme choice. */}
+      {/* The way to the About page, which holds the credits the app's
+          sources ask for, then who to write to, on one row. It fades in
+          with the theme choice. */}
       <footer className="cd-cold-foot">
-        <a className="cd-cold-mail" href="mailto:hello@cinedikt.com">
+        <a className="cd-foot-link" href={ABOUT_PATH} onClick={onAbout}>
+          {/* An i in a circle: a ring, a stem and a dot. */}
           <svg
             width="16"
             height="16"
@@ -2498,23 +2587,13 @@ function ColdStart({
             strokeLinejoin="round"
             aria-hidden="true"
           >
-            <rect x="3" y="5" width="18" height="14" rx="2.5" />
-            <path d="m4 7.5 8 5.5 8-5.5" />
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v5.5" />
+            <path d="M12 7.6h.01" strokeWidth="2.6" />
           </svg>
-          hello@cinedikt.com
+          About
         </a>
-        <div className="cd-cold-credit">
-          <a
-            className="cd-cold-tmdb"
-            href="https://www.themoviedb.org"
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="TMDB"
-          >
-            <span className="cd-cold-tmdb-logo" aria-hidden="true" />
-          </a>
-          <p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
-        </div>
+        <MailLink />
       </footer>
     </div>
   );

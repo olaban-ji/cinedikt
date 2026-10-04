@@ -74,8 +74,6 @@ type Server struct {
 	health []Dependency
 	// slotWait is how long a request waits for a cold-crawl slot.
 	slotWait time.Duration
-	// analytics is the public PostHog configuration handed to the map.
-	analytics AnalyticsConfig
 	// catalog, when set, serves maps out of the IMDb catalog instead of
 	// the graph. It answers the same routes and takes the same
 	// middleware; what changes is that a request only ever reads.
@@ -86,14 +84,6 @@ type Server struct {
 // the TMDb client are then never reached: the routes below go straight
 // to Postgres, and nothing a reader does writes anything.
 func (s *Server) WithCatalog(c *CatalogServer) { s.catalog = c }
-
-// AnalyticsConfig is what the map needs to report to PostHog and to
-// Mixpanel itself. An empty token turns that service off in the page.
-type AnalyticsConfig struct {
-	Token         string `json:"token"`
-	Host          string `json:"host"`
-	MixpanelToken string `json:"mixpanel_token,omitempty"`
-}
 
 // Limits on query parameters and on-demand crawling.
 const (
@@ -145,12 +135,6 @@ func NewWithLimits(reader Reader, expander Expander, searcher Searcher, limits L
 	}
 }
 
-// WithAnalytics sets the public PostHog configuration served to the map.
-func (s *Server) WithAnalytics(cfg AnalyticsConfig) *Server {
-	s.analytics = cfg
-	return s
-}
-
 // WithFirstRun lets the cold screen draw its films from the graph. Without
 // it the endpoint answers with nothing and the client uses the set it
 // ships with, which is the same behaviour as the graph being unreachable.
@@ -196,7 +180,6 @@ func (s *Server) StartWarming(ctx context.Context, workers int) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.healthz)
-	mux.HandleFunc("GET /analytics-config", s.analyticsConfig)
 	if s.catalog != nil {
 		mux.HandleFunc("GET /search/movies", s.catalog.searchMovies)
 		mux.HandleFunc("GET /{$}", s.catalog.firstRun)
@@ -450,15 +433,6 @@ func nextHop(pw *graph.Pathways) []int {
 		}
 	}
 	return ids
-}
-
-// analyticsConfig is the public PostHog project token and host for the
-// map, and the Mixpanel project token. Both tokens are write-only keys,
-// the same class of credential the SDKs would otherwise bake in at build
-// time. Serving them here is what lets each environment point at its own
-// projects through its variables, with one build for all of them.
-func (s *Server) analyticsConfig(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.analytics)
 }
 
 // capture records a successful public action. Distinct IDs come from the

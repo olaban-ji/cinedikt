@@ -34,11 +34,36 @@ function service<T>() {
 const posthog = service<PostHog>();
 const mixpanel = service<Mixpanel>();
 
-/** What the page needs to report, as /api/analytics-config serves it. */
+/** What the page needs to report. The server writes it into the page it
+ *  serves, as the cinedikt-analytics meta tag, and only when tracking is
+ *  on; cmd/api's analyticsMeta builds it. */
 interface AnalyticsConfig {
   token?: string;
   host?: string;
   mixpanel_token?: string;
+}
+
+const CONFIG_META = 'meta[name="cinedikt-analytics"]';
+
+/** The settings the server wrote into the page, or none. A missing, empty
+ *  or malformed tag means no trackers rather than an error, since the map
+ *  must never depend on analytics, and nothing is asked of the network in
+ *  its place. */
+function pageConfig(): AnalyticsConfig {
+  try {
+    const content = globalThis.document?.querySelector(CONFIG_META)?.getAttribute('content');
+    if (!content) return {};
+    const parsed: unknown = JSON.parse(content);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    const { token, host, mixpanel_token } = parsed as Record<string, unknown>;
+    return {
+      token: typeof token === 'string' ? token : undefined,
+      host: typeof host === 'string' ? host : undefined,
+      mixpanel_token: typeof mixpanel_token === 'string' ? mixpanel_token : undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function pageHostname(): string {
@@ -96,10 +121,12 @@ function startMixpanel(token: string | undefined): void {
 
 /** Load PostHog and Mixpanel, each in its own chunk so the map is not
  *  paying for them up front. Vite bakes VITE_* in at build time; whatever
- *  is not baked in is asked of the API, which serves each environment's
- *  own tokens from its variables, so one build reports to the right
- *  projects everywhere. Loopback never initialises, so local sessions
- *  reach neither service. */
+ *  is not baked in comes from the tag the server writes into the page
+ *  from each environment's own variables, so one build reports to the
+ *  right projects everywhere. With tracking off the server writes no tag,
+ *  and both services are turned off at once without a request of any
+ *  kind. Loopback never initialises, so local sessions reach neither
+ *  service. */
 export function initAnalytics(): void {
   if (isLoopback(pageHostname())) {
     posthog.never();
@@ -111,21 +138,12 @@ export function initAnalytics(): void {
     host: import.meta.env.VITE_POSTHOG_HOST as string | undefined,
     mixpanel_token: import.meta.env.VITE_MIXPANEL_PROJECT_TOKEN as string | undefined,
   };
-  const config: Promise<AnalyticsConfig> =
-    baked.token && baked.mixpanel_token
-      ? Promise.resolve(baked)
-      : fetch('/api/analytics-config')
-          .then((r) => (r.ok ? r.json() : {}))
-          .then((served: AnalyticsConfig | null) => ({
-            token: baked.token || served?.token,
-            host: baked.token ? baked.host : served?.host,
-            mixpanel_token: baked.mixpanel_token || served?.mixpanel_token,
-          }))
-          .catch(() => baked);
-  void config.then((cfg) => {
-    startPostHog(cfg.token, cfg.host || DEFAULT_HOST);
-    startMixpanel(cfg.mixpanel_token);
-  });
+  const page = pageConfig();
+  // A baked PostHog token brings its own host, so the page's host never
+  // sends a baked project's events to another instance.
+  const host = baked.token ? baked.host : page.host;
+  startPostHog(baked.token || page.token, host || DEFAULT_HOST);
+  startMixpanel(baked.mixpanel_token || page.mixpanel_token);
 }
 
 /** One of the map's own events, sent to every service that is on. */
