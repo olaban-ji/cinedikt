@@ -89,6 +89,9 @@ export default defineRailway(() => {
       // value is the private URL of the Postgres service, kept out of
       // the repo the same way the other credentials are.
       DATABASE_URL: preserve(),
+      // Every tracker's switch (PostHog and Mixpanel, page and server);
+      // off unless "true", with the tokens below left in place.
+      ANALYTICS_ENABLED: preserve(),
       POSTHOG_PROJECT_TOKEN: preserve(),
       POSTHOG_HOST: preserve(),
       // The Mixpanel project this environment reports to. The API hands

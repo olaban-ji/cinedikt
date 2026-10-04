@@ -80,6 +80,7 @@ func run(logger *slog.Logger) error {
 	}
 	if err := analytics.Init(analytics.Config{
 		Production: cfg.Production(),
+		Enabled:    cfg.AnalyticsEnabled,
 		Token:      cfg.PostHogToken,
 		Host:       cfg.PostHogHost,
 	}, logger); err != nil {
@@ -258,9 +259,11 @@ func run(logger *slog.Logger) error {
 		go server.WarmFirstRun(ctx)
 		server.StartWarming(ctx, warmWorkers)
 	}
-	if cfg.Production() {
+	if cfg.Production() && cfg.AnalyticsEnabled {
 		// The map reports only when this process does, so a development
-		// build served from a LAN address cannot quietly send events.
+		// build served from a LAN address cannot quietly send events, and
+		// with the switch off the page is handed no token and loads
+		// neither tracker.
 		server.WithAnalytics(api.AnalyticsConfig{
 			Token:         cfg.PostHogToken,
 			Host:          cfg.PostHogHost,

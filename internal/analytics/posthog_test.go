@@ -39,8 +39,8 @@ func TestInitWithoutConfigIsNeverFatal(t *testing.T) {
 		cfg  Config
 	}{
 		{"development, nothing set", Config{}},
-		{"production, nothing set", Config{Production: true}},
-		{"production, token without host", Config{Production: true, Token: "phc_test"}},
+		{"production, nothing set", Config{Production: true, Enabled: true}},
+		{"production, token without host", Config{Production: true, Enabled: true, Token: "phc_test"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(func() { client = nil })
@@ -61,7 +61,7 @@ func TestInitWarnsWhenProductionIsUnconfigured(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	if err := Init(Config{Production: true}, logger); err != nil {
+	if err := Init(Config{Production: true, Enabled: true}, logger); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "POSTHOG_PROJECT_TOKEN") {
@@ -78,7 +78,7 @@ func TestInitInProductionCreatesAClient(t *testing.T) {
 	})
 	client = nil
 
-	cfg := Config{Production: true, Token: "phc_test", Host: "https://us.i.posthog.com"}
+	cfg := Config{Production: true, Enabled: true, Token: "phc_test", Host: "https://us.i.posthog.com"}
 	if err := Init(cfg, discardLogger()); err != nil {
 		t.Fatalf("Init() = %v, want nil", err)
 	}
@@ -88,5 +88,25 @@ func TestInitInProductionCreatesAClient(t *testing.T) {
 	logger := discardLogger()
 	if got := Logger(logger, "cinedikt-api"); got == logger {
 		t.Fatal("Logger() did not wrap a configured client")
+	}
+}
+
+// TestInitSwitchedOffDoesNotReport: with the switch off, production
+// with a token and a host still runs with no client, so nothing is sent
+// and error reports go nowhere.
+func TestInitSwitchedOffDoesNotReport(t *testing.T) {
+	t.Cleanup(func() { client = nil })
+	client = nil
+
+	cfg := Config{Production: true, Enabled: false, Token: "phc_test", Host: "https://us.i.posthog.com"}
+	if err := Init(cfg, discardLogger()); err != nil {
+		t.Fatalf("Init() = %v, want nil", err)
+	}
+	if Client() != nil {
+		t.Fatal("Client() is configured with analytics switched off")
+	}
+	logger := discardLogger()
+	if got := Logger(logger, "cinedikt-api"); got != logger {
+		t.Fatal("Logger() wrapped the logger with analytics switched off")
 	}
 }

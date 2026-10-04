@@ -17,8 +17,12 @@ type Config struct {
 	// Production turns reporting on. Everything else runs with a nil
 	// client, so captures and error reports are cheap no-ops.
 	Production bool
-	Token      string
-	Host       string
+	// Enabled is the switch for every tracker (ANALYTICS_ENABLED). Off,
+	// production runs with a nil client too, with its token left in
+	// place for the day it is turned back on.
+	Enabled bool
+	Token   string
+	Host    string
 }
 
 // Init configures the single PostHog client for this process.
@@ -33,6 +37,10 @@ func Init(cfg Config, logger *slog.Logger) error {
 		if cfg.Token != "" {
 			logger.Info("analytics disabled outside production", "posthog_configured", true)
 		}
+		return nil
+	}
+	if !cfg.Enabled {
+		logger.Info("analytics switched off; set ANALYTICS_ENABLED=true to report", "posthog_configured", cfg.Token != "")
 		return nil
 	}
 	switch {

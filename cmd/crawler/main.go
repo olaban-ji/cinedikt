@@ -50,6 +50,7 @@ func run(movieID, depth, concurrency int, logger *slog.Logger) error {
 	}
 	if err := analytics.Init(analytics.Config{
 		Production: cfg.Production(),
+		Enabled:    cfg.AnalyticsEnabled,
 		Token:      cfg.PostHogToken,
 		Host:       cfg.PostHogHost,
 	}, logger); err != nil {

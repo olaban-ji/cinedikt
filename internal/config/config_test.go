@@ -383,3 +383,31 @@ func TestTheChangesJobHasAPageCap(t *testing.T) {
 		}
 	}
 }
+
+// TestAnalyticsIsOffUnlessSwitchedOn: every tracker stays off, whatever
+// tokens are set, until ANALYTICS_ENABLED says "true".
+func TestAnalyticsIsOffUnlessSwitchedOn(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x/y")
+	t.Setenv("POSTHOG_PROJECT_TOKEN", "phc_test")
+	t.Setenv("MIXPANEL_PROJECT_TOKEN", "mp_test")
+	for _, c := range []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"false", false},
+		{"0", false},
+		{"yes", false},
+		{"true", true},
+		{" TRUE ", true},
+	} {
+		t.Setenv("ANALYTICS_ENABLED", c.value)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.AnalyticsEnabled != c.want {
+			t.Errorf("ANALYTICS_ENABLED=%q: enabled = %v, want %v", c.value, cfg.AnalyticsEnabled, c.want)
+		}
+	}
+}

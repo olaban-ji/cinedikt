@@ -47,6 +47,11 @@ type Config struct {
 	// PostHog's, it is only served in production, and empty means the
 	// page never loads Mixpanel at all.
 	MixpanelToken string
+	// AnalyticsEnabled is the switch for every tracker: PostHog and
+	// Mixpanel in the page, and PostHog's error reports from the server.
+	// Off unless ANALYTICS_ENABLED is "true", so the tokens can stay set
+	// while nothing is tracked.
+	AnalyticsEnabled bool
 	// RedisURL, if set, holds the TMDb/OMDb response cache.
 	RedisURL string
 
@@ -379,6 +384,7 @@ func Load() (Config, error) {
 		PostHogToken:       os.Getenv("POSTHOG_PROJECT_TOKEN"),
 		PostHogHost:        envOr("POSTHOG_HOST", "https://us.i.posthog.com"),
 		MixpanelToken:      strings.TrimSpace(os.Getenv("MIXPANEL_PROJECT_TOKEN")),
+		AnalyticsEnabled:   strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_ENABLED")), "true"),
 		RedisURL:           os.Getenv("REDIS_URL"),
 		Neo4jURI:           envOr("NEO4J_URI", "bolt://localhost:7687"),
 		Neo4jUser:          envOr("NEO4J_USER", "neo4j"),

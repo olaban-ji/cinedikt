@@ -483,7 +483,7 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 
 ## Configuration
 
-`APP_ENV` is `development` (the default) or `production`. Only production reports to PostHog. Nothing infers the environment from a hostname or a log level: a production deploy that happens to reach its database over localhost would otherwise go quiet. `dev` and `prod` are accepted. Anything else is a startup error. The Docker image sets `APP_ENV=production` itself.
+`APP_ENV` is `development` (the default) or `production`. Only production reports to PostHog, and only with `ANALYTICS_ENABLED=true`. Nothing infers the environment from a hostname or a log level: a production deploy that happens to reach its database over localhost would otherwise go quiet. `dev` and `prod` are accepted. Anything else is a startup error. The Docker image sets `APP_ENV=production` itself.
 
 `API_ADDR` wins over `PORT`. Unset, with no `PORT`, the process listens on `:8080`. `LOG_LEVEL=debug` turns on debug logs.
 
@@ -514,8 +514,9 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | Job notifications, described below. Both empty, and nothing is sent. The token is from BotFather. The chat id is `message.chat.id` from `getUpdates` after Start — positive for a private chat, negative for a group. In a group the bot needs permission to pin messages |
 | `NOTIFY_TIMEZONE` | UTC | The zone notification times are written in, such as `Africa/Lagos`. Unset or unknown, they are UTC and the board says so |
 | `WEB_DIR` | | Built frontend. The image sets `/app/web/dist` |
-| `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | host `https://us.i.posthog.com` | Read only in production. The API serves them to the page; the token is a write-only key. The page may instead be built with `VITE_POSTHOG_PROJECT_TOKEN` and `VITE_POSTHOG_HOST` |
-| `MIXPANEL_PROJECT_TOKEN` | | Read only in production. The API serves it to the page, which then loads Mixpanel with autocapture and session recording (text and inputs masked); unset, the page never loads it. The page may instead be built with `VITE_MIXPANEL_PROJECT_TOKEN` |
+| `ANALYTICS_ENABLED` | off | The switch for every tracker: PostHog and Mixpanel in the page, and PostHog's error reports from the server. Off unless `true`, whatever tokens are set, so they can stay in place while nothing is tracked |
+| `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | host `https://us.i.posthog.com` | Read only in production, and only with `ANALYTICS_ENABLED=true`. The API serves them to the page; the token is a write-only key. The page may instead be built with `VITE_POSTHOG_PROJECT_TOKEN` and `VITE_POSTHOG_HOST` |
+| `MIXPANEL_PROJECT_TOKEN` | | Read only in production, and only with `ANALYTICS_ENABLED=true`. The API serves it to the page, which then loads Mixpanel with autocapture and session recording (text and inputs masked); unset, the page never loads it. The page may instead be built with `VITE_MIXPANEL_PROJECT_TOKEN` |
 | `NEO4J_*`, `CRAWL_THRESHOLD_BASE`, `CRAWL_ORDER_PENALTY`, `MAX_COLD_CRAWLS` | | The old map. Ignored while `DATABASE_URL` is set |
 
 If `DATABASE_URL` is empty, startup requires a TMDb credential and `NEO4J_PASSWORD`. A deployment with nothing but a database URL starts.
@@ -546,7 +547,7 @@ This product includes GeoLite2 Data created by MaxMind, available from [https://
 
 In production the API writes single-line JSON to stdout (`config.NewLogger`). Locally it writes readable text to stderr. Railway turns anything on stderr into an error, so plain text there makes every served request look like a failure. JSON hands `method`, `path`, `status`, `duration_ms`, and `bytes` over as fields — `@status:>=500`, `@duration_ms:>500` — rather than a string to grep. The logger is built from `APP_ENV` before configuration has finished loading, so a bad variable can still be reported.
 
-Panics at the request boundary are logged and answered 500. In production that log is also an exception in PostHog.
+Panics at the request boundary are logged and answered 500. In production, with analytics switched on, that log is also an exception in PostHog.
 
 ## Deploy
 
@@ -568,7 +569,7 @@ The [Dockerfile](Dockerfile) builds the map with Node 22, the API with Go 1.26 (
 
 The restart policy is left at Railway's default, `ON_FAILURE`, and the service is not allowed to sleep. Declaring either would leave `config plan` permanently dirty, because the platform stores a default as null. Both matter: the importer runs between requests, and a sleeping machine would drop that work.
 
-Variables to set on the service: `DATABASE_URL`, and, for pictures, synopses, trailers, people's photos and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` and `MIXPANEL_PROJECT_TOKEN` if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `STREAMING_API_KEY`, `MAXMIND_LICENSE_KEY` and `MAXMIND_ACCOUNT_ID` for where to watch. `WEB_DIR` only if it should differ from the path the image already sets.
+Variables to set on the service: `DATABASE_URL`, and, for pictures, synopses, trailers, people's photos and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` and `MIXPANEL_PROJECT_TOKEN`, with `ANALYTICS_ENABLED=true`, if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `STREAMING_API_KEY`, `MAXMIND_LICENSE_KEY` and `MAXMIND_ACCOUNT_ID` for where to watch. `WEB_DIR` only if it should differ from the path the image already sets.
 
 ## Tests
 
