@@ -35,8 +35,8 @@ func TestProgressEventNeverReadsAsFinished(t *testing.T) {
 
 	early := &progress{start: time.Now().Add(-10 * time.Minute), total: 1000}
 	e := early.event(base, 40)
-	if e.Kind != notify.Progress || e.Job != notify.JobPosters || e.Done != 40 || e.Total != 1000 {
-		t.Fatalf("event = %+v, want a posters Progress with done and total", e)
+	if e.Kind != notify.Progress || e.Job != notify.JobPosters || e.Share != 0.04 || e.Total != 1000 {
+		t.Fatalf("event = %+v, want a posters Progress with its share and total", e)
 	}
 	if !e.ETA.IsZero() {
 		t.Errorf("ETA = %v at 4%%, want none before 5%%", e.ETA)
@@ -75,7 +75,7 @@ func TestStepTellsTheSinkAndDoneDoesNot(t *testing.T) {
 	p.step(10)
 	p.done(100)
 	got := sink.all()
-	if len(got) != 1 || got[0].Kind != notify.Progress || got[0].Done != 10 {
+	if len(got) != 1 || got[0].Kind != notify.Progress || got[0].Share != 0.1 || got[0].Total != 100 {
 		t.Fatalf("events = %+v, want one Progress from the step and nothing from done", got)
 	}
 	if got[0].At.IsZero() {

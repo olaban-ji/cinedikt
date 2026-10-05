@@ -75,8 +75,8 @@ describe('versus', () => {
 });
 
 describe('roleLine', () => {
-  const cast: GridPerson = { id: 'nm0000001', name: 'Keanu Reeves', role: 'cast', character: 'Neo', order: 0 };
-  const helm: GridPerson = { id: 'nm0000002', name: 'Lana Wachowski', role: 'director', order: -1 };
+  const cast: GridPerson = { id: 'nm0000001', name: 'Keanu Reeves', role: 'cast', character: 'Neo' };
+  const helm: GridPerson = { id: 'nm0000002', name: 'Lana Wachowski', role: 'director' };
 
   it('names the character for cast', () => {
     expect(roleLine(cast, 'The Matrix')).toBe('Neo in The Matrix');
@@ -281,9 +281,9 @@ describe('the panel’s people', () => {
   const LANA = 'https://image.tmdb.org/t/p/w185/lana.jpg';
   const KEANU = 'https://image.tmdb.org/t/p/w185/keanu.jpg';
   const people: GridPerson[] = [
-    { id: 'nm0905154', name: 'Lana Wachowski', role: 'director', order: 0, photo: LANA },
-    { id: 'nm0000206', name: 'Keanu Reeves', role: 'cast', character: 'Neo', order: 2 },
-    { id: 'nm0000401', name: 'Laurence Fishburne', role: 'cast', character: 'Morpheus', order: 3 },
+    { id: 'nm0905154', name: 'Lana Wachowski', role: 'director', photo: LANA },
+    { id: 'nm0000206', name: 'Keanu Reeves', role: 'cast', character: 'Neo' },
+    { id: 'nm0000401', name: 'Laurence Fishburne', role: 'cast', character: 'Morpheus' },
   ];
 
   /** The panel for The Matrix Reloaded, with Keanu's photo asked for
@@ -378,7 +378,7 @@ const service = (id: string, name: string, more: Partial<WatchOffer> = {}): Watc
 
 /** An answer in the United States with these groups. */
 function offers(groups: Partial<Pick<WhereToWatch, 'stream' | 'free' | 'rent' | 'buy'>>, countryName = 'United States'): WatchState {
-  return { status: 'ok', data: { country: 'us', countryName, covered: true, stream: [], free: [], rent: [], buy: [], ...groups } };
+  return { status: 'ok', data: { countryName, covered: true, stream: [], free: [], rent: [], buy: [], ...groups } };
 }
 
 /** The panel's first render, knowing this much about where its movie can
@@ -489,7 +489,7 @@ describe('the panel’s Where to watch', () => {
   });
 
   it('says so when the reader’s country has no coverage', () => {
-    expect(section(panelWith({ status: 'ok', data: { country: 'xx', covered: false, stream: [], free: [], rent: [], buy: [] } }))).toBe(
+    expect(section(panelWith({ status: 'ok', data: { covered: false, stream: [], free: [], rent: [], buy: [] } }))).toBe(
       '<div class="cd-sheet-wtw"><div class="cd-sheet-heading">Where to watch</div>' +
         '<p class="cd-sheet-wtw-note">Streaming info isn’t available in your country yet.</p></div>',
     );

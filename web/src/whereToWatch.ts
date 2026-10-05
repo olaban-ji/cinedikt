@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { fetchWhereToWatch, type WatchOfferBody, type WhereToWatchBody } from './api';
+import { isImdbId } from './movieParam';
 import type { Theme } from './theme';
 
 /** One service a movie can be watched on. */
@@ -28,9 +29,6 @@ export interface WatchOffer {
 /** Where a movie can be watched, in the country the server placed the
  *  reader in. A country without coverage has nothing in any group. */
 export interface WhereToWatch {
-  /** ISO 3166-1 alpha-2, lowercased; "xx" when the reader could not be
-   *  placed. */
-  country: string;
   /** The country's name, as the API's list of countries gives it. */
   countryName?: string;
   covered: boolean;
@@ -50,9 +48,6 @@ export type WatchState =
 
 const WAIT: WatchState = { status: 'wait', data: null };
 const ERROR: WatchState = { status: 'error', data: null };
-
-/** IMDb's title id, the only kind the server takes. */
-const TCONST = /^tt\d+$/;
 
 /** The answers that have come back, kept for the visit. The reader's
  *  country does not change within it, and the server stores each answer
@@ -86,7 +81,7 @@ export function askWhereToWatch(id: string): Promise<WhereToWatch | null> {
   if (known) return Promise.resolve(known);
   const pending = asking.get(id);
   if (pending) return pending;
-  if (!TCONST.test(id)) return Promise.resolve(null);
+  if (!isImdbId(id, 'tt')) return Promise.resolve(null);
   if (failureStands(id)) return Promise.resolve(null);
   const ask = fetchWhereToWatch(id)
     .then((body) => {
@@ -121,7 +116,7 @@ export function whereToWatchKnown(id: string): WhereToWatch | undefined {
  *  come back this visit, a failure that still stands, and otherwise
  *  waiting, an older failure included, since its component asks again as
  *  it mounts. */
-export function watchStateOf(id: string): WatchState {
+function watchStateOf(id: string): WatchState {
   const known = answers.get(id);
   if (known) return { status: 'ok', data: known };
   return failureStands(id) ? ERROR : WAIT;
@@ -168,11 +163,9 @@ export function readAnswer(body: WhereToWatchBody): WhereToWatch {
   if (!body || typeof body !== 'object' || typeof body.covered !== 'boolean') {
     throw new Error('unreadable where-to-watch answer');
   }
-  const country = typeof body.country === 'string' ? body.country.toLowerCase() : 'xx';
   const countryName = text(body.countryName);
   const covered = body.covered;
   return {
-    country,
     ...(countryName ? { countryName } : {}),
     covered,
     stream: covered ? offers(body.stream) : [],
@@ -225,7 +218,7 @@ function offers(list: WatchOfferBody[] | undefined): WatchOffer[] {
 }
 
 /** How many services the preview's row names before "+N". */
-export const STREAM_PEEK = 3;
+const STREAM_PEEK = 3;
 
 /** The preview's Stream row: what streams with a subscription and what
  *  is free, in that order and each service once, the first three named
@@ -240,7 +233,7 @@ export function streamPeek(w: WatchState): { shown: WatchOffer[]; more: number }
 }
 
 /** The four ways to watch, in the order the panel lists them. */
-export type WatchKind = 'stream' | 'free' | 'rent' | 'buy';
+type WatchKind = 'stream' | 'free' | 'rent' | 'buy';
 
 /** Each way's row label in the panel. */
 export const WATCH_LABEL: Record<WatchKind, string> = {

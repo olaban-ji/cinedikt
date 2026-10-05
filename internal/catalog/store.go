@@ -144,9 +144,6 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
-// Pool exposes the connection pool for the read queries.
-func (s *Store) Pool() *pgxpool.Pool { return s.pool }
-
 // Ping reports whether the database is reachable, for the health check.
 func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
@@ -359,34 +356,6 @@ func (s *Store) refreshQueueVotes(ctx context.Context) error {
 	return nil
 }
 
-// RecordCheck notes what the hourly HEAD saw and what was decided. It
-// is written on every attempt, including the ones that do nothing,
-// which is most of them.
-//
-// A failure to write it is not worth failing an import over: this row
-// is for someone looking, not for the gate.
-func (s *Store) RecordCheck(ctx context.Context, gen Generation, outcome string) error {
-	var files any
-	if len(gen) > 0 {
-		raw, err := json.Marshal(stampsJSON(gen))
-		if err != nil {
-			return err
-		}
-		files = raw
-	}
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO meta.last_check (id, checked_at, files, outcome)
-		VALUES (1, now(), $1, $2)
-		ON CONFLICT (id) DO UPDATE
-		SET checked_at = EXCLUDED.checked_at,
-		    files      = EXCLUDED.files,
-		    outcome    = EXCLUDED.outcome`, files, outcome)
-	if err != nil {
-		return fmt.Errorf("catalog: record check: %w", err)
-	}
-	return nil
-}
-
 // DropRetired removes the previous generation. Called at the start of a
 // run rather than at the end of the last one, so readers had the whole
 // gap between imports to finish with it.
@@ -415,7 +384,8 @@ func (s *Store) DropRetired(ctx context.Context) error {
 	return nil
 }
 
-// stampJSON is how a generation is written to meta.
+// stampJSON is how a generation is written to meta. Its fields are
+// Stamp's, so each converts to the other.
 type stampJSON struct {
 	LastModified time.Time `json:"last_modified"`
 	ETag         string    `json:"etag,omitempty"`
@@ -425,7 +395,7 @@ type stampJSON struct {
 func stampsJSON(gen Generation) map[string]stampJSON {
 	out := make(map[string]stampJSON, len(gen))
 	for f, s := range gen {
-		out[string(f)] = stampJSON{LastModified: s.LastModified, ETag: s.ETag, Length: s.Length}
+		out[string(f)] = stampJSON(s)
 	}
 	return out
 }
@@ -448,7 +418,7 @@ func (s *Store) Published(ctx context.Context) (Generation, time.Time, error) {
 	}
 	gen := make(Generation, len(stamps))
 	for name, s := range stamps {
-		gen[File(name)] = Stamp{LastModified: s.LastModified, ETag: s.ETag, Length: s.Length}
+		gen[File(name)] = Stamp(s)
 	}
 	return gen, at, nil
 }

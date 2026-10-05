@@ -36,6 +36,7 @@ import (
 	"golang.org/x/image/math/fixed"
 
 	"cinedikt/internal/catalog"
+	"cinedikt/internal/imdbid"
 )
 
 // The fonts the app itself is set in, so a card looks like the page it
@@ -457,23 +458,10 @@ func ogTConst(path string) (string, bool) {
 		return "", false
 	}
 	id, ok := strings.CutSuffix(rest, ".png")
-	if !ok || !validOGTConst(id) {
+	if !ok || !imdbid.Title(id) {
 		return "", false
 	}
 	return id, true
-}
-
-// validOGTConst is IMDb's title id, matching the catalog's own test.
-func validOGTConst(id string) bool {
-	if len(id) < 3 || len(id) > 20 || !strings.HasPrefix(id, "tt") {
-		return false
-	}
-	for i := 2; i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // fetchPoster gets the artwork at the width the card draws it, or
@@ -808,11 +796,6 @@ func cssGradientLine(w, h int, deg float64) func(x, y int) float64 {
 		t := 0.5 + ((float64(x)+0.5-cx)*dx+(float64(y)+0.5-cy)*dy)/length
 		return math.Min(math.Max(t, 0), 1)
 	}
-}
-
-// oklch is one CSS oklch(L C h) colour as 8-bit sRGB.
-func oklch(l, c, hue float64) color.NRGBA {
-	return okLabToNRGBA(okLCh(l, c, hue))
 }
 
 // okLCh turns oklch's polar form into OKLab's a and b.

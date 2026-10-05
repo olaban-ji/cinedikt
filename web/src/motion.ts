@@ -76,15 +76,8 @@ export function animate(
  *  there is nothing to show waiting: the header is simply complete. */
 export const FAST_PATH_MS = 120;
 
-/** The headline, the sub-line and the theme picker each fade in over
- *  this, one step apart, from the start. Linear, as the design's own
- *  fade is: an eased fade on type reads as a pop and then a shimmer. */
-export const COPY_FADE_MS = 600;
-export const COPY_STEP_MS = 120;
-
 /** The veil: the page under the header dims while the mark comes into
  *  focus over it, and comes back up as the mark leaves. */
-export const VEIL_OPACITY = 0.72;
 export const VEIL_IN_MS = 420;
 export const VEIL_OUT_MS = 600;
 /** The veil starts to rise once a fast list has been ruled out, not at
@@ -102,7 +95,7 @@ export const LOADER_W = 46;
 export const LOADER_H = 70;
 /** The lowest the mark's centre sits: clear of the bottom of a short
  *  window, whatever the tiles below it are doing. */
-export const LOADER_FLOOR = 48;
+const LOADER_FLOOR = 48;
 
 /** The mark racks into focus like a projector finding the screen: past
  *  sharp, a slight hunt back, then settled. One curve over the whole
@@ -135,30 +128,12 @@ export const GLIDE_BLUR_PX = 1.4;
 export const TILES_AFTER_LIFT_MS = 80;
 /** "inedikt" comes into focus just before its C lands. */
 export const WORD_BEFORE_LANDING_MS = 200;
-export const WORD_MS = 440;
-
-/** Each poster comes into focus in reading order: its fill over
- *  TILE_FILL_MS, its caption over TILE_CAPTION_MS a little behind. The
- *  stylesheet draws these from the same numbers (.cd-cold-fill). */
-export const TILE_FILL_MS = 640;
-export const TILE_FILL_DELAY_MS = 20;
-export const TILE_CAPTION_MS = 400;
-export const TILE_CAPTION_DELAY_MS = 110;
-export const TILE_STEP_MS = 70;
-
-export function tileFillDelay(i: number): number {
-  return TILE_FILL_DELAY_MS + i * TILE_STEP_MS;
-}
-
-export function tileCaptionDelay(i: number): number {
-  return TILE_CAPTION_DELAY_MS + i * TILE_STEP_MS;
-}
 
 /** Coming back to the opening screen from a map does not replay the
  *  opening. The tiles rise into place instead, in reading order. */
 export const RETURN_TILE_MS = 420;
-export const RETURN_TILE_DELAY_MS = 80;
-export const RETURN_TILE_STEP_MS = 45;
+const RETURN_TILE_DELAY_MS = 80;
+const RETURN_TILE_STEP_MS = 45;
 export const RETURN_RISE_PX = 10;
 
 export function returnTileDelay(i: number): number {
@@ -172,31 +147,19 @@ export const ABOUT_IN_MS = 520;
 export const ABOUT_STEP_MS = 80;
 export const ABOUT_RISE_PX = 8;
 
-/** When each part of the opening happens, for a list that arrived at
- *  `listAt`. `fast` means none of it does. */
-export interface OpeningPlan {
+/** Whether the opening plays for a list that arrived at `listAt`, and
+ *  when the mark lifts off if it does. `fast` means none of it plays.
+ *  Everything after the lift is timed from the lift itself, with
+ *  TILES_AFTER_LIFT_MS, WORD_BEFORE_LANDING_MS and GLIDE_MS. */
+interface OpeningPlan {
   fast: boolean;
   /** The focus is let run to the end even for a quick list: cutting a
    *  mark loose while it is still blurred is worse than the wait. */
   lift: number;
-  /** Whether the list was still out when the focus settled. */
-  breathes: boolean;
-  tilesIn: number;
-  word: number;
-  /** The loader goes and the header's own mark appears. */
-  done: number;
 }
 
 export function openingPlan(listAt: number): OpeningPlan {
-  const lift = Math.max(listAt, FOCUS_END_MS);
-  return {
-    fast: listAt < FAST_PATH_MS,
-    lift,
-    breathes: listAt > BREATHE_AT_MS,
-    tilesIn: lift + TILES_AFTER_LIFT_MS,
-    word: lift + GLIDE_MS - WORD_BEFORE_LANDING_MS,
-    done: lift + GLIDE_MS,
-  };
+  return { fast: listAt < FAST_PATH_MS, lift: Math.max(listAt, FOCUS_END_MS) };
 }
 
 /** Where the mark comes into focus: centred across the tile grid, and
@@ -308,7 +271,7 @@ export const LAND_TIMEOUT_MS = 2000;
 
 /** A spring: its natural frequency, in radians a second, and its damping
  *  ratio (1 arrives without overshooting; less is quicker and overshoots). */
-export interface Spring {
+interface Spring {
   omega: number;
   zeta: number;
 }
@@ -328,7 +291,7 @@ const STILL: Pose = { x: 0, y: 0, sx: 0, sy: 0 };
 
 /** One leg of a flight: let go at `from` with velocity `vel` (per
  *  second), and heading for `to`. */
-export interface Leg {
+interface Leg {
   from: Pose;
   vel: Pose;
   to: Pose;
@@ -517,8 +480,8 @@ export function landingTransform(
  *  step behind the one before it. */
 export const CHIP_FLIP_MS = 420;
 export const CHIP_IN_MS = 260;
-export const CHIP_IN_DELAY_MS = 260;
-export const CHIP_IN_STEP_MS = 35;
+const CHIP_IN_DELAY_MS = 260;
+const CHIP_IN_STEP_MS = 35;
 export const CHIP_IN_RISE_PX = 6;
 
 export function chipInDelay(k: number): number {

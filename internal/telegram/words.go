@@ -69,10 +69,10 @@ var jobList = []jobInfo{
 	{notify.JobTrailers, "Trailers", "Trailers", "no TMDb key"},
 	{notify.JobPeople, "People photos", "People photos", "no TMDb key"},
 	{notify.JobColours, "Opening colours", "Opening colours", ""},
-	// The check runs on where to watch's queue, so it is off with a
-	// MaxMind key set when where to watch is: no STREAMING_API_KEY, or a
-	// queue that would not start.
-	{notify.JobGeoIP, "Country lookup", "Country lookup", "no MaxMind key, or where to watch is off"},
+	// The check runs on where to watch's queue, so it is off with
+	// MaxMind credentials set when where to watch is: no
+	// STREAMING_API_KEY, or a queue that would not start.
+	{notify.JobGeoIP, "Country lookup", "Country lookup", "no MaxMind credentials, or where to watch is off"},
 }
 
 func info(id string) jobInfo {
@@ -596,92 +596,6 @@ func (w writer) longPass(id string, e notify.Event, fixed string) part {
 		head = info(id).label + " done: " + count(e.Done) + " coloured"
 	}
 	return w.push(sevOK, false, head, "", "", body, fixed)
-}
-
-// P11: the one message a manual cmd/importer run sends, built from
-// everything it heard.
-func (w writer) manual(events []notify.Event) (part, bool) {
-	var imp *notify.Event
-	var omdbDone, tmdbDone, errs int64
-	var posters, limited bool
-	var posterFail *notify.Event
-	for i := range events {
-		e := &events[i]
-		switch {
-		case e.Job == notify.JobImport &&
-			(e.Kind == notify.Published || e.Kind == notify.Checked || e.Kind == notify.Skipped || e.Kind == notify.Failed):
-			imp = e
-		case e.Job == notify.JobPosters || e.Job == notify.JobTMDbPosters:
-			switch e.Kind {
-			case notify.Finished, notify.Paused:
-				posters = true
-				if e.Job == notify.JobPosters {
-					omdbDone += e.Done
-				} else {
-					tmdbDone += e.Done
-				}
-				errs += e.Errors
-				if e.Kind == notify.Paused {
-					limited = true
-				}
-			case notify.Failed:
-				posterFail = e
-			case notify.Checked:
-				posters = true
-			}
-		}
-	}
-	if imp != nil {
-		switch imp.Kind {
-		case notify.Published:
-			return w.push(sevOK, false, liveHeadline(*imp)+" (manual run)", "", "",
-				count(imp.Films)+" films and "+count(imp.People)+" people. Took "+human(imp.Took)+"."), true
-		case notify.Skipped:
-			return w.push(sevPause, false, "Manual import: skipped", "", "",
-				"IMDb changed a file mid-download. Try again in a few minutes."), true
-		case notify.Failed:
-			return w.push(sevRed, false, "Manual import failed", imp.Detail, "",
-				causeSentence(failure{cause: imp.Cause, provider: imp.Provider, status: imp.Status, integrity: imp.Integrity, lookups: imp.Errors})), true
-		}
-		if imp.Cause == notify.Locked {
-			return w.push(sevPause, false, "Manual import: skipped", "", "",
-				"Another import is already running, so this one didn't start."), true
-		}
-		body := "IMDb's files haven't changed since the live catalog was built."
-		if !imp.LiveSince.IsZero() {
-			body = "IMDb's files haven't changed since the live catalog was built (" + w.when(imp.LiveSince) + ")."
-		}
-		return w.push(sevOK, false, "Manual import: nothing new", "", "", body), true
-	}
-	if posterFail != nil {
-		return w.push(sevRed, false, "Manual poster fill failed", posterFail.Detail, "",
-			causeSentence(failure{cause: posterFail.Cause, provider: posterFail.Provider, status: posterFail.Status, lookups: posterFail.Errors})), true
-	}
-	if !posters {
-		return part{}, false
-	}
-	var said []string
-	if omdbDone > 0 {
-		said = append(said, count(omdbDone)+" posters from OMDb")
-	}
-	if tmdbDone > 0 {
-		if omdbDone > 0 {
-			said = append(said, count(tmdbDone)+" more from TMDb")
-		} else {
-			said = append(said, count(tmdbDone)+" posters from TMDb")
-		}
-	}
-	body := "Nothing needed filling in."
-	if len(said) > 0 {
-		body = strings.Join(said, ", ") + "."
-	}
-	if errs > 0 {
-		body += " " + count(errs) + " lookups failed."
-	}
-	if limited {
-		body += " OMDb's daily limit was reached; the rest will be filled in later."
-	}
-	return w.push(sevOK, false, "Manual poster fill done", "", "", body), true
 }
 
 // P12: a new GeoLite2 build was downloaded, checked and is in use. The

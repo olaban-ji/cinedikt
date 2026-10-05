@@ -71,7 +71,7 @@ export function canRest(): boolean {
 
 /** How long a pointer has to rest on a chip before it previews. Crossing
  *  the row on the way somewhere else should not make the map flash. */
-export const HOVER_DELAY_MS = 140;
+const HOVER_DELAY_MS = 140;
 
 /** A preview that waits to be meant. */
 export function useHoverDelay(set: (id: string | null) => void): {
@@ -119,7 +119,7 @@ export function isOffScreen(
 
 /** Scroll is a flood and this answer is a yes or a no, so it is asked
  *  at most this often. */
-export const OFF_THROTTLE_MS = 60;
+const OFF_THROTTLE_MS = 60;
 
 /** Tracks whether the searched film has scrolled out of sight. */
 export function useOffScreen(

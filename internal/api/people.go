@@ -2,11 +2,12 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"cinedikt/internal/catalog"
+	"cinedikt/internal/imdbid"
 )
 
 // PhotoStore is where the people job's answers are read, and where the
@@ -50,27 +51,9 @@ type photosAnswer struct {
 // yet is marked the same way, which wakes the job and puts them at the
 // head of its queue, and the reader is told the answer is pending.
 func (s *CatalogServer) peoplePhotos(w http.ResponseWriter, r *http.Request) {
-	raw := r.URL.Query().Get("ids")
-	if raw == "" {
-		writeError(w, http.StatusBadRequest, "ids is required")
+	ids, ok := idsParam(w, r, MaxPhotoIDs, imdbid.Name, "ids must be IMDb name ids, such as nm0000206")
+	if !ok {
 		return
-	}
-	asked := strings.Split(raw, ",")
-	if len(asked) > MaxPhotoIDs {
-		writeError(w, http.StatusBadRequest, "too many ids")
-		return
-	}
-	var ids []string
-	seen := make(map[string]bool, len(asked))
-	for _, id := range asked {
-		if !validNConst(id) {
-			writeError(w, http.StatusBadRequest, "ids must be IMDb name ids, such as nm0000206")
-			return
-		}
-		if !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
 	}
 	body := photosAnswer{Photos: make(map[string]*string, len(ids)), Pending: []string{}}
 	for _, id := range ids {
@@ -79,13 +62,7 @@ func (s *CatalogServer) peoplePhotos(w http.ResponseWriter, r *http.Request) {
 	if s.photoStore != nil {
 		rows, err := s.photoStore.PeoplePhotos(r.Context(), ids)
 		if err != nil {
-			if gone(r) {
-				return
-			}
-			if s.Logger != nil {
-				s.Logger.Warn("people's photos", "err", err)
-			}
-			writeError(w, http.StatusInternalServerError, "could not read the photos")
+			s.failed(w, r, http.StatusInternalServerError, "could not read the photos", slog.LevelWarn, err, "people's photos")
 			return
 		}
 		now := time.Now()
@@ -115,18 +92,4 @@ func (s *CatalogServer) peoplePhotos(w http.ResponseWriter, r *http.Request) {
 	}
 	noStore(w)
 	writeJSON(w, http.StatusOK, body)
-}
-
-// validNConst is IMDb's name id: "nm" and digits, the way validTConst is
-// its title id.
-func validNConst(id string) bool {
-	if len(id) < 3 || len(id) > 20 || !strings.HasPrefix(id, "nm") {
-		return false
-	}
-	for i := 2; i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
-			return false
-		}
-	}
-	return true
 }

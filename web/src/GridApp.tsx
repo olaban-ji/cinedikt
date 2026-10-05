@@ -54,7 +54,7 @@ import { isSearchShortcut, isTyping, searchPlaceholder } from './search';
 import { Toast, useToast } from './Toast';
 import { usePlayer } from './TrailerRow';
 import { dimsCards, hideEmptyToast } from './quickSwitch';
-import { ABOUT_PATH, filmPath, isAboutPath, movieIdFromPath, routeAt, routeFrom, usePageTitle } from './movieParam';
+import { ABOUT_PATH, filmPath, isAboutPath, movieIdFromPath, routeAt, usePageTitle } from './movieParam';
 import { AboutPage, MailLink } from './AboutPage';
 import {
   applyFilters,
@@ -127,7 +127,7 @@ const TILE_W = 104;
  *  place is empty until the loader lands in it, and "inedikt" waits,
  *  out of focus, until the C is nearly there. Every timing it runs on is
  *  in motion.ts. */
-export type Opening = 'draw' | 'word' | 'done';
+type Opening = 'draw' | 'word' | 'done';
 
 /** The longest the copy waits for Young Serif, when it is not already in
  *  hand as the frames appear, before it fades in with whatever face is
@@ -332,11 +332,6 @@ export function GridApp() {
   const setPeople = useCallback((people: Set<string>) => {
     commit(settingsRef.current, people, false);
   }, [commit]);
-  // Filters used to be stored with the preferences, and a year range
-  // followed the reader onto every map. Drop them from storage.
-  useEffect(() => {
-    persistView(settingsRef.current);
-  }, []);
   const [theme, setTheme] = useTheme();
   // Where the opening load has got to. It drives the header, which is
   // why it lives here rather than in ColdStart: the mark ends up in
@@ -1647,15 +1642,11 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
     setRoute((was) => (was.movieId === now.movieId && was.about === now.about ? was : now));
   }, []);
   useEffect(() => {
-    // An old /film/ link still opens the map; from here on the address
-    // bar shows the one address a map has.
-    const { movieId: here, path } = routeFrom(location.href);
-    const at = location.pathname + location.search + location.hash;
+    // A page opened from a link or typed in has no entry of its own yet.
+    // It gets one at depth zero, so Back is not offered from it.
     if (history.state == null) {
-      history.replaceState(forwardEntry(here, 0), '', path);
+      history.replaceState(forwardEntry(0), '');
       setDepth(0);
-    } else if (path !== at) {
-      history.replaceState(history.state, '', path);
     }
     const onPop = () => {
       follow();
@@ -1674,12 +1665,12 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
     // after the failure, asks for the map again without moving. A different movie starts clear, and the clear
     // is stamped on the new entry so the one left behind stays as it was.
     if (movieIdFromPath(location.pathname) === id) {
-      history.pushState({ movie: id, depth: next, filters: filtersFromState(history.state) }, '', path);
+      history.pushState({ depth: next, filters: filtersFromState(history.state) }, '', path);
       follow();
       setDepth(next);
       return;
     }
-    history.pushState(forwardEntry(id, next), '', path);
+    history.pushState(forwardEntry(next), '', path);
     follow();
     setDepth(next);
     adopt.current(freshFilters());
@@ -1693,7 +1684,7 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
     }
     if (isAboutPath(location.pathname)) return;
     const next = historyDepth(history.state) + 1;
-    history.pushState(forwardEntry(null, next), '', ABOUT_PATH);
+    history.pushState(forwardEntry(next), '', ABOUT_PATH);
     follow();
     setDepth(next);
     adopt.current(freshFilters());
@@ -1715,7 +1706,7 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
       return;
     }
     const next = historyDepth(history.state) + 1;
-    history.pushState(forwardEntry(null, next), '', homeHref());
+    history.pushState(forwardEntry(next), '', homeHref());
     follow();
     setDepth(next);
     adopt.current(freshFilters());

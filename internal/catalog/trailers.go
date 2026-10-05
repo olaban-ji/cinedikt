@@ -25,12 +25,6 @@ import (
 	"cinedikt/internal/trailer"
 )
 
-// TrailerSweepMinVotes is how well known a film has to be for the sweep
-// to reach it. Zero is every film the id matcher would match: the sweep
-// fills the whole catalog, and a film below a higher floor is still
-// looked up the moment a reader opens it.
-const TrailerSweepMinVotes = 0
-
 // TrailerNullRetry is how old a "no trailer" answer has to be before it
 // is asked again, for a film released in the last twelve months.
 // Trailers are often added after release.
@@ -194,6 +188,17 @@ type TrailerJob struct {
 	refilled time.Time
 }
 
+// trailerLoop is how the runner keeps the trailer job going. A reader
+// opening a film with no answer is waiting on it, and should not wait
+// out its rest to be heard. A new generation brings films to queue, so
+// that wake has the next pass refill; the rest interval brings a refill
+// of its own.
+func trailerLoop(job *TrailerJob, wakes *Wakes) jobLoop {
+	return jobLoop{name: "trailers", job: notify.JobTrailers, rest: TrailerRest,
+		run: job.Run, wake: wakes.Trailers, wanted: wakes.TrailersWanted,
+		refill: func() { job.refilled = time.Time{} }}
+}
+
 // trailerTitle is one title the job is about to ask about.
 type trailerTitle struct {
 	tconst string
@@ -205,6 +210,8 @@ type trailerTitle struct {
 	// as a wanted film; zero for the sweep and the re-asks.
 	wantedAt time.Time
 }
+
+func (t trailerTitle) mark() (string, time.Time) { return t.tconst, t.wantedAt }
 
 // Run asks what it can before ctx is done, in four kinds, each only once
 // the ones before it have nothing left to give: films a reader has
@@ -292,7 +299,7 @@ func (j *TrailerJob) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if j.heard() {
+			if heard(j.Wanted) {
 				// A reader has opened a film with no answer. The rest of
 				// this round waits behind it.
 				break
@@ -313,7 +320,7 @@ func (j *TrailerJob) Run(ctx context.Context) error {
 			switch {
 			case stopping(err):
 				return nil
-			case refused(err):
+			case errors.Is(err, tmdb.ErrKey):
 				return &KeyError{Provider: "TMDb", Err: err}
 			case err != nil:
 				failed++
@@ -338,17 +345,6 @@ func (j *TrailerJob) Run(ctx context.Context) error {
 			}
 			track.step(found + none + failed)
 		}
-	}
-}
-
-// heard reports whether a reader's mark has arrived, taking the wake if
-// so: the pass that hears it is the one that serves it.
-func (j *TrailerJob) heard() bool {
-	select {
-	case <-j.Wanted:
-		return true
-	default:
-		return false
 	}
 }
 
@@ -525,107 +521,24 @@ func (s *Store) trailersOutstanding(ctx context.Context, minVotes int) (int64, e
 }
 
 // trailersWanted is the next round: the head of the first of the four
-// kinds that has anything this pass has not already tried. A lookup
-// that failed stores nothing, so it is still at the head of its kind,
-// and is left out here until a reader marks the title after the mark
-// that try served; tried holds that mark, zero for one that served none.
+// kinds that has anything this pass has not already tried.
 func (s *Store) trailersWanted(ctx context.Context, limit, minVotes int, tried map[string]time.Time) ([]trailerTitle, error) {
-	for _, kind := range []struct {
-		from  string
-		args  []any
-		want  string
-		order string
-	}{
+	titles, err := nextByKind(ctx, s, limit, "t.tconst, m.tconst IS NOT NULL, coalesce(m.tmdb_id, 0)", []wantKind{
 		{trailerWantedFrom, nil, "q.wanted_at", "q.wanted_at DESC, q.tconst"},
 		{trailerQueued("$2"), []any{minVotes}, "NULL::timestamptz", "q.votes DESC, q.tconst"},
 		{recentNullTrailers("$2"), []any{trailerNullRetryDays}, "NULL::timestamptz", "tr.asked_at, tr.tconst"},
 		{staleTrailers("$2"), []any{tmdbRefreshDays}, "NULL::timestamptz", "tr.asked_at, tr.tconst"},
-	} {
-		rows, err := s.pool.Query(ctx, `
-			SELECT t.tconst, m.tconst IS NOT NULL, coalesce(m.tmdb_id, 0), `+kind.want+` `+kind.from+`
-			ORDER BY `+kind.order+`
-			LIMIT $1`, append([]any{limit}, kind.args...)...)
-		if err != nil {
-			return nil, fmt.Errorf("catalog: titles wanting a trailer: %w", err)
+	}, tried, func(rows pgx.Rows) (trailerTitle, error) {
+		var t trailerTitle
+		var wantedAt *time.Time
+		err := rows.Scan(&t.tconst, &t.matched, &t.tmdbID, &wantedAt)
+		if wantedAt != nil {
+			t.wantedAt = *wantedAt
 		}
-		var fresh []trailerTitle
-		for rows.Next() {
-			var t trailerTitle
-			var wantedAt *time.Time
-			if err := rows.Scan(&t.tconst, &t.matched, &t.tmdbID, &wantedAt); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			if wantedAt != nil {
-				t.wantedAt = *wantedAt
-			}
-			if at, ok := tried[t.tconst]; ok && !t.wantedAt.After(at) {
-				continue
-			}
-			fresh = append(fresh, t)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		if len(fresh) > 0 {
-			return fresh, nil
-		}
+		return t, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("catalog: titles wanting a trailer: %w", err)
 	}
-	return nil, nil
-}
-
-// fillTrailers keeps the trailer job running for as long as the process
-// does. It shares the runner's TMDb client, and with it the process's
-// one limiter, so its requests and the other jobs' add up to one budget.
-func fillTrailers(ctx context.Context, job *TrailerJob, logger *slog.Logger, wakes *Wakes) {
-	waited := false
-	for {
-		ready, err := job.Store.LiveReady(ctx)
-		wait := TrailerRest
-		switch {
-		case err != nil || !ready:
-			if !waited {
-				logger.Info("trailers waiting for a catalog")
-				waited = true
-			}
-			wait = PosterWaitForCatalog
-		default:
-			waited = false
-			err := job.Run(ctx)
-			if err != nil && ctx.Err() == nil {
-				logger.Warn("trailers", "err", err)
-			}
-			reportRun(ctx, job.Notify, notify.JobTrailers, err, time.Now().Add(wait))
-		}
-		// A reader opening a film with no answer is waiting on this job,
-		// and should not wait out its rest to be heard. A new generation
-		// brings films to queue, so the next pass refills; the rest
-		// interval covers a wake sent while nobody was listening, and
-		// brings a refill of its own.
-		woke, published := waitForTrailers(ctx, wakes, wait)
-		if !woke {
-			return
-		}
-		if published {
-			job.refilled = time.Time{}
-		}
-	}
-}
-
-// waitForTrailers is waitFor for the trailer job, which has two wakes: a
-// reader's mark, and a new generation. published says it was the second.
-func waitForTrailers(ctx context.Context, wakes *Wakes, backstop time.Duration) (woke, published bool) {
-	timer := time.NewTimer(backstop)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false, false
-	case <-wakes.Trailers:
-		return true, true
-	case <-wakes.TrailersWanted:
-		return true, false
-	case <-timer.C:
-		return true, false
-	}
+	return titles, nil
 }

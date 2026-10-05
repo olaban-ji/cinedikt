@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const init = vi.fn();
 const captureEvent = vi.fn();
-const getDistinctId = vi.fn(() => 'distinct-1');
-const getSessionId = vi.fn(() => 'session-1');
 
 const mpInit = vi.fn();
 const mpTrack = vi.fn();
@@ -13,12 +11,7 @@ vi.mock('mixpanel-browser', () => ({
 }));
 
 vi.mock('posthog-js', () => ({
-  default: {
-    init,
-    capture: captureEvent,
-    get_distinct_id: getDistinctId,
-    get_session_id: getSessionId,
-  },
+  default: { init, capture: captureEvent },
 }));
 
 /** A page whose head holds a cinedikt-analytics tag with this content, as
@@ -42,7 +35,6 @@ describe('analytics', () => {
 
   beforeEach(() => {
     vi.resetModules();
-    vi.unstubAllEnvs();
     vi.stubGlobal('window', { location: { hostname: 'map.example' } });
     stubPage();
     // Nothing here may reach the network, and each test checks that
@@ -51,8 +43,6 @@ describe('analytics', () => {
     vi.stubGlobal('fetch', fetchMock);
     init.mockClear();
     captureEvent.mockClear();
-    getDistinctId.mockClear();
-    getSessionId.mockClear();
     mpInit.mockClear();
     mpTrack.mockClear();
   });
@@ -61,14 +51,12 @@ describe('analytics', () => {
     vi.unstubAllGlobals();
   });
 
-  it('loads the SDK from a baked token and flushes queued captures', async () => {
-    vi.stubEnv('VITE_POSTHOG_PROJECT_TOKEN', 'phc_test');
-    vi.stubEnv('VITE_POSTHOG_HOST', 'https://example.posthog.com');
-    const { initAnalytics, capture, analyticsHeaders } = await import('./analytics');
+  it('flushes captures made before the SDK loaded', async () => {
+    stubPage(JSON.stringify({ token: 'phc_test', host: 'https://example.posthog.com' }));
+    const { initAnalytics, capture } = await import('./analytics');
 
     capture('movie_selected', { movie_id: 603, title: 'The Matrix' });
     expect(captureEvent).not.toHaveBeenCalled();
-    expect(analyticsHeaders()).toEqual({});
 
     initAnalytics();
     await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
@@ -76,15 +64,10 @@ describe('analytics', () => {
     expect(init).toHaveBeenCalledWith('phc_test', {
       api_host: 'https://example.posthog.com',
       defaults: '2026-05-30',
-      tracing_headers: ['map.example'],
     });
     expect(captureEvent).toHaveBeenCalledWith('movie_selected', {
       movie_id: 603,
       title: 'The Matrix',
-    });
-    expect(analyticsHeaders()).toEqual({
-      'X-PostHog-Distinct-Id': 'distinct-1',
-      'X-PostHog-Session-Id': 'session-1',
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -115,7 +98,6 @@ describe('analytics', () => {
     expect(init).toHaveBeenCalledWith('phc_from_page', {
       api_host: 'https://page.posthog.com',
       defaults: '2026-05-30',
-      tracing_headers: ['map.example'],
     });
     expect(captureEvent).toHaveBeenCalledWith('movie_selected', { movie_id: 7 });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -199,11 +181,10 @@ describe('analytics', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('does not load the SDK on localhost, whatever the page or the build holds', async () => {
+  it('does not load the SDK on localhost, whatever the page holds', async () => {
     vi.stubGlobal('window', { location: { hostname: 'localhost' } });
-    vi.stubEnv('VITE_POSTHOG_PROJECT_TOKEN', 'phc_test');
     stubPage(JSON.stringify({ token: 'phc_from_page', mixpanel_token: 'mp_from_page' }));
-    const { initAnalytics, capture, analyticsHeaders } = await import('./analytics');
+    const { initAnalytics, capture } = await import('./analytics');
 
     initAnalytics();
     capture('movie_selected', { movie_id: 1 });
@@ -214,57 +195,6 @@ describe('analytics', () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(captureEvent).not.toHaveBeenCalled();
     expect(mpTrack).not.toHaveBeenCalled();
-    expect(analyticsHeaders()).toEqual({});
-  });
-
-  it('uses both baked tokens over the page’s', async () => {
-    vi.stubEnv('VITE_POSTHOG_PROJECT_TOKEN', 'phc_test');
-    vi.stubEnv('VITE_MIXPANEL_PROJECT_TOKEN', 'mp_baked');
-    stubPage(
-      JSON.stringify({
-        token: 'phc_from_page',
-        host: 'https://page.posthog.com',
-        mixpanel_token: 'mp_from_page',
-      }),
-    );
-    const { initAnalytics } = await import('./analytics');
-
-    initAnalytics();
-    await vi.waitFor(() => expect(mpInit).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
-
-    expect(mpInit).toHaveBeenCalledWith('mp_baked', expect.any(Object));
-    // The baked token brings its own host, the default here, never the
-    // page's.
-    expect(init).toHaveBeenCalledWith(
-      'phc_test',
-      expect.objectContaining({ api_host: 'https://us.i.posthog.com' }),
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('takes the Mixpanel token from the page when only PostHog is baked in', async () => {
-    vi.stubEnv('VITE_POSTHOG_PROJECT_TOKEN', 'phc_test');
-    stubPage(
-      JSON.stringify({
-        token: 'phc_other',
-        host: 'https://page.posthog.com',
-        mixpanel_token: 'mp_from_page',
-      }),
-    );
-    const { initAnalytics } = await import('./analytics');
-
-    initAnalytics();
-    await vi.waitFor(() => expect(mpInit).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
-
-    expect(mpInit).toHaveBeenCalledWith('mp_from_page', expect.any(Object));
-    // The baked PostHog token still wins over the page's.
-    expect(init).toHaveBeenCalledWith(
-      'phc_test',
-      expect.objectContaining({ api_host: 'https://us.i.posthog.com' }),
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('leaves Mixpanel off when the page has no Mixpanel token, and keeps nothing waiting', async () => {

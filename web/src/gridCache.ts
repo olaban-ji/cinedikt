@@ -18,7 +18,7 @@ import type { GridPayload } from './grid';
  *  A request that fails is forgotten before anyone hears about it, so
  *  asking again — Try again — is a new request rather than a place in
  *  the queue behind the one that already failed. */
-export interface GridCache {
+interface GridCache {
   /** The map, if it has already arrived. */
   peek: (id: string) => GridPayload | undefined;
   /** The map, from the cache, from the request already in flight, or
@@ -27,7 +27,7 @@ export interface GridCache {
 }
 
 /** How many maps are kept. Past this the oldest is dropped. */
-export const GRID_CACHE_MAX = 8;
+const GRID_CACHE_MAX = 8;
 
 export function gridCache(
   fetchGrid: (id: string) => Promise<GridPayload>,

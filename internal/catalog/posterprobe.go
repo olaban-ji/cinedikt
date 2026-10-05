@@ -50,13 +50,6 @@ var posterVerdict sync.Map
 
 var posterHTTP = &http.Client{Timeout: 2 * time.Second}
 
-// rememberPosterMissing is the plain question, for callers that only
-// need to know whether to draw the thing.
-func rememberPosterMissing(ctx context.Context, raw string) bool {
-	missing, _ := posterGone(ctx, raw)
-	return missing
-}
-
 // rememberPosterGone asks the host once per address and remembers a
 // definite answer. The cold screen is asked on every arrival and the
 // same addresses come up again and again.

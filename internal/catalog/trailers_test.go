@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"cinedikt/internal/config"
 	"cinedikt/internal/notify"
 	"cinedikt/internal/tmdb"
 )
@@ -357,7 +358,7 @@ func TestTheTrailerSweepReachesEveryFilm(t *testing.T) {
 			"tt0000001": {ID: 1},
 		},
 	}
-	job := &TrailerJob{Store: s, TMDb: clips, Check: embedAll{}, Logger: quietLogger(), MinVotes: TrailerSweepMinVotes}
+	job := &TrailerJob{Store: s, TMDb: clips, Check: embedAll{}, Logger: quietLogger(), MinVotes: config.DefaultTrailerSweepMinVotes}
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +392,7 @@ func TestTheTrailerSweepReachesEveryFilm(t *testing.T) {
 	if id, ok := tmdbMatch(t, s, "tt0000001"); !ok || id != 1 {
 		t.Errorf("unrated's match = %d (row %v), want 1", id, ok)
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0234215"); text != "Neo returns." || source != SynopsisTMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0234215"); text != "Neo returns." || source != "tmdb" {
 		t.Errorf("reloaded's overview = %q from %q", text, source)
 	}
 
@@ -485,31 +486,6 @@ func TestAReadersMarkIsWrittenAndWakesTheTrailerJob(t *testing.T) {
 	}
 	if wantedAt == nil {
 		t.Error("the mark was written without a want")
-	}
-}
-
-// TestTheTrailerLoopWakesOnAMarkAndRefillsOnAPublish: between passes the
-// loop waits on both of its wakes, and only a new generation, which
-// brings films to queue, asks for a refill.
-func TestTheTrailerLoopWakesOnAMarkAndRefillsOnAPublish(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	wakes := newWakes()
-
-	wakes.signal(NotifyTrailerWanted)
-	if woke, published := waitForTrailers(ctx, wakes, time.Hour); !woke || published {
-		t.Errorf("a mark: woke %v, published %v", woke, published)
-	}
-	wakes.signal(NotifyPublished)
-	if woke, published := waitForTrailers(ctx, wakes, time.Hour); !woke || !published {
-		t.Errorf("a publish: woke %v, published %v", woke, published)
-	}
-	if woke, published := waitForTrailers(ctx, wakes, time.Millisecond); !woke || published {
-		t.Errorf("the backstop: woke %v, published %v", woke, published)
-	}
-	cancel()
-	if woke, _ := waitForTrailers(ctx, wakes, time.Hour); woke {
-		t.Error("woke after the end")
 	}
 }
 

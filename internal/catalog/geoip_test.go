@@ -36,7 +36,7 @@ func geoIPFixture(t *testing.T, built time.Time) (*geoIPWorker, *recordingSink, 
 	u := &geoip.Updater{
 		AccountID: geoiptest.Account, LicenseKey: geoiptest.License,
 		Store: store, Lookup: &geoip.Lookup{}, HTTP: srv.Client(),
-		PermalinkURL: srv.PermalinkURL(), LegacyURL: srv.LegacyURL(), Logger: quietLogger(),
+		PermalinkURL: srv.PermalinkURL(), Logger: quietLogger(),
 	}
 	return &geoIPWorker{u: u, notify: sink}, sink, srv, store, mmdb
 }
@@ -123,7 +123,7 @@ func TestASecondProcessHasNoNewsOfABuildAnotherKept(t *testing.T) {
 	other := &geoIPWorker{notify: otherSink, u: &geoip.Updater{
 		AccountID: geoiptest.Account, LicenseKey: geoiptest.License,
 		Store: store, Lookup: &geoip.Lookup{}, HTTP: srv.Client(),
-		PermalinkURL: srv.PermalinkURL(), LegacyURL: srv.LegacyURL(),
+		PermalinkURL: srv.PermalinkURL(),
 	}}
 	if err := other.u.LoadStored(ctx); err != nil {
 		t.Fatal(err)
@@ -241,7 +241,7 @@ func TestTheQueueReportsTheFirstGeoLite2Build(t *testing.T) {
 	q, err := OpenQueue(ctx, QueueConfig{DatabaseURL: leaseURL(t), Logger: quietLogger(), Notify: sink, GeoIP: &geoip.Updater{
 		AccountID: geoiptest.Account, LicenseKey: geoiptest.License,
 		Store: s, Lookup: &geoip.Lookup{}, HTTP: srv.Client(),
-		PermalinkURL: srv.PermalinkURL(), LegacyURL: srv.LegacyURL(),
+		PermalinkURL: srv.PermalinkURL(),
 	}})
 	if err != nil {
 		t.Fatal(err)

@@ -13,15 +13,12 @@ CREATE UNLOGGED TABLE {{schema}}.titles (
     original_title  text NOT NULL,
     is_adult        boolean NOT NULL,
     start_year      int,
-    runtime_minutes int,
     genres          text[] NOT NULL DEFAULT '{}'
 );
 
 CREATE UNLOGGED TABLE {{schema}}.names (
     nconst       text PRIMARY KEY,
-    primary_name text NOT NULL,
-    birth_year   int,
-    death_year   int
+    primary_name text NOT NULL
 );
 
 CREATE UNLOGGED TABLE {{schema}}.principals (

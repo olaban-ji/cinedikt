@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -111,10 +112,10 @@ func TestNewLoggerFormatsForTheEnvironment(t *testing.T) {
 }
 
 func TestACatalogIsEnoughToStart(t *testing.T) {
-	// A clean deployment sets a database and nothing else. Requiring
-	// TMDb or Neo4j credentials — which nothing reads any more — would
-	// stop it before it began.
-	for _, v := range []string{"TMDB_API_KEY", "TMDB_ACCESS_TOKEN", "NEO4J_PASSWORD", "OMDB_API_KEY", "REDIS_URL"} {
+	// A clean deployment sets a database and nothing else. Every other
+	// service is optional, and requiring its credentials would stop the
+	// deployment before it began.
+	for _, v := range []string{"TMDB_API_KEY", "TMDB_ACCESS_TOKEN", "OMDB_API_KEY", "STREAMING_API_KEY", "MAXMIND_LICENSE_KEY"} {
 		t.Setenv(v, "")
 	}
 	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/cinedikt")
@@ -127,37 +128,18 @@ func TestACatalogIsEnoughToStart(t *testing.T) {
 	}
 }
 
-func TestWithoutACatalogTheOldCredentialsAreStillRequired(t *testing.T) {
-	for _, v := range []string{"DATABASE_URL", "TMDB_API_KEY", "TMDB_ACCESS_TOKEN", "NEO4J_PASSWORD"} {
-		t.Setenv(v, "")
+// TestADatabaseIsRequired: every map is read from the catalog, so a
+// process without one refuses to start rather than serving nothing,
+// whatever else is set.
+func TestADatabaseIsRequired(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("TMDB_API_KEY", "k")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("an environment without DATABASE_URL was accepted")
 	}
-	if _, err := Load(); err == nil {
-		t.Error("an environment with nothing configured was accepted")
-	}
-}
-
-func TestTheImporterRunsInTheAPIUnlessTurnedOff(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/cinedikt")
-
-	// The common case is one service, and one command should bring up a
-	// working map. So it is on without being asked for.
-	t.Setenv("EMBEDDED_IMPORTER", "")
-	got, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.EmbeddedImporter {
-		t.Error("the embedded importer is off by default")
-	}
-
-	// And off for a deployment with a worker of its own.
-	t.Setenv("EMBEDDED_IMPORTER", "false")
-	got, err = Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.EmbeddedImporter {
-		t.Error("EMBEDDED_IMPORTER=false did not turn it off")
+	if !strings.Contains(err.Error(), "DATABASE_URL") {
+		t.Errorf("error %q does not name DATABASE_URL", err)
 	}
 }
 
@@ -190,13 +172,12 @@ func TestNotificationsKnowTheZoneAndTheDeploy(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x/y")
 	t.Setenv("NOTIFY_TIMEZONE", " Africa/Lagos ")
 	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "dev")
-	t.Setenv("RAILWAY_GIT_COMMIT_SHA", "d0170089f00")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.NotifyTimezone != "Africa/Lagos" || cfg.RailwayEnvironment != "dev" || cfg.RailwayCommit != "d0170089f00" {
-		t.Fatalf("got %q %q %q", cfg.NotifyTimezone, cfg.RailwayEnvironment, cfg.RailwayCommit)
+	if cfg.NotifyTimezone != "Africa/Lagos" || cfg.RailwayEnvironment != "dev" {
+		t.Fatalf("got %q %q", cfg.NotifyTimezone, cfg.RailwayEnvironment)
 	}
 }
 
@@ -324,15 +305,15 @@ func TestThePeopleSweepHasAFloorAndAPace(t *testing.T) {
 // default, and one that would never ask, or would not limit, is refused.
 func TestWhereToWatchIsReadAndOptional(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://x/y")
-	for _, v := range []string{"STREAMING_API_KEY", "STREAMING_RATE_PER_SEC", "STREAMING_CHANGES_MAX_PAGES", "MAXMIND_LICENSE_KEY", "MAXMIND_ACCOUNT_ID", "GEO_COUNTRY_HEADER"} {
+	for _, v := range []string{"STREAMING_API_KEY", "STREAMING_RATE_PER_SEC", "STREAMING_CHANGES_MAX_PAGES", "MAXMIND_LICENSE_KEY", "MAXMIND_ACCOUNT_ID"} {
 		t.Setenv(v, "")
 	}
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.StreamingAPIKey != "" || cfg.MaxMindLicenseKey != "" || cfg.MaxMindAccountID != "" || cfg.GeoCountryHeader != "" {
-		t.Errorf("unset settings came back as %q %q %q %q", cfg.StreamingAPIKey, cfg.MaxMindLicenseKey, cfg.MaxMindAccountID, cfg.GeoCountryHeader)
+	if cfg.StreamingAPIKey != "" || cfg.MaxMindLicenseKey != "" || cfg.MaxMindAccountID != "" {
+		t.Errorf("unset settings came back as %q %q %q", cfg.StreamingAPIKey, cfg.MaxMindLicenseKey, cfg.MaxMindAccountID)
 	}
 	if cfg.StreamingRatePerSecond != DefaultStreamingRatePerSecond || DefaultStreamingRatePerSecond != 5 {
 		t.Errorf("rate = %v, want 5", cfg.StreamingRatePerSecond)
@@ -342,12 +323,11 @@ func TestWhereToWatchIsReadAndOptional(t *testing.T) {
 	t.Setenv("STREAMING_RATE_PER_SEC", "0.5")
 	t.Setenv("MAXMIND_LICENSE_KEY", "licence")
 	t.Setenv("MAXMIND_ACCOUNT_ID", "42")
-	t.Setenv("GEO_COUNTRY_HEADER", " CF-IPCountry ")
 	if cfg, err = Load(); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.StreamingAPIKey != "streaming-key" || cfg.StreamingRatePerSecond != 0.5 ||
-		cfg.MaxMindLicenseKey != "licence" || cfg.MaxMindAccountID != "42" || cfg.GeoCountryHeader != "CF-IPCountry" {
+		cfg.MaxMindLicenseKey != "licence" || cfg.MaxMindAccountID != "42" {
 		t.Errorf("set = %+v", cfg)
 	}
 
@@ -409,5 +389,30 @@ func TestAnalyticsIsOffUnlessSwitchedOn(t *testing.T) {
 		if cfg.AnalyticsEnabled != c.want {
 			t.Errorf("ANALYTICS_ENABLED=%q: enabled = %v, want %v", c.value, cfg.AnalyticsEnabled, c.want)
 		}
+	}
+}
+
+// TestARateOutOfBoundsSaysWhatItMustBe: the error names the variable and
+// its bound, inclusive or not.
+func TestARateOutOfBoundsSaysWhatItMustBe(t *testing.T) {
+	t.Setenv("SOME_RATE", "0.5")
+	if _, err := envRateOr("SOME_RATE", 20, 1, true); err == nil || err.Error() != "config: SOME_RATE must be a number of at least 1, got 0.5" {
+		t.Errorf("at least: %v", err)
+	}
+	t.Setenv("SOME_RATE", "1")
+	if v, err := envRateOr("SOME_RATE", 20, 1, true); err != nil || v != 1 {
+		t.Errorf("the floor itself: %v, %v", v, err)
+	}
+	t.Setenv("SOME_RATE", "0")
+	if _, err := envRateOr("SOME_RATE", 5, 0, false); err == nil || err.Error() != "config: SOME_RATE must be a number greater than 0, got 0" {
+		t.Errorf("greater than: %v", err)
+	}
+	t.Setenv("SOME_RATE", "Inf")
+	if _, err := envRateOr("SOME_RATE", 5, 0, false); err == nil {
+		t.Error("an infinite rate was accepted")
+	}
+	t.Setenv("SOME_RATE", "")
+	if v, err := envRateOr("SOME_RATE", 5, 0, false); err != nil || v != 5 {
+		t.Errorf("unset: %v, %v", v, err)
 	}
 }

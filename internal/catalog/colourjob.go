@@ -12,6 +12,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"cinedikt/internal/notify"
@@ -81,12 +82,7 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 		if err != nil {
 			return err
 		}
-		fresh := rows[:0:0]
-		for _, r := range rows {
-			if !tried[r.tconst] {
-				fresh = append(fresh, r)
-			}
-		}
+		fresh := slices.DeleteFunc(rows, func(r uncolouredRow) bool { return tried[r.tconst] })
 		if len(fresh) == 0 {
 			track.done(done + failed)
 			j.Logger.Info("opening screen coloured", "filled", done, "failed", failed)
@@ -186,29 +182,4 @@ func (s *Store) saveColour(ctx context.Context, tconst, hex string) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE meta.posters SET colour = $2 WHERE tconst = $1`, tconst, hex)
 	return err
-}
-
-// fillColours keeps the opening screen's colours filled in for as long
-// as the process runs, beside the other two poster jobs.
-func fillColours(ctx context.Context, job *ColourJob, logger *slog.Logger, wakes *Wakes) {
-	for {
-		ready, err := job.Store.LiveReady(ctx)
-		wait := ColourRest
-		if err != nil || !ready {
-			wait = PosterWaitForCatalog
-		} else {
-			err := job.Run(ctx, Live)
-			if err != nil && ctx.Err() == nil {
-				logger.Warn("opening screen colours", "err", err)
-			}
-			reportRun(ctx, job.Notify, notify.JobColours, err, time.Now().Add(wait))
-		}
-		// A poster landing for a film on the opening screen is the
-		// only thing that makes new work here, and the wake carries at
-		// most one pending run — the backfill stores five hundred a
-		// second and none of them wants its own pass.
-		if !waitFor(ctx, wakes.Ready, wait) {
-			return
-		}
-	}
 }

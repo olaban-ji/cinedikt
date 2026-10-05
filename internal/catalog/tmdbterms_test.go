@@ -213,7 +213,7 @@ func TestAReleaseDateOfTMDbsGoesWithTMDbsAnswer(t *testing.T) {
 	if err := s.saveTMDbPoster(ctx, "tt0111161", found("1994-09-23")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.savePoster(ctx, Poster{TConst: "tt0111161", Released: day("1994-10-14"), OK: true}); err != nil {
+	if err := s.writePosters(ctx, Live, []Poster{{TConst: "tt0111161", Released: day("1994-10-14"), OK: true}}); err != nil {
 		t.Fatal(err)
 	}
 	check("OMDb's answer", "tt0111161", "1994-10-14", false)

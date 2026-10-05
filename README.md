@@ -5,17 +5,15 @@ Start from a movie and see every movie its cast and directors made, arranged by 
 The searched film sits on a grid. **Y is the year. X is the rating**, low on the left and high on the right, on a scale that does not change from map to map. There are no edges. Who connects a card to the film you searched is said on the card and in the sheet that opens from it.
 
 ```
-IMDb datasets --> Go importer --> Postgres --> Go API --> React grid (web/)
-                      |                ^          |
-                      |                |          +-- Streaming Availability, GeoLite2   where to watch
-                      +-- OMDb / TMDb -+   posters, dates, synopses, trailers, photos, colours, id matches
+IMDb datasets --> catalog jobs --> Postgres --> Go API --> React grid (web/)
+                       |                ^           |
+                       |                |           +-- Streaming Availability, GeoLite2   where to watch
+                       +-- OMDb / TMDb -+   posters, dates, synopses, trailers, photos, colours, id matches
 ```
 
-A reader's request never crawls, never calls TMDb to build the map, and never writes the tables it reads. Pictures, full release dates, synopses, trailers, people's photos, poster colours, and the IMDb-to-TMDb id map are filled in beside the catalog, into a `meta` schema that survives every daily swap. The map is computed live from the tables, so a poster learned an hour ago is on the next read. Where to watch also calls out from a reader's request, as the poster stand-in and the empty-search fallback do: a movie and country nobody has asked about is asked of the Streaming Availability API once, and the answer is kept.
+The catalog jobs run inside the API's own process, beside the server. A reader's request never calls TMDb to build the map, and never writes the catalog's own tables: what a request does write, such as a mark that a card was drawn without a picture, a poster stand-in or a share card, goes into `meta`, or is a refresh queued on River. Pictures, full release dates, synopses, trailers, people's photos, poster colours, and the IMDb-to-TMDb id map are filled in beside the catalog, into a `meta` schema that survives every daily swap. The map is computed live from the tables, so a poster learned an hour ago is on the next read. Where to watch also calls out from a reader's request, as the poster stand-in and the empty-search fallback do: a movie and country nobody has asked about is asked of the Streaming Availability API once, and the answer is kept.
 
-The whole movie catalog is a local copy of the [IMDb non-commercial datasets](https://developer.imdb.com/non-commercial-datasets/). Those five files are the source. Postgres is the only dependency the current app needs.
-
-An older map, crawled from TMDb into Neo4j, is still in the tree. Nothing uses it while `DATABASE_URL` is set. It is described at the end.
+The whole movie catalog is a local copy of the [IMDb non-commercial datasets](https://developer.imdb.com/non-commercial-datasets/). Those five files are the source. Postgres is the only dependency the app needs.
 
 ## What you see
 
@@ -41,7 +39,7 @@ The header search is **Search a movie**, or the current film's title once a map 
 
 ### The map
 
-`/movie/tt0133093-the-matrix` is one map. The id is IMDb's `tconst`. The slug is there so a pasted link says what it opens; an id alone is a valid route, and a stale slug still opens the same film. Old `/film/…` links are redirected, permanently, to `/movie/…`. There is no `?movie=` any more: that parameter carried a TMDb id, and a TMDb id is not an address in this catalog.
+`/movie/tt0133093-the-matrix` is one map. The id is IMDb's `tconst`. The slug is there so a pasted link says what it opens; an id alone is a valid route, and a stale slug still opens the same movie. There is no `?movie=` any more: that parameter carried a TMDb id, and a TMDb id is not an address in this catalog.
 
 While the map loads, the screen stays empty rather than drawing a skeleton. The header shows chip-shaped placeholders and a progress bar. A toast says **Finding everyone who made {title}…**, then **Laying out their movies…**. Cards then ripple out from the searched film, delayed by how far they sit from it, capped at about half a second.
 
@@ -103,7 +101,7 @@ A filter pill in the header names what is narrowed: the floor (only when the run
 
 ### What is remembered
 
-How the map is drawn stays with the reader, in `localStorage` under `cinedikt.grid`: newest or oldest first, whether unrated films show, whether the searched year is highlighted. A filter does not. Who is selected, the rating floor, the year window, the genres picked, and whether empty years are hidden belong to the visit they were set on. They live on the history entry. Opening another movie — from search, from a card, from home — starts clear. Going back restores what that map had. A stored `density` setting, from a build that no longer has it, is dropped rather than carried forward.
+How the map is drawn stays with the reader, in `localStorage` under `cinedikt.grid`: newest or oldest first, whether unrated films show, whether the searched year is highlighted. A filter does not. Who is selected, the rating floor, the year window, the genres picked, and whether empty years are hidden belong to the visit they were set on. They live on the history entry. Opening another movie — from search, from a card, from home — starts clear. Going back restores what that map had.
 
 The theme is separate, under `cinedikt.theme`: System, Light, or Dark. It is applied before the first paint, from a script in `index.html`, so a reader who chose light does not see a dark frame and then a white one. The page background is `#f9f4ee` in light and `#13100d` in dark.
 
@@ -152,23 +150,22 @@ A movie with nobody billed has no map. The API answers 404.
 ## Layout
 
 ```
-cmd/api/            HTTP server, the share cards, and (by default) the importer
-cmd/importer/       the same catalog jobs, run on their own
-cmd/crawler/        the old Neo4j crawler; unused while DATABASE_URL is set
+cmd/api/            HTTP server, the share cards, and the catalog jobs
 internal/catalog/   Postgres catalog: import, search, grid, posters
-internal/api/       handlers; catalog when a database is configured, graph otherwise
+internal/api/       HTTP handlers over the catalog
 internal/config/    environment
-internal/omdb/      poster and release-date lookups
+internal/omdb/      poster, release-date and plot lookups
 internal/tmdb/      poster fallback, id matching, empty-search fallback
+internal/trailer/   which of a movie's YouTube clips is its trailer
 internal/streaming/ the Streaming Availability API, and the shape of a where-to-watch answer
 internal/geoip/     GeoLite2 Country: placing an address, and keeping the database current
+internal/httpretry/ the retrying GET the TMDb and streaming clients share
+internal/imdbid/    the shape of IMDb's title and name ids, checked wherever one comes in
 internal/notify/    job notifications
 internal/telegram/  optional Telegram sink for those notifications
 internal/analytics/ PostHog, production only
 web/                the React grid
 ```
-
-The packages below belong to the crawling map and are not on the path a catalog deployment runs: `internal/graph`, `internal/crawl`, `internal/app`, `internal/rediscache`, `internal/seen`. Redis is still read, optionally, to cache the TMDb responses of the search fallback.
 
 ## Setup
 
@@ -181,7 +178,7 @@ createdb cinedikt
 
 `OMDB_API_KEY` (free at [omdbapi.com](https://www.omdbapi.com/)) is what puts pictures, full dates and synopses on the cards. Without it the catalog still serves: cards have no posters, and order inside a year falls back to the title id because every month-day is 0. `TMDB_API_KEY` or `TMDB_ACCESS_TOKEN` is the second chance for pictures OMDb does not have, the thing an empty search asks, and where trailers are found. Either credential is enough; the access token is preferred when both are set.
 
-`STREAMING_API_KEY` (from [Movie of the Night](https://www.movieofthenight.com/about/api)) turns on where to watch. `MAXMIND_LICENSE_KEY` and `MAXMIND_ACCOUNT_ID` (a free [GeoLite2](https://www.maxmind.com/en/geolite2/signup) account) let the server place a reader's address in a country. Without the streaming key the section is simply left out; without the MaxMind key every reader counts as a country without coverage, unless a CDN in front of the app says where they are in the header `GEO_COUNTRY_HEADER` names.
+`STREAMING_API_KEY` (from [Movie of the Night](https://www.movieofthenight.com/about/api)) turns on where to watch. `MAXMIND_LICENSE_KEY` and `MAXMIND_ACCOUNT_ID` (a free [GeoLite2](https://www.maxmind.com/en/geolite2/signup) account), set together, let the server place a reader's address in a country. Without the streaming key the section is simply left out; without both MaxMind settings every reader counts as a country without coverage.
 
 ## Run
 
@@ -191,21 +188,7 @@ go run ./cmd/api
 
 On an empty database the API starts the import itself, behind the server. Until a generation has been published, catalog routes answer **503** with `the catalog is still being built`. The health check still answers, so a deploy is not failed for being mid-import. The first import takes about five and a half minutes: roughly two of those are the 1.35 GB download, and the rest is reading the files and building the indexes. It logs where it has got to, in four numbered steps.
 
-Set `EMBEDDED_IMPORTER=false` when a separate process is doing that work. Two of them is safe and pointless: a Postgres advisory lock (`0x63696e6a`) means only one runs, and the loser waits and retries every 30 seconds.
-
-```bash
-go run ./cmd/importer              # hourly, until interrupted
-go run ./cmd/importer -once        # one attempt, then exit
-go run ./cmd/importer -posters-only
-go run ./cmd/importer -dir /tmp/imdb -keep
-```
-
-| Flag | What it does |
-| --- | --- |
-| `-once` | one attempt, then exit. A decision not to import is a success: most hours are |
-| `-posters-only` | fill posters, release dates and synopses against the live catalog, then the TMDb fallback, and do not import |
-| `-keep` | leave the downloaded files on disk, for a development re-run |
-| `-dir` | where to put them. The default is a temp directory |
+Two processes on one database, such as a deploy's old and new containers, never both run the jobs: a Postgres advisory lock (`0x63696e6a`) lets only one hold them, and the other waits and retries every 30 seconds.
 
 The frontend, against an API on `:8080`:
 
@@ -231,7 +214,7 @@ curl -s 'localhost:8080/grid/tt0133093' | head -c 600
 
 ## The catalog
 
-`internal/catalog/README.md` is the operational note for the importer. What follows is what that work is for.
+How the jobs beside the catalog are built is in `internal/catalog/README.md`. What follows is what the catalog holds and how it is kept current.
 
 ### What is kept
 
@@ -243,7 +226,7 @@ Five files, from `https://datasets.imdbws.com/`, and nothing else. `title.akas` 
 | `title.principals` | `actor`, `actress`, and `director` credits on those movies, with the first character name |
 | `title.crew` | the director list, in IMDb's order, including directors the principals file never billed |
 | `title.ratings` | average and vote count, for kept movies. An unrated title is no row, not a zero |
-| `name.basics` | a person only if a kept credit named them, with birth and death year |
+| `name.basics` | a person's name, only if a kept credit named them |
 
 Adult titles and documentaries are loaded and then left off every map, every search, and the cold-screen pool.
 
@@ -261,8 +244,6 @@ Before anything is published, the load is checked. The tables must be non-empty,
 
 Publish is one transaction: `catalog` becomes `catalog_old`, `catalog_next` becomes `catalog`, and the generation is recorded in `meta.generation`. The old schema is not dropped there. It is left for the next run, so a reader holding a plan against it finishes against data that still exists. `lock_timeout` bounds the swap at five seconds. Failing fast leaves the previous catalog serving, which is the right way to lose. A Postgres `NOTIFY catalog_published` wakes anything waiting on the new generation.
 
-`meta.last_check` records every HEAD, including the hours that did not import, so "checked an hour ago, nothing had moved" is distinguishable from "nothing has run for a day" without reading logs.
-
 A catalog older than 36 hours is logged every hour. On Telegram, if that is configured, it is said once per catalog at 36 hours and once more at 72 hours, and a restart does not say it again. It is deliberately not a health-check failure. A stale catalog still serves, and failing the check would turn a late upstream publish into a failed deploy.
 
 ### Posters, dates, colours, ids
@@ -273,7 +254,7 @@ That job is not part of an import. A full first pass is about 27 minutes at the 
 
 A lookup that came back empty is still an answer, and is not asked again. Only a lookup that failed is retried: after a day, and never twice in the same run. OMDb's answers are not always valid JSON: a backslash before a letter, an escaped apostrophe, a raw tab or control byte in a plot, a backslash that swallows a field's closing quote. An answer that does not decode is repaired once and read again. One that still cannot be read is an answer as well, since OMDb sends the same bytes every time: it is stored as OMDb having no picture and no synopsis, so the TMDb stand-in and TMDb's overview fill in, and it is neither asked again nor counted as a failure. An address that has been seen to 404 is `dead`. Image edges replay a miss for about five minutes and then serve the picture again, so the first 404 only keeps a film off the draw that saw it. A second, after that window, is the picture actually being gone, and it is written down so the next cold screen does not ask and the TMDb job has something to repair. A host that does not answer at all is neither: Amazon being briefly unreachable never empties the opening screen and never queues a live poster for replacement.
 
-OMDb has a poster for about 59% of the catalog. TMDb has one for roughly three-quarters of what is left. Without TMDb credentials those movies simply have no picture. With them, TMDb is asked by four jobs and by two things a reader can do (an empty search, a poster stand-in). TMDb counts about 40 requests a second per address, not per key, so every one of those waits on one limiter per process. `TMDB_RATE_PER_SEC` is the total for the process: 20 a second by default, half of TMDb's ceiling, with a burst of 5. A rate below 1 is refused at startup.
+OMDb has a poster for about 59% of the catalog. TMDb has one for roughly three-quarters of what is left. Without TMDb credentials those movies simply have no picture. With them, TMDb is asked by four jobs and by two things a reader can do (an empty search, a poster stand-in). TMDb counts about 40 requests a second per address, not per key, so every one of those waits on one limiter per process. `TMDB_RATE_PER_SEC` is the total for the process: 20 a second by default, half of TMDb's ceiling, with a burst of 5. A rate below 1 is refused at startup. A request is tried up to four times on a 429, a 5xx or a failed connection, each try waiting on that limiter, with `Retry-After` honoured, unless the wait would outlast the caller's deadline. Refused credentials (401 or 403) are not tried again.
 
 - **Posters.** A movie is fetched when a reader has opened one with no picture (`wanted_at`), and otherwise only when it has at least `TMDB_SWEEP_MIN_VOTES` votes. The default is 100. Around 310,000 titles have no poster and about 1,300 of them have a hundred votes, so the default sweep is about a minute, and the rest are repaired the moment somebody meets them. Set the floor to 0 to ask about every title with no picture: about 300,000 lookups, roughly four hours at 20 a second, and the same again, spread out, as those answers come due every 150 days. The well-known end of that queue yields a poster about 77% of the time. The zero-vote tail yields one about 8% of the time. TMDb's answer, a picture or "nothing", is stamped (`tmdb_at`). Once it is 150 days old it is asked again, after the wanted titles and the sweep: a picture of TMDb's, and TMDb's "nothing" for a title that still has no picture. A new picture replaces the old one in place, so no reader meets the film without one while it is refreshed. TMDb no longer having a picture takes its picture away. TMDb's "nothing" for a film whose picture from OMDb works is not asked again, since that film is not waiting on TMDb.
 - **Ids.** `meta.tmdb` maps a TMDb movie id to a `tconst`, filled ahead of time. An empty catalog search asks TMDb for ids and keeps a hit only when that map already has it. The search does not ask TMDb, live, which IMDb title an id is. A row with a null id is "asked, and it is not a movie we can map." A match for a film search can still offer is asked again once it is 150 days old, after every title never asked, oldest first, and its row is replaced in place, so search and the trailer job never find it missing. Any other match waits for the backstop below.
@@ -286,17 +267,15 @@ A film's synopsis comes from OMDb. The poster pass asks for the full plot (`plot
 
 TMDb's overview arrives free on the answers the TMDb jobs and the poster stand-in already save. It is kept only where OMDb has no plot, and never replaces one. It is not OMDb's answer either: a film showing TMDb's text is still asked of OMDb, and OMDb's plot replaces it. A synopsis from TMDb is asked of OMDb again after 150 days, which TMDb's terms ask of anything cached from it; if OMDb still has nothing, TMDb's text is dropped, and one still there at 175 days, because that re-ask keeps failing, is deleted all the same. A synopsis from OMDb is kept. `meta.synopses` says which source each row came from and when OMDb last answered (`omdb_at`), and a null overview means nobody has one.
 
-A film's trailer is a YouTube video TMDb lists for it (`/movie/{id}/videos`): trailers before teasers, then the studio's own, then English, then the newest. Each candidate is checked with YouTube's oEmbed, which needs no key and answers 400, 401, 403 or 404 for a video that may not be embedded; the first that passes is the trailer. Those checks have their own limiter, 5 a second, apart from TMDb's. The answer, a key or "none", is kept in `meta.trailers`. The trailer job is the only thing that asks; the endpoint only reads, so no reader waits on TMDb or YouTube. A film opened before the job has reached it is marked wanted, which wakes the job within a couple of seconds and puts the film first, and the page asks again while the answer is pending. After the wanted films the job sweeps every film the id matcher would match with at least `TRAILER_SWEEP_MIN_VOTES` votes (default 0, so every film), most voted first. A film whose TMDb id is known is asked for its clips, one TMDb has no movie for is "none" without a request, and one nothing has matched yet is matched by the job itself and the match kept. It then asks again about a "none" for a film that came out in the last twelve months once that answer is a week old, since trailers are often added after release, and last about any answer older than 150 days. An answer that has come due is still served while it waits, and a reader opening its film moves it to the front. An answer still there at 175 days, because its re-ask keeps failing, TMDb has no movie for its film, its film has left the catalog, or there are no TMDb credentials to ask with, is deleted, and the sweep, or the next reader to open the film, asks again. Without TMDb credentials nothing is looked up, and a film with no stored answer is "none".
+A film's trailer is a YouTube video TMDb lists for it (`/movie/{id}/videos`): trailers before teasers, then the studio's own, then English, then the newest. Each candidate is checked with YouTube's oEmbed, which needs no key and answers 400, 401, 403 or 404 for a video that may not be embedded; the first that passes is the trailer. Those checks have their own limiter, 5 a second, apart from TMDb's. The answer, a key or "none", is kept in `meta.trailers`. The trailer job is the only thing that asks; the endpoint answers from what is kept, so no reader waits on TMDb or YouTube. A film opened before the job has reached it is marked wanted, which wakes the job within a couple of seconds and puts the film first, and the page asks again while the answer is pending. After the wanted films the job sweeps every film the id matcher would match with at least `TRAILER_SWEEP_MIN_VOTES` votes (default 0, so every film), most voted first. A film whose TMDb id is known is asked for its clips, one TMDb has no movie for is "none" without a request, and one nothing has matched yet is matched by the job itself and the match kept. It then asks again about a "none" for a film that came out in the last twelve months once that answer is a week old, since trailers are often added after release, and last about any answer older than 150 days. An answer that has come due is still served while it waits, and a reader opening its film moves it to the front. An answer still there at 175 days, because its re-ask keeps failing, TMDb has no movie for its film, its film has left the catalog, or there are no TMDb credentials to ask with, is deleted, and the sweep, or the next reader to open the film, asks again. Without TMDb credentials nothing is looked up, and a film with no stored answer is "none".
 
 The colour job needs no credentials. It downloads posters that are already public and stores what they average to, as `#rrggbb`, for the frames on the opening screen. It colours the pool, not the eight somebody happened to see: the next visit draws a different eight.
 
 ### People's photos
 
-A person's photo comes from TMDb, which maps an IMDb name id to its own person (`/find/{nconst}?external_source=imdb_id`). Only the path of the photo is kept, in `meta.people`, and the page loads the picture from TMDb's image host at 185 pixels wide, and at 342 for the bigger photo a chip or a preview face shows, the way it loads a backup poster. "No photo" is an answer too: TMDb has the person but no photo, has no person for the id, or marks the person adult. The people job is the only thing that asks; a map and `GET /people/photos` only read, so no reader waits on TMDb. Opening a map marks the people on it with no answer, or one that has come due, which wakes the job within a couple of seconds and puts them first. A person already waiting keeps a mark less than a minute old, so a map opened again straight away wakes nothing. An older mark is renewed, and that wakes the job and puts the person first again, so a lookup that failed is tried again the next time somebody opens their map, not once the job's pass is over, which during the sweep is days away. A person with an answer, "none" included, is never marked until it comes due. Reading a map's cards marks nobody.
+A person's photo comes from TMDb, which maps an IMDb name id to its own person (`/find/{nconst}?external_source=imdb_id`). Only the path of the photo is kept, in `meta.people`, and the page loads the picture from TMDb's image host at 185 pixels wide, and at 342 for the bigger photo a chip or a preview face shows, the way it loads a backup poster. "No photo" is an answer too: TMDb has the person but no photo, has no person for the id, or marks the person adult. The people job is the only thing that asks; a map and `GET /people/photos` answer from what is kept, so no reader waits on TMDb. Opening a map marks the people on it with no answer, or one that has come due, which wakes the job within a couple of seconds and puts them first. A person already waiting keeps a mark less than a minute old, so a map opened again straight away wakes nothing. An older mark is renewed, and that wakes the job and puts the person first again, so a lookup that failed is tried again the next time somebody opens their map, not once the job's pass is over, which during the sweep is days away. A person with an answer, "none" included, is never marked until it comes due. Reading a map's cards marks nobody.
 
 After the wanted people the job sweeps everyone a map can show: everyone billed as cast or credited as director on a movie a map holds, whose best known such movie has at least `PEOPLE_SWEEP_MIN_VOTES` votes (default 0, so everyone), most voted first. That is over a million people, so the sweep keeps a pace of its own, `PEOPLE_SWEEP_RATE` lookups a second (default 5), on top of the process's TMDb limiter, and leaves the rest of that budget for what readers are waiting on: the people on a map somebody has opened skip that pace, and a mark that arrives while the sweep waits on it is served at once. At 5 a second the first sweep takes about three days. Last, the job asks again about any answer older than 150 days, at the sweep's pace. An answer that has come due is still shown while it waits; one still there at 175 days, because its re-ask keeps failing, its person has left the catalog, or there are no TMDb credentials to ask with, is deleted, and the sweep, or the next map with that person on it, asks again. Without TMDb credentials nothing is looked up, and nobody without a stored answer has a photo.
-
-`cmd/importer -posters-only` runs the OMDb pass and then the TMDb poster pass, and does not import. The synopsis, trailer and people jobs run only in the long-running runner.
 
 ### Cold screen pool
 
@@ -366,15 +345,14 @@ The job looks every hour, which is a read of the database, and reads a country o
 
 The page never sends a country. The server works it out, lowercased:
 
-1. The geo header named by `GEO_COUNTRY_HEADER`, the one a CDN put in front of the app sets on every request (for example `CF-IPCountry`). Cloudflare's `XX` (unknown) and `T1` (Tor) do not count. Unset, the default, no header is read: Railway's edge sets none, so one arriving there was written by the reader, who could name any covered country with it and have the metered API asked on its behalf.
-2. Otherwise the client's address, from `X-Real-IP` (which Railway's edge sets), then the last `X-Forwarded-For` entry (the one the nearest proxy appended; the first is the client's to write and is never read), then the connection, looked up in MaxMind's GeoLite2 Country. A network with no country falls back to where it is registered.
-3. A loopback, private or otherwise unroutable address, or one the database cannot place, counts as a country without coverage: `{"country":"xx","covered":false}`. So does everyone when there is no MaxMind license key, unless the trusted header placed them. That is also why a local development server, reached over loopback, always says there is no coverage. With a license key set but no build loaded yet (the first deploy with one, until its download is in, or a second process until it picks that download up), a reader no header placed is answered 503 instead, and the page leaves the section out: telling them their country has no coverage would be untrue, and their browser would keep it for an hour.
+1. The client's address, from `X-Real-IP` (which Railway's edge sets), then the last `X-Forwarded-For` entry (the one the nearest proxy appended; the first is the client's to write and is never read), then the connection, looked up in MaxMind's GeoLite2 Country. A network with no country falls back to where it is registered. No country header is read: Railway's edge sets none, so one arriving there was written by the reader, who could name any covered country with it and have the metered API asked on its behalf.
+2. A loopback, private or otherwise unroutable address, or one the database cannot place, counts as a country without coverage: `{"country":"xx","covered":false}`. So does everyone when GeoLite2 is off: no MaxMind license key, or a key without its account id, which is said at startup. That is also why a local development server, reached over loopback, always says there is no coverage. With both set but no build loaded yet (the first deploy with them, until its download is in, or a second process until it picks that download up), a reader is answered 503 instead, and the page leaves the section out: telling them their country has no coverage would be untrue, and their browser would keep it for an hour.
 
-The service downloads GeoLite2 Country itself. A job asks MaxMind with a `HEAD` twice a day, and when the process becomes the queue's leader. A `HEAD` does not count against MaxMind's download limits. Only a `Last-Modified` different from the kept build's leads to a `GET`, from the permalink with `MAXMIND_ACCOUNT_ID` and `MAXMIND_LICENSE_KEY` as Basic auth, or, without an account id, from the older address that takes the key alone. The `.mmdb` is read out of the tar.gz (at most 64 MB), opened and verified: a MaxMind database, a country edition, every node and record readable. Only then is it kept in `meta.geoip`, the database itself, and swapped in. A bad download keeps the database in use. Each process loads the kept one at start, so a restart or a second container never downloads it again, and looks at the kept build's stamp every ten minutes to pick up one another process fetched. Lookups read whichever database is in use and never wait for a swap.
+The service downloads GeoLite2 Country itself. A job asks MaxMind with a `HEAD` twice a day, and when the process becomes the queue's leader. A `HEAD` does not count against MaxMind's download limits. Only a `Last-Modified` different from the kept build's leads to a `GET`, from MaxMind's permalink, with `MAXMIND_ACCOUNT_ID` and `MAXMIND_LICENSE_KEY` as Basic auth. The `.mmdb` is read out of the tar.gz (at most 64 MB), opened and verified: a MaxMind database, a country edition, every node and record readable. Only then is it kept in `meta.geoip`, the database itself, and swapped in. A bad download keeps the database in use. Each process loads the kept one at start, so a restart or a second container never downloads it again, and looks at the kept build's stamp every ten minutes to pick up one another process fetched. Lookups read whichever database is in use and never wait for a swap.
 
 ### The queue
 
-The refreshes, the changes feed, the GeoIP check and the country list are jobs on [River](https://riverqueue.com), run inside the API process whenever `STREAMING_API_KEY` is set, embedded importer or not. Its tables live in a `river` schema of their own, which the daily swap never touches, migrated at start under an advisory lock (`0x63696e72`) so two containers starting together take turns. It has its own pool of four connections: River holds one for as long as it runs to `LISTEN` for new jobs, and that should be neither a reader's connection nor one a bulk `COPY` is holding. The jobs themselves write through the reader pool, a row at a time.
+The refreshes, the changes feed, the GeoIP check and the country list are jobs on [River](https://riverqueue.com), run inside the API process whenever `STREAMING_API_KEY` is set. Its tables live in a `river` schema of their own, which the daily swap never touches, migrated at start under an advisory lock (`0x63696e72`) so two containers starting together take turns. It has its own pool of four connections: River holds one for as long as it runs to `LISTEN` for new jobs, and that should be neither a reader's connection nor one a bulk `COPY` is holding. The jobs themselves write through the reader pool, a row at a time.
 
 | Job | When | What it does |
 | --- | --- | --- |
@@ -387,7 +365,7 @@ Two containers during a deploy's overlap never double a download or a refresh. E
 
 ## Routes
 
-Catalog routes, as the process sees them. In the browser they are the same paths under `/api`. Every catalog response is `Cache-Control: no-store`, except a where-to-watch answer. A handler error is `{"error": "…"}`. Each API request has a 40 second deadline.
+The API's routes, as the process sees them. In the browser they are the same paths under `/api`. Every catalog response is `Cache-Control: no-store`, except a where-to-watch answer. A handler error is `{"error": "…"}`. Each API request has a 40 second deadline.
 
 | Route | What it does |
 | --- | --- |
@@ -458,7 +436,7 @@ Catalog routes, as the process sees them. In the browser they are the same paths
 
 Reads are bounded at five seconds. A map is two indexed joins; anything slower is a problem to see rather than to wait through.
 
-Hashed assets under `/assets/` are cached for a year. `index.html` is `no-cache`, so a deploy's new asset hashes are picked up. `/film/…` is a 301 to `/movie/…`, query string included.
+Hashed assets under `/assets/` are cached for a year. `index.html` is `no-cache`, so a deploy's new asset hashes are picked up.
 
 ## Frontend
 
@@ -470,9 +448,9 @@ React 19 and TypeScript, bundled with Vite 6. There is no router and no state li
 | `GridMap.tsx` | The scroller, the cards, the reveal, recenter |
 | `grid.ts` | Layout, what is lit, lane packing, the rating domain. Pure: a payload, a width, and the settings go in, and positions come out |
 | `trail.ts` | Which filters belong to this history entry, and which preferences belong to the reader |
-| `api.ts` | `/api` client. Sends PostHog's distinct id and session id once analytics is up. `fetchTrailer` asks `/api/trailers/{id}` once per film and keeps the answer for the visit. A pending answer is asked again after about 1.5, 3, 5 and 6 seconds while the panel or preview is still open, and is never kept. `fetchPeoplePhotos` asks `/api/people/photos` about the people a map came without photos for, fifty at a time, asks again about the pending ones on the same schedule until none are or the caller goes, and keeps each photo, or its "none", for the visit. A pending answer or a failure is left out and never kept |
+| `api.ts` | `/api` client. `fetchTrailer` asks `/api/trailers/{id}` once per film and keeps the answer for the visit. A pending answer is asked again after about 1.5, 3, 5 and 6 seconds while the panel or preview is still open, and is never kept. `fetchPeoplePhotos` asks `/api/people/photos` about the people a map came without photos for, fifty at a time, asks again about the pending ones on the same schedule until none are or the caller goes, and keeps each photo, or its "none", for the visit. A pending answer or a failure is left out and never kept |
 | `whereToWatch.ts` | `useWhereToWatch(imdbId)` asks `/api/where-to-watch/{id}`, at most once at a time per movie, and keeps the answer for the visit. A failure stands for two seconds, so a preview opening just after the ask made as the pointer came to rest does not ask again, and a later open does. The preview's request starts when the pointer begins resting on a card, so the answer is usually in by the time the preview opens |
-| `movieParam.ts` | `/movie/{tconst}-{slug}`, `/about`, the tab title, the slug rules the server's `og:url` is kept in step with |
+| `movieParam.ts` | `/movie/{tconst}-{slug}`, `/about`, the tab title, the slug rules the server's `og:url` is kept in step with, and the one check of an IMDb id's shape the page makes |
 | `AboutPage.tsx` | The About page: what Cinedikt is, and each source's credit and notice |
 | `firstRun.ts` | How many cold-screen tiles fit |
 | `PeopleChips.tsx`, `GridSheet.tsx`, `ViewPanel.tsx` | The chip row, the film sheet, the View panel |
@@ -482,8 +460,6 @@ React 19 and TypeScript, bundled with Vite 6. There is no router and no state li
 | `overHeader.ts` | The overlay header, and when it hides on scroll |
 | `sheet.ts` | Enter, exit, drag-to-close, focus trap |
 | `analytics.ts` | PostHog and Mixpanel, each in its own chunk, set up from the `cinedikt-analytics` tag the server writes into the page. No tag, and neither loads and nothing is fetched. Loopback never initialises |
-
-`web/src/api.ts` still has a client for `GET /movies/{id}/pathways`. The grid does not call it. It belongs to the crawling map.
 
 The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `npm test` is Vitest, in Node, over the layout, the history trail, the posters, the sheet, and the cold-screen arithmetic. `web/src/fixtures/matrix-grid.json` is a fixture for those tests, not something the app loads.
 
@@ -495,8 +471,7 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `DATABASE_URL` | | Postgres. Set, and this is the catalog app. Unset, and the process requires the old map's credentials instead |
-| `EMBEDDED_IMPORTER` | `true` | Run the catalog jobs inside the API. `false` leaves them to `cmd/importer` |
+| `DATABASE_URL` | | Postgres, where the catalog lives. Required: without it the process will not start |
 | `CATALOG_API_MAX_CONNS` | 10 | The pool that serves reads |
 | `CATALOG_IMPORTER_MAX_CONNS` | 4 | The pool the jobs write through. Kept apart so a bulk `COPY` cannot take the connections a search is waiting for |
 | `OMDB_API_KEY` | | Posters, release dates and synopses |
@@ -512,30 +487,24 @@ The dev server is port 5173. `npm run build` typechecks and writes `web/dist`. `
 | `STREAMING_API_KEY` | | The Streaming Availability API, from Movie of the Night. Turns on where to watch and the queue that keeps it right. Unset, the route answers 503 and the page leaves the section out |
 | `STREAMING_RATE_PER_SEC` | 5 | Requests a second to that API, for the process. It is metered per request; what keeps the bill down is that answers are kept. Must be more than 0 |
 | `STREAMING_CHANGES_MAX_PAGES` | 40 | The most pages of the changes feed the daily changes job reads for one country in one run, 25 changes and one metered request a page. A run it stops carries on from there the next day. At least one page of each of the three kinds of change is always read. Must be more than 0 |
-| `MAXMIND_LICENSE_KEY` | | Downloads GeoLite2 Country, which places a reader's address in a country. Unset, only a CDN's country header places anyone |
-| `MAXMIND_ACCOUNT_ID` | | The account the license key belongs to. Set, the database comes from MaxMind's permalink with both; unset, from the older address that takes the key alone. Not a secret |
-| `GEO_COUNTRY_HEADER` | | The one country header to trust, set by a CDN in front of the app (such as `CF-IPCountry`). Unset trusts none, which is right on Railway alone |
-| `TMDB_CACHE_TTL` | `168h` | Redis TTL for TMDb search responses, when `REDIS_URL` is set. Without it, those responses are not cached |
-| `REDIS_URL` | | Optional cache for that fallback only, prefix `cinedikt:tmdb` |
+| `MAXMIND_LICENSE_KEY` | | Downloads GeoLite2 Country, with `MAXMIND_ACCOUNT_ID`, to place a reader's address in a country. Unset, nobody is placed |
+| `MAXMIND_ACCOUNT_ID` | | The account the license key belongs to, required with it: the database comes from MaxMind's permalink, which takes both. A key without it is said at startup and leaves GeoLite2 off. Not a secret |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | | Job notifications, described below. Both empty, and nothing is sent. The token is from BotFather. The chat id is `message.chat.id` from `getUpdates` after Start — positive for a private chat, negative for a group. In a group the bot needs permission to pin messages |
 | `NOTIFY_TIMEZONE` | UTC | The zone notification times are written in, such as `Africa/Lagos`. Unset or unknown, they are UTC and the board says so |
 | `WEB_DIR` | | Built frontend. The image sets `/app/web/dist` |
 | `ANALYTICS_ENABLED` | off | The switch for every tracker: PostHog and Mixpanel in the page, and PostHog's error reports from the server. Off unless `true`, whatever tokens are set, so they can stay in place while nothing is tracked |
-| `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | host `https://us.i.posthog.com` | Read only in production, and only with `ANALYTICS_ENABLED=true`. The server writes them into the page it serves, so nothing is fetched for them; the token is a write-only key. The page may instead be built with `VITE_POSTHOG_PROJECT_TOKEN` and `VITE_POSTHOG_HOST` |
-| `MIXPANEL_PROJECT_TOKEN` | | Read only in production, and only with `ANALYTICS_ENABLED=true`. The server writes it into the page it serves, which then loads Mixpanel with autocapture and session recording (text and inputs masked); unset, the page never loads it. The page may instead be built with `VITE_MIXPANEL_PROJECT_TOKEN` |
-| `NEO4J_*`, `CRAWL_THRESHOLD_BASE`, `CRAWL_ORDER_PENALTY`, `MAX_COLD_CRAWLS` | | The old map. Ignored while `DATABASE_URL` is set |
+| `POSTHOG_PROJECT_TOKEN`, `POSTHOG_HOST` | host `https://us.i.posthog.com` | Read only in production, and only with `ANALYTICS_ENABLED=true`. The server writes them into the page it serves, so nothing is fetched for them; the token is a write-only key |
+| `MIXPANEL_PROJECT_TOKEN` | | Read only in production, and only with `ANALYTICS_ENABLED=true`. The server writes it into the page it serves, which then loads Mixpanel with autocapture and session recording (text and inputs masked); unset, the page never loads it |
 
-If `DATABASE_URL` is empty, startup requires a TMDb credential and `NEO4J_PASSWORD`. A deployment with nothing but a database URL starts.
+Nothing but `DATABASE_URL` is required. A deployment with only a database URL imports the catalog and serves maps; the other keys add the pictures, synopses, trailers, photos and where to watch.
 
 ### Telegram
 
-The process that runs the catalog jobs keeps one pinned message in the chat: a headline that says whether anything needs you, then one line for each of the nine jobs (Catalog, Posters, Backup posters, Search matching, Synopses, Trailers, People photos, Opening colours, Country lookup), and a footer with the next catalog check and the deploy. The Country lookup line names the GeoLite2 build in use and when the twice-daily check last found it still the newest, or says it is waiting for the first download, or off with no MaxMind key or with where to watch off (no `STREAMING_API_KEY`, or a queue that would not start), since the check runs on where to watch's queue. It is edited in place, at most once a minute while something is running and at least once an hour, and an edit never makes a sound. A next check already in the past, or an "updated" time more than an hour old, means the process is stuck.
+The process that runs the catalog jobs keeps one pinned message in the chat: a headline that says whether anything needs you, then one line for each of the nine jobs (Catalog, Posters, Backup posters, Search matching, Synopses, Trailers, People photos, Opening colours, Country lookup), and a footer with the next catalog check, the environment, and how long the process has been up. The Country lookup line names the GeoLite2 build in use and when the twice-daily check last found it still the newest, or says it is waiting for the first download, or off without both MaxMind settings or with where to watch off (no `STREAMING_API_KEY`, or a queue that would not start), since the check runs on where to watch's queue. It is edited in place, at most once a minute while something is running and at least once an hour, and an edit never makes a sound. A next check already in the past, or an "updated" time more than an hour old, means the process is stuck.
 
 A new message is sent only when there is news, and its second line says whether anything is needed of you, so a lock screen shows the answer before the explanation. Good news is quiet: a new catalog going live, a new GeoLite2 build downloaded and in use (the first one a database gets says so), a failure that is over, a pass that ran for half an hour or more. It lands in the notification list without a sound. A sound is kept for what has lasted or needs you: a failure that has repeated for about an hour (at once for a refused API key, at the second attempt for an error of no known kind), the database unreachable for two minutes, the catalog at 72 hours old (and at 36 while its updates are failing; late only because IMDb has published nothing, it is said at 36 without a sound), and a reminder for anything still failing a day later. The opening colours are cosmetic and never make a sound. Each is said once. What has been said lives in `meta.notify`, so a deploy does not repeat it. Only the process that holds the jobs writes the board: a container waiting for the lease never touches it, and one that loses the lease stops, except to say the database is unreachable while nobody can hold it.
 
-The GeoLite2 check runs on the queue, in whichever container claims it, so it can report before its container holds the jobs, which is when a new deploy's first check runs. What it says is kept and said once that container takes the jobs, by it alone: a new build is said only by the check that downloaded it, never by a container that loads it afterwards. A check counts as one failure however many times River retried it, so MaxMind being down is said at the second failed check, half a day on; a refused MaxMind key is said at once, like OMDb's or TMDb's. With `EMBEDDED_IMPORTER=false` the API's queue has nowhere to report, and the board, written by `cmd/importer`, shows the country lookup as off.
-
-A one-off `cmd/importer -once` or `-posters-only` sends one quiet summary when it ends and leaves the board alone.
+The GeoLite2 check runs on the queue, in whichever container claims it, so it can report before its container holds the jobs, which is when a new deploy's first check runs. What it says is kept and said once that container takes the jobs, by it alone: a new build is said only by the check that downloaded it, never by a container that loads it afterwards. A check counts as one failure however many times River retried it, so MaxMind being down is said at the second failed check, half a day on; a refused MaxMind key is said at once, like OMDb's or TMDb's.
 
 ## Credits
 
@@ -577,7 +546,7 @@ railway config apply
 
 The [Dockerfile](Dockerfile) builds the map with Node 22, the API with Go 1.26 (`-trimpath -ldflags="-s -w"`, `CGO_ENABLED=0`), and ships neither toolchain. The runtime is Alpine, with CA certificates, running as `nobody`. It sets `APP_ENV=production` and `WEB_DIR=/app/web/dist`. Railway injects `PORT`.
 
-The restart policy is left at Railway's default, `ON_FAILURE`, and the service is not allowed to sleep. Declaring either would leave `config plan` permanently dirty, because the platform stores a default as null. Both matter: the importer runs between requests, and a sleeping machine would drop that work.
+The restart policy is left at Railway's default, `ON_FAILURE`, and the service is not allowed to sleep. Declaring either would leave `config plan` permanently dirty, because the platform stores a default as null. Both matter: the catalog jobs run between requests, and a sleeping machine would drop that work.
 
 Variables to set on the service: `DATABASE_URL`, and, for pictures, synopses, trailers, people's photos and the search fallback, `OMDB_API_KEY` and one of the TMDb credentials. `POSTHOG_PROJECT_TOKEN` and `MIXPANEL_PROJECT_TOKEN`, with `ANALYTICS_ENABLED=true`, if analytics should report. `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if the jobs should report to a chat, with `NOTIFY_TIMEZONE` so its times are local. `STREAMING_API_KEY`, `MAXMIND_LICENSE_KEY` and `MAXMIND_ACCOUNT_ID` for where to watch. `WEB_DIR` only if it should differ from the path the image already sets.
 
@@ -588,7 +557,7 @@ go test ./...
 cd web && npm test
 ```
 
-The catalog tests need a database of their own. They publish fixtures over `catalog`, empty `meta.posters`, `meta.where_to_watch`, `meta.streaming_sync` and `meta.geoip`, and clear River's jobs, so pointing them at a working catalog destroys it. Nothing in the suite talks to the Streaming Availability API or MaxMind: both are stood in for, and the GeoLite2 databases the tests use are built by the tests.
+The catalog tests need a database of their own. They drop `catalog` and publish fixtures in its place, empty the `meta` tables the jobs keep (posters, id matches, synopses, trailers, people's photos, where to watch, GeoLite2, the notifier's memory and the published generation among them), and clear River's jobs, so pointing them at a working catalog destroys it. Nothing in the suite talks to the Streaming Availability API or MaxMind: both are stood in for, and the GeoLite2 databases the tests use are built by the tests.
 
 ```bash
 createdb cinedikt_test
@@ -597,21 +566,4 @@ CATALOG_TEST_URL=postgres://user:pass@host:5432/cinedikt_test go test ./...
 
 Without `CATALOG_TEST_URL` those tests skip, and the rest of the suite still runs.
 
-The `graph` package has an integration test that runs only when pointed at Neo4j. It writes ids from 900000000 upward and deletes them after:
-
-```bash
-NEO4J_TEST_URI=bolt://localhost:7687 NEO4J_TEST_PASSWORD=password123 go test ./...
-```
-
-## The old crawling map
-
-Before the catalog, the map was a graph. Given a TMDb movie id, a crawler wrote everyone who acted in it or directed it, and the other movies those people appeared in or directed, into Neo4j. The API crawled a movie to depth 1 on the first request and warmed further hops in the background. Redis cached the raw TMDb and OMDb responses.
-
-That path is what runs when `DATABASE_URL` is empty. It still answers `GET /movies/{id}/pathways` (TMDb numeric ids, not `tconst`s), and its own `/grid/{id}` and `/search/movies`. Cold crawls are capped (`MAX_COLD_CRAWLS`, default 8); a request that cannot get a slot answers 503 with `Retry-After`. Health checks Neo4j, and Redis when `REDIS_URL` is set. Seed it by hand with:
-
-```bash
-go run ./cmd/crawler -movie 603            # The Matrix, depth 1
-go run ./cmd/crawler -movie 603 -depth 2 -v
-```
-
-The React app no longer speaks this API. It addresses movies by IMDb id and reads the catalog's grid. The crawler, the graph store, and the pathways handler are still accepted so the old path can be run until those packages leave the tree. A catalog deployment does not need Neo4j, Redis, or a crawl.
+The Telegram board and messages are compared with what the chat would receive, kept in `internal/telegram/testdata`. After a deliberate change to the wording, `UPDATE_GOLDEN=1 go test ./internal/telegram/` rewrites them; reading what it wrote is the review. `UPDATE_GOLDEN=1 go test ./cmd/api/` redraws the share-card references the same way.

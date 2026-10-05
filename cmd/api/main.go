@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,24 +25,21 @@ import (
 
 	"cinedikt/internal/analytics"
 	"cinedikt/internal/api"
-	"cinedikt/internal/app"
 	"cinedikt/internal/catalog"
 	"cinedikt/internal/config"
 	"cinedikt/internal/geoip"
 	"cinedikt/internal/notify"
-	"cinedikt/internal/rediscache"
 	"cinedikt/internal/streaming"
 	"cinedikt/internal/telegram"
 	"cinedikt/internal/tmdb"
 )
 
-// warmWorkers is how many background crawls run alongside requests.
-const warmWorkers = 3
-
-// Server timeouts. RequestTimeout is the budget a handler gets: long
-// enough for a cold crawl to wait for a slot (SlotTimeout) and finish
-// (SeedTimeout), short enough that a stuck dependency frees the
-// connection. The rest are backstops for clients that stop reading.
+// Server timeouts. requestTimeout is the most any API handler may take.
+// Every call a request makes outside the process has a shorter budget of
+// its own, so this is the backstop for a stalled database: a stuck query
+// frees the connection rather than holding it until the client or the
+// platform gives up. The rest are backstops for clients that stop
+// reading.
 const (
 	requestTimeout    = 40 * time.Second
 	readHeaderTimeout = 10 * time.Second
@@ -99,174 +94,128 @@ func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// A catalog replaces the graph entirely: no Neo4j, no Redis, no
-	// crawl. The old wiring stays for a process that has not been
-	// given a database.
-	var meta movieMeta
-	var og http.Handler
-	var server *api.Server
-	// The queue, when where to watch is on. It is stopped beside the
-	// server's shutdown, inside the same draining window.
+	store, err := catalog.Open(ctx, cfg.DatabaseURL, cfg.APIMaxConns)
+	if err != nil {
+		return fmt.Errorf("open catalog: %w", err)
+	}
+	defer store.Close()
+	catalogServer := api.NewCatalogServer(store, logger)
+	// The process's one TMDb budget. TMDb counts requests per address, so
+	// a reader's lookups and every background job wait on this one limiter
+	// rather than each spending a rate of its own.
+	limiter := tmdb.NewLimiter(cfg.TMDBRatePerSecond)
+	client := searchFallback(cfg, limiter)
+	// Trailers and people's photos are only ever read here; their jobs
+	// look them up. Without TMDb credentials they cannot, and what they
+	// have not reached is "none" rather than an answer on its way.
+	catalogServer.WithTrailers(store, client != nil)
+	catalogServer.WithPeoplePhotos(store, client != nil)
+	if client != nil {
+		catalogServer.WithSearchFallback(client)
+		catalogServer.WithPosterStandIn(client, store)
+		logger.Info("catalog search falls back to tmdb when nothing matches", "tmdb_rate", cfg.TMDBRatePerSecond)
+	} else {
+		logger.Info("tmdb search fallback is off", "reason", "no TMDB_API_KEY or TMDB_ACCESS_TOKEN")
+	}
+	// The chat the jobs report to. Started before the queue, whose GeoIP
+	// check reports to it too, and which may run a check before the runner
+	// below has the lease; the sink keeps what it hears until then. Closed
+	// on the way out, so the last board and anything still queued are
+	// sent; the lease has usually done that already, and then this returns
+	// at once.
+	sink := telegram.Start(ctx, telegram.Config{
+		Token:    cfg.TelegramBotToken,
+		ChatID:   cfg.TelegramChatID,
+		Location: telegram.Zone(cfg.NotifyTimezone, logger),
+		Env:      cfg.RailwayEnvironment,
+	}, logger)
+	defer notify.Close(sink, 4*time.Second)
+	// Where to watch: answered from what is kept, asked of the Streaming
+	// Availability API once per movie and country, and kept right by the
+	// queue. Without its key the route answers 503 and the page leaves the
+	// section out. The queue is stopped beside the server's shutdown,
+	// inside the same draining window.
 	var queue *catalog.Queue
-	if cfg.DatabaseURL != "" {
-		store, err := catalog.Open(ctx, cfg.DatabaseURL, cfg.APIMaxConns)
+	if cfg.StreamingAPIKey != "" {
+		q, err := whereToWatch(ctx, cfg, store, catalogServer, sink, logger)
 		if err != nil {
-			return fmt.Errorf("open catalog: %w", err)
+			// The rest of the app does not depend on it. A map with no
+			// where-to-watch section is better than no map.
+			logger.Error("where to watch is off", "err", err)
 		}
-		defer store.Close()
-		server = api.NewWithLimits(nil, nil, nil, limits(cfg), logger)
-		catalogServer := api.NewCatalogServer(store, logger)
-		// The process's one TMDb budget. TMDb counts requests per
-		// address, so a reader's lookups and every background job wait
-		// on this one limiter rather than each spending a rate of its
-		// own.
-		limiter := tmdb.NewLimiter(cfg.TMDBRatePerSecond)
-		client, closer, err := searchFallback(ctx, cfg, limiter, logger)
-		if err != nil {
-			return err
-		}
-		if closer != nil {
-			defer closer.Close()
-		}
-		// Trailers and people's photos are only ever read here; their
-		// jobs look them up. Without TMDb credentials they cannot, and
-		// what they have not reached is "none" rather than an answer on
-		// its way.
-		catalogServer.WithTrailers(store, client != nil)
-		catalogServer.WithPeoplePhotos(store, client != nil)
-		if client != nil {
-			catalogServer.WithSearchFallback(client)
-			catalogServer.WithPosterStandIn(client, store)
-			logger.Info("catalog search falls back to tmdb when nothing matches", "tmdb_rate", cfg.TMDBRatePerSecond)
-		} else {
-			logger.Info("tmdb search fallback is off", "reason", "no TMDB_API_KEY or TMDB_ACCESS_TOKEN")
-		}
-		// The chat the jobs report to, when this process runs them.
-		// Started before the queue, whose GeoIP check reports to it too,
-		// and which may run a check before the runner below has the
-		// lease; the sink keeps what it hears until then. Closed on the
-		// way out, so the last board and anything still queued are sent;
-		// the lease has usually done that already, and then this returns
-		// at once.
-		var sink notify.Sink
-		if cfg.EmbeddedImporter {
-			sink = telegram.Start(ctx, telegram.Config{
-				Token:    cfg.TelegramBotToken,
-				ChatID:   cfg.TelegramChatID,
-				Location: telegram.Zone(cfg.NotifyTimezone, logger),
-				Env:      cfg.RailwayEnvironment,
-				Commit:   cfg.RailwayCommit,
-			}, logger)
-			defer notify.Close(sink, 4*time.Second)
-		}
-		// Where to watch: answered from what is kept, asked of the
-		// Streaming Availability API once per movie and country, and
-		// kept right by the queue. Without its key the route answers 503
-		// and the page leaves the section out.
-		if cfg.StreamingAPIKey != "" {
-			q, err := whereToWatch(ctx, cfg, store, catalogServer, sink, logger)
-			if err != nil {
-				// The rest of the app does not depend on it. A map with no
-				// where-to-watch section is better than no map.
-				logger.Error("where to watch is off", "err", err)
-			}
-			if q != nil {
-				queue = q
-				// On any other way out. Registered after the store's
-				// Close, so it runs first: the jobs write through the
-				// store. A second Stop does nothing.
-				defer func() {
-					stopCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
-					defer cancel()
-					q.Stop(stopCtx)
-				}()
-			}
-		} else {
-			logger.Info("where to watch is off", "reason", "no STREAMING_API_KEY")
-		}
-		server.WithCatalog(catalogServer)
-		server.WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping})
-		// What a scraper reads. Without it every shared link previews as
-		// the generic card, whatever movie it opens.
-		meta = store.MovieMeta
-		// And the card itself. Its assets are read once, here, so a
-		// missing font is a process that will not start rather than a
-		// link that will not unfurl.
-		cards, err := newOGServer(store, logger.With("component", "og"))
-		if err != nil {
-			return err
-		}
-		og = cards
-		logger.Info("serving from the catalog", "db_max_conns", cfg.APIMaxConns)
-
-		// Keeping the catalog up to date runs here too, unless
-		// something else is doing it. Starting the app on an empty
-		// database should leave a working map behind it rather than a
-		// 503 and a second command to go and find.
-		//
-		// It never blocks a request: the import runs behind the server,
-		// which answers "still being built" until there is something to
-		// serve. And it is safe to have both this and a separate
-		// importer — the attempt is held under an advisory lock, and
-		// whoever loses it exits.
-		if cfg.EmbeddedImporter {
-			// Its own pool, not the one serving requests. A bulk load
-			// and a two-hour poster drain must not sit on the ten
-			// connections a search is waiting for.
-			if err := (&catalog.Runner{
-				DatabaseURL:           cfg.DatabaseURL,
-				MaxConns:              cfg.ImporterMaxConns,
-				Logger:                logger.With("component", "importer"),
-				OMDbKey:               cfg.OMDBAPIKey,
-				BackfillRate:          cfg.OMDbBackfillRate,
-				PosterWorkers:         cfg.PosterWorkers,
-				SynopsisSweepMinVotes: cfg.SynopsisSweepMinVotes,
-				// The second chance for titles OMDb has no picture
-				// for, the id matcher, the trailers and people's
-				// photos. Optional: without it the catalog still
-				// works, with more grey boxes in the long tail.
-				TMDbAuth: tmdb.Auth{
-					APIKey:      cfg.TMDBAPIKey,
-					AccessToken: cfg.TMDBAccessToken,
-				},
-				// The same limiter the request-path client waits on.
-				TMDbLimiter:          limiter,
-				TMDbSweepMinVotes:    cfg.TMDbSweepMinVotes,
-				TrailerSweepMinVotes: cfg.TrailerSweepMinVotes,
-				PeopleSweepMinVotes:  cfg.PeopleSweepMinVotes,
-				PeopleSweepRate:      cfg.PeopleSweepRate,
-				Notify:               sink,
-				// The queue's jobs that report to the same sink, so the
-				// board counts them as running here.
-				Queued: queue.Jobs(),
-			}).Start(ctx); err != nil {
-				return err
-			}
-		} else {
-			logger.Info("the catalog is kept up to date elsewhere", "embedded_importer", false)
+		if q != nil {
+			queue = q
+			// On any other way out. Registered after the store's Close, so
+			// it runs first: the jobs write through the store. A second
+			// Stop does nothing.
+			defer func() {
+				stopCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+				defer cancel()
+				q.Stop(stopCtx)
+			}()
 		}
 	} else {
-		// Crawls happen inside requests and in the warmer; keep TMDb busy, but
-		// only fetch the filmographies the map can use (lead + anchorCostars).
-		a, err := app.New(ctx, cfg, 16, 8, logger)
-		if err != nil {
-			return err
-		}
-		defer a.Close(context.Background())
-		server = api.NewWithLimits(a.Store, a.Crawler, a.TMDB, limits(cfg), logger)
-		server.WithHealth(health(a)...)
-		server.WithFirstRun(a.Store)
-		// Off the startup path: the scan takes a moment and nothing should
-		// wait on it, least of all the health check.
-		go server.WarmFirstRun(ctx)
-		server.StartWarming(ctx, warmWorkers)
+		logger.Info("where to watch is off", "reason", "no STREAMING_API_KEY")
+	}
+	server := api.New(catalogServer, logger).
+		WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping})
+	// The share card. Its assets are read once, here, so a missing font is
+	// a process that will not start rather than a link that will not
+	// unfurl.
+	cards, err := newOGServer(store, logger.With("component", "og"))
+	if err != nil {
+		return err
+	}
+	logger.Info("serving from the catalog", "db_max_conns", cfg.APIMaxConns)
+
+	// Keeping the catalog up to date runs here too. Starting the app on an
+	// empty database should leave a working map behind it rather than a
+	// 503.
+	//
+	// It never blocks a request: the import runs behind the server, which
+	// answers "still being built" until there is something to serve. And
+	// it is safe while a deploy's old and new containers overlap: the jobs
+	// run only in the process holding the lease, an advisory lock.
+	//
+	// Its own pool, not the one serving requests. A bulk load and a
+	// two-hour poster drain must not sit on the ten connections a search
+	// is waiting for.
+	if err := (&catalog.Runner{
+		DatabaseURL:           cfg.DatabaseURL,
+		MaxConns:              cfg.ImporterMaxConns,
+		Logger:                logger.With("component", "importer"),
+		OMDbKey:               cfg.OMDBAPIKey,
+		BackfillRate:          cfg.OMDbBackfillRate,
+		PosterWorkers:         cfg.PosterWorkers,
+		SynopsisSweepMinVotes: cfg.SynopsisSweepMinVotes,
+		// The second chance for titles OMDb has no picture for, the id
+		// matcher, the trailers and people's photos. Optional: without it
+		// the catalog still works, with more grey boxes in the long tail.
+		TMDbAuth: tmdb.Auth{
+			APIKey:      cfg.TMDBAPIKey,
+			AccessToken: cfg.TMDBAccessToken,
+		},
+		// The same limiter the request-path client waits on.
+		TMDbLimiter:          limiter,
+		TMDbSweepMinVotes:    cfg.TMDbSweepMinVotes,
+		TrailerSweepMinVotes: cfg.TrailerSweepMinVotes,
+		PeopleSweepMinVotes:  cfg.PeopleSweepMinVotes,
+		PeopleSweepRate:      cfg.PeopleSweepRate,
+		Notify:               sink,
+		// The queue's jobs that report to the same sink, so the board
+		// counts them as running here.
+		Queued: queue.Jobs(),
+	}).Start(ctx); err != nil {
+		return err
 	}
 	// What the page is handed to report with, written into it rather
 	// than asked for, so a page with tracking off makes no request for it.
 	tracking := pageAnalyticsFor(cfg)
+	// store.MovieMeta is what a scraper reads: without it every shared
+	// link previews as the generic card, whatever movie it opens.
 	srv := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           routes(server.Handler(), cfg.WebDir, meta, og, tracking, logger),
+		Handler:           routes(server.Handler(), cfg.WebDir, store.MovieMeta, cards, tracking, logger),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -304,7 +253,7 @@ func run(logger *slog.Logger) error {
 }
 
 // whereToWatch builds the where-to-watch service, places readers with
-// GeoLite2 when there is a MaxMind license key, and starts the queue that
+// GeoLite2 when there are MaxMind credentials, and starts the queue that
 // keeps answers right from the changes feed, refreshes them, and keeps
 // the GeoLite2 database current, telling sink how each GeoLite2 check
 // ended. The service is handed to the catalog server only once all of
@@ -316,30 +265,20 @@ func whereToWatch(ctx context.Context, cfg config.Config, store *catalog.Store, 
 		Logger:          logger.With("component", "where-to-watch"),
 		ChangesMaxPages: cfg.StreamingChangesMaxPages,
 	}
-	// Nil without a license key, so only a CDN's country header places a
-	// reader. With one, the route answers 503 to a reader the lookup
-	// cannot place until it has a database, rather than telling them
-	// their country has no coverage.
+	// Nil without MaxMind credentials, so nobody is placed. With them,
+	// the route answers 503 to a reader the lookup cannot place until it
+	// has a database, rather than telling them their country has no
+	// coverage.
 	var geo api.CountryLookup
-	var updater *geoip.Updater
-	if cfg.MaxMindLicenseKey != "" {
-		lookup := &geoip.Lookup{}
-		geo = lookup
-		updater = &geoip.Updater{
-			AccountID:  cfg.MaxMindAccountID,
-			LicenseKey: cfg.MaxMindLicenseKey,
-			Store:      store,
-			Lookup:     lookup,
-			Logger:     logger.With("component", "geoip"),
-		}
+	updater := geoIPFor(cfg, store, logger)
+	if updater != nil {
+		geo = updater.Lookup
 		// What another process, or this one before a restart, already
 		// downloaded. The first check, which the queue's leader queues
 		// when it is elected, fetches one when there is none.
 		if err := updater.LoadStored(ctx); err != nil {
 			logger.Warn("load the kept GeoLite2 database", "err", err)
 		}
-	} else {
-		logger.Info("geoip is off; readers are placed only by a CDN's country header", "reason", "no MAXMIND_LICENSE_KEY")
 	}
 	queue, err := catalog.OpenQueue(ctx, catalog.QueueConfig{
 		DatabaseURL:  cfg.DatabaseURL,
@@ -359,19 +298,33 @@ func whereToWatch(ctx context.Context, cfg config.Config, store *catalog.Store, 
 		go updater.Follow(ctx, geoipFollow)
 	}
 	cs.WithWhereToWatch(watch, geo)
-	cs.WithGeoHeader(cfg.GeoCountryHeader)
 	logger.Info("where to watch is on", "streaming_rate", cfg.StreamingRatePerSecond,
 		"changes_max_pages", cfg.StreamingChangesMaxPages, "geoip", updater != nil)
 	return queue, nil
 }
 
-// limits applies any environment overrides to the API's defaults.
-func limits(cfg config.Config) api.Limits {
-	l := api.DefaultLimits
-	if cfg.MaxColdCrawls > 0 {
-		l.ColdCrawls = cfg.MaxColdCrawls
+// geoIPFor is the GeoLite2 updater for cfg's MaxMind credentials, with
+// an empty lookup for it to fill, or nil when there are none and readers
+// are not placed in a country. MaxMind's download takes the account id
+// with the license key, so a key on its own is a mistake, and is said as
+// one rather than left to fail at the first check.
+func geoIPFor(cfg config.Config, store geoip.Store, logger *slog.Logger) *geoip.Updater {
+	switch {
+	case cfg.MaxMindLicenseKey == "":
+		logger.Info("geoip is off; readers are not placed in a country", "reason", "no MAXMIND_LICENSE_KEY")
+		return nil
+	case cfg.MaxMindAccountID == "":
+		logger.Warn("geoip is off; readers are not placed in a country",
+			"reason", "MAXMIND_LICENSE_KEY is set without MAXMIND_ACCOUNT_ID, and MaxMind takes the two together")
+		return nil
 	}
-	return l
+	return &geoip.Updater{
+		AccountID:  cfg.MaxMindAccountID,
+		LicenseKey: cfg.MaxMindLicenseKey,
+		Store:      store,
+		Lookup:     &geoip.Lookup{},
+		Logger:     logger.With("component", "geoip"),
+	}
 }
 
 // searchFallback is the TMDb client a reader's request asks: a missed
@@ -381,24 +334,11 @@ func limits(cfg config.Config) api.Limits {
 // No credentials means no client: a title stored as a primary or
 // original name is still found, and search does not depend on TMDb
 // being up for those.
-func searchFallback(ctx context.Context, cfg config.Config, limiter *rate.Limiter, logger *slog.Logger) (*tmdb.Client, io.Closer, error) {
+func searchFallback(cfg config.Config, limiter *rate.Limiter) *tmdb.Client {
 	if cfg.TMDBAPIKey == "" && cfg.TMDBAccessToken == "" {
-		return nil, nil, nil
+		return nil
 	}
-	opts := []tmdb.Option{tmdb.WithLimiter(limiter)}
-	var closer io.Closer
-	if cfg.RedisURL == "" {
-		logger.Info("REDIS_URL not set; TMDb search responses will not be cached")
-	} else {
-		cache, err := rediscache.New(ctx, cfg.RedisURL, "cinedikt:tmdb", cfg.TMDBCacheTTL)
-		if err != nil {
-			return nil, nil, fmt.Errorf("tmdb cache: %w", err)
-		}
-		closer = cache
-		opts = append(opts, tmdb.WithCache(cache))
-		logger.Info("response cache in Redis", "prefix", "tmdb", "ttl", cfg.TMDBCacheTTL)
-	}
-	return tmdb.New(tmdb.Auth{APIKey: cfg.TMDBAPIKey, AccessToken: cfg.TMDBAccessToken}, opts...), closer, nil
+	return tmdb.New(tmdb.Auth{APIKey: cfg.TMDBAPIKey, AccessToken: cfg.TMDBAccessToken}, tmdb.WithLimiter(limiter))
 }
 
 // pageAnalytics is what the page needs to report to PostHog and to
@@ -466,16 +406,6 @@ func withAnalyticsMeta(body, tag []byte) []byte {
 	return append(out, body[i:]...)
 }
 
-// health adapts the app's dependencies to the API's health check.
-func health(a *app.App) []api.Dependency {
-	deps := a.Dependencies()
-	out := make([]api.Dependency, 0, len(deps))
-	for _, d := range deps {
-		out = append(out, api.Dependency{Name: d.Name, Ping: d.Ping})
-	}
-	return out
-}
-
 // movieMeta is a read of what a link preview needs: the movie's title,
 // its year, and the poster the share card is drawn from. It is a
 // function so a test can stand in for the catalog.
@@ -508,13 +438,6 @@ func routes(apiHandler http.Handler, webDir string, meta movieMeta, og http.Hand
 		// Built once: the settings do not change while the process runs.
 		analyticsTag := analyticsMeta(tracking)
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// Maps used to live at /film/. Links to them are out in the
-			// world for good, so they are moved rather than served: one
-			// address per map, and the one people see is the new one.
-			if to, ok := movieRoute(r.URL); ok {
-				http.Redirect(w, r, to, http.StatusMovedPermanently)
-				return
-			}
 			p := filepath.Join(webDir, filepath.FromSlash(strings.TrimPrefix(r.URL.Path, "/")))
 			if info, err := os.Stat(p); err == nil && !info.IsDir() {
 				setWebCache(w, hashedAsset(r.URL.Path))
@@ -527,19 +450,6 @@ func routes(apiHandler http.Handler, webDir string, meta movieMeta, og http.Hand
 		logger.Info("serving frontend", "dir", webDir)
 	}
 	return recoverPanics(mux, logger)
-}
-
-// movieRoute is where an old /film/ link should go, query and all.
-func movieRoute(u *url.URL) (string, bool) {
-	rest, ok := strings.CutPrefix(u.Path, "/film/")
-	if !ok || rest == "" {
-		return "", false
-	}
-	to := "/movie/" + rest
-	if u.RawQuery != "" {
-		to += "?" + u.RawQuery
-	}
-	return to, true
 }
 
 // withTimeout gives each request a deadline its handlers can observe.
@@ -640,7 +550,7 @@ func setMeta(body []byte, tag *regexp.Regexp, value string) []byte {
 // shared link is how this app travels, and "The Matrix — everything its
 // cast and directors made" says what it opens where the tagline cannot.
 //
-// Every way of not knowing — not a movie route, not in the graph, an
+// Every way of not knowing — not a movie route, not in the catalog, an
 // error, or simply too slow — leaves the generic tags alone.
 func namePreview(ctx context.Context, body []byte, origin, path string, meta movieMeta) []byte {
 	if meta == nil {
@@ -734,15 +644,14 @@ func lookUp(ctx context.Context, meta movieMeta, tconst string) (string, int, st
 	}
 }
 
-// movieRoutePath is the address a map has, and the one it used to have.
-// It is the same shape the client reads — TCONST in movieParam.ts — so
-// the two cannot disagree about what counts as a movie route.
+// movieRoutePath is the address a map has, the same shape
+// movieIdFromPath in web/src/movieParam.ts reads, so the two cannot
+// disagree about what counts as a movie route.
 //
-// An IMDb title id, not a number: the client has written tconst
-// addresses since the catalog replaced the graph, and a numeric pattern
-// here matched none of them. Every shared link previewed as the generic
-// card for exactly that reason.
-var movieRoutePath = regexp.MustCompile(`^/(?:movie|film)/(tt\d{1,17})(?:-[^/]*)?/?$`)
+// An IMDb title id, not a number: the client writes tconst addresses,
+// and a numeric pattern here would match none of them, so every shared
+// link would preview as the generic card.
+var movieRoutePath = regexp.MustCompile(`^/movie/(tt\d{1,17})(?:-[^/]*)?/?$`)
 
 func movieIDFromPath(path string) (string, bool) {
 	m := movieRoutePath.FindStringSubmatch(path)

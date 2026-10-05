@@ -3,8 +3,8 @@ import type { RefObject } from 'react';
 /** The mark's size in the header, on every screen. The slot reserves
  *  exactly this whether or not there is a mark in it yet, so the loader
  *  landing and the real mark taking its place never move the header. */
-export const MARK_W = 14.7;
-export const MARK_H = 22.5;
+const MARK_W = 14.7;
+const MARK_H = 22.5;
 
 /** The mark stands in for the C of "Cinedikt": a C left open on the right,
  *  its top end rising into the hooked neck of a lowercase delta — δίκτυο,
@@ -12,7 +12,7 @@ export const MARK_H = 22.5;
  *
  *  The accent is the dot's alone. The stroke takes `currentColor` so the
  *  mark darkens and lightens with the text beside it. */
-export function Mark() {
+function Mark() {
   return (
     <svg
       className="cd-mark"

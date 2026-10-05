@@ -108,15 +108,14 @@ func (m *memStore) KeepGeoIP(_ context.Context, stamp string, mmdb []byte) error
 	return nil
 }
 
-func updater(srv *geoiptest.Server, store geoip.Store, l *geoip.Lookup, account string) *geoip.Updater {
+func updater(srv *geoiptest.Server, store geoip.Store, l *geoip.Lookup) *geoip.Updater {
 	return &geoip.Updater{
-		AccountID:    account,
+		AccountID:    geoiptest.Account,
 		LicenseKey:   geoiptest.License,
 		Store:        store,
 		Lookup:       l,
 		HTTP:         srv.Client(),
 		PermalinkURL: srv.PermalinkURL(),
-		LegacyURL:    srv.LegacyURL(),
 	}
 }
 
@@ -128,7 +127,7 @@ func TestTheDatabaseIsDownloadedOnlyWhenItsBuildChanges(t *testing.T) {
 	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), built)
 	store := &memStore{}
 	var l geoip.Lookup
-	u := updater(srv, store, &l, geoiptest.Account)
+	u := updater(srv, store, &l)
 
 	first := geoiptest.Database(t, networks)
 	srv.Set(geoiptest.Archive(t, first), built)
@@ -179,7 +178,7 @@ func TestABadDownloadKeepsTheDatabaseInUse(t *testing.T) {
 	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), built)
 	store := &memStore{}
 	var l geoip.Lookup
-	u := updater(srv, store, &l, geoiptest.Account)
+	u := updater(srv, store, &l)
 	if _, err := u.Check(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -227,13 +226,13 @@ func TestASecondProcessReadsTheKeptDatabase(t *testing.T) {
 	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), built)
 	store := &memStore{}
 	var first geoip.Lookup
-	if _, err := updater(srv, store, &first, geoiptest.Account).Check(ctx); err != nil {
+	if _, err := updater(srv, store, &first).Check(ctx); err != nil {
 		t.Fatal(err)
 	}
 	heads, gets := srv.Heads(), srv.Gets()
 
 	var second geoip.Lookup
-	other := updater(srv, store, &second, geoiptest.Account)
+	other := updater(srv, store, &second)
 	if err := other.LoadStored(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +250,7 @@ func TestASecondProcessReadsTheKeptDatabase(t *testing.T) {
 
 	// The first process fetches a new build; the second follows it.
 	srv.Set(geoiptest.Archive(t, geoiptest.Database(t, map[string]string{"216.160.83.0/24": "CA"})), built.Add(96*time.Hour))
-	if _, err := updater(srv, store, &first, geoiptest.Account).Check(ctx); err != nil {
+	if _, err := updater(srv, store, &first).Check(ctx); err != nil {
 		t.Fatal(err)
 	}
 	followCtx, stop := context.WithCancel(ctx)
@@ -271,31 +270,30 @@ func TestASecondProcessReadsTheKeptDatabase(t *testing.T) {
 	}
 }
 
-// TestTheLegacyAddressTakesTheKeyAlone, and neither address puts the key
-// into an error a caller would log.
-func TestTheLegacyAddressTakesTheKeyAlone(t *testing.T) {
+// TestARefusedKeyIsErrKeyAndNeverQuoted: a wrong key, or a key without
+// its account id, is refused as the key, and no error a caller would log
+// carries the key: it goes in the Authorization header alone.
+func TestARefusedKeyIsErrKeyAndNeverQuoted(t *testing.T) {
 	ctx := context.Background()
 	srv := geoiptest.NewServer(t, geoiptest.Archive(t, geoiptest.Database(t, networks)), time.Now())
-	var l geoip.Lookup
-	if res, err := updater(srv, &memStore{}, &l, "").Check(ctx); err != nil || !res.Downloaded {
-		t.Fatalf("legacy: downloaded %v, err %v", res.Downloaded, err)
-	}
-
-	for _, account := range []string{"", geoiptest.Account} {
-		u := updater(srv, &memStore{}, &geoip.Lookup{}, account)
-		u.LicenseKey = "wrong-licence-key"
+	for _, c := range []struct{ name, account, key string }{
+		{"a wrong key", geoiptest.Account, "wrong-licence-key"},
+		{"no account id", "", geoiptest.License},
+	} {
+		u := updater(srv, &memStore{}, &geoip.Lookup{})
+		u.AccountID, u.LicenseKey = c.account, c.key
 		_, err := u.Check(ctx)
 		if !errors.Is(err, geoip.ErrKey) {
-			t.Errorf("account %q with a bad key: err = %v, want ErrKey", account, err)
+			t.Errorf("%s: err = %v, want ErrKey", c.name, err)
 		}
-		if err != nil && strings.Contains(err.Error(), "wrong-licence-key") {
-			t.Errorf("the error carries the key: %v", err)
+		if err != nil && strings.Contains(err.Error(), c.key) {
+			t.Errorf("%s: the error carries the key: %v", c.name, err)
 		}
 	}
 
 	// Nor does a host that does not answer.
-	u := updater(srv, &memStore{}, &geoip.Lookup{}, "")
-	u.LegacyURL = "http://127.0.0.1:1/app/geoip_download?edition_id=GeoLite2-Country&suffix=tar.gz"
+	u := updater(srv, &memStore{}, &geoip.Lookup{})
+	u.PermalinkURL = "http://127.0.0.1:1" + geoiptest.PermalinkPath + "?suffix=tar.gz"
 	if _, err := u.Check(ctx); err == nil || strings.Contains(err.Error(), geoiptest.License) {
 		t.Errorf("err = %v", err)
 	}
@@ -327,7 +325,7 @@ func TestMaxMindBeingDownIsADownloadError(t *testing.T) {
 	}
 
 	srv := geoiptest.NewServer(t, []byte("<html>maintenance</html>"), time.Now())
-	u = updater(srv, &memStore{}, &geoip.Lookup{}, geoiptest.Account)
+	u = updater(srv, &memStore{}, &geoip.Lookup{})
 	if _, err := u.Check(ctx); err == nil || errors.As(err, &dl) {
 		t.Errorf("a download that is not a database: err = %v, want an error that is not MaxMind being down", err)
 	}

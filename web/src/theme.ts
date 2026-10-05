@@ -12,7 +12,7 @@ export type Theme = 'light' | 'dark';
 
 /** Where the choice lives. Read by the inline script in index.html
  *  before any stylesheet, so a reload never flashes the wrong ground. */
-export const THEME_KEY = 'cinedikt.theme';
+const THEME_KEY = 'cinedikt.theme';
 
 /** The browser chrome around the page, so the notch and the tab strip
  *  are the same colour as the page under them: each theme's ground
@@ -26,7 +26,7 @@ export const THEME_COLORS: Record<Theme, string> = { dark: '#13100d', light: '#f
  *  transition on every hover state in the app. */
 const CROSSFADE_MS = 250;
 
-export function prefers(query: string): boolean {
+function prefers(query: string): boolean {
   return typeof matchMedia === 'function' && matchMedia(query).matches;
 }
 
@@ -44,7 +44,7 @@ export function prefFrom(raw: string | null): ThemePref {
 /** Put a theme on the page. `animate` crossfades it, which is right for
  *  a reader who just pressed the button and wrong for an OS that
  *  changed underneath them while they were reading. */
-export function apply(pref: ThemePref, animate: boolean): Theme {
+function apply(pref: ThemePref, animate: boolean): Theme {
   const theme = resolved(pref);
   const el = document.documentElement;
   if (animate && !prefers('(prefers-reduced-motion: reduce)')) {

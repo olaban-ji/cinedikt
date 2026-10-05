@@ -23,9 +23,8 @@ const lineMax = 80
 
 // place is what the board says about where it is running.
 type place struct {
-	env    string
-	commit string
-	utc    bool
+	env string
+	utc bool
 }
 
 // render returns the board as sent, and the same without its
@@ -414,13 +413,7 @@ func (s *state) footer(w writer, at place) string {
 	}
 	// The deploy, then how long it has been up: "up since" beside a
 	// check time could otherwise be read as the check running since.
-	where := env
-	if len(at.commit) >= 7 {
-		where += " " + at.commit[:7]
-	} else if at.commit != "" {
-		where += " " + at.commit
-	}
-	parts = append(parts, where)
+	parts = append(parts, env)
 	if !s.RunningSince.IsZero() {
 		parts = append(parts, "up since "+w.when(s.RunningSince))
 	}

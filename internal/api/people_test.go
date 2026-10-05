@@ -256,9 +256,7 @@ func TestThePhotosRouteNeverAsksTMDb(t *testing.T) {
 	cat := photosServer(store, true)
 	cat.WithSearchFallback(forbiddenTMDb{t})
 	cat.WithPosterStandIn(forbiddenTMDb{t}, nil)
-	server := NewWithLimits(nil, nil, nil, testLimits(), discardLogger())
-	server.WithCatalog(cat)
-	h := server.Handler()
+	h := New(cat, discardLogger()).Handler()
 	for i := 0; i < 3; i++ {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/people/photos?ids="+mapIDs, nil))

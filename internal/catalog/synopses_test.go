@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"cinedikt/internal/config"
 	"cinedikt/internal/notify"
 	"cinedikt/internal/omdb"
 	"cinedikt/internal/tmdb"
@@ -116,7 +117,7 @@ func TestThePosterPassKeepsThePlotWithEveryAnswer(t *testing.T) {
 	if err := job.Run(ctx, Live); err != nil {
 		t.Fatal(err)
 	}
-	if text, source, ok := synopsisRow(t, s, "tt0133093"); !ok || text != "Neo learns the truth." || source != SynopsisOMDb {
+	if text, source, ok := synopsisRow(t, s, "tt0133093"); !ok || text != "Neo learns the truth." || source != "omdb" {
 		t.Errorf("matrix = %q from %q (row %v)", text, source, ok)
 	}
 	if !omdbAnswered(t, s, "tt0133093") {
@@ -125,7 +126,7 @@ func TestThePosterPassKeepsThePlotWithEveryAnswer(t *testing.T) {
 	// Answers with no plot are answers: nobody has one, and the title
 	// is not asked again.
 	for _, id := range []string{"tt0234215", "tt0111161"} {
-		if text, source, ok := synopsisRow(t, s, id); !ok || text != "" || source != SynopsisOMDb {
+		if text, source, ok := synopsisRow(t, s, id); !ok || text != "" || source != "omdb" {
 			t.Errorf("%s = %q from %q (row %v), want OMDb's null", id, text, source, ok)
 		}
 	}
@@ -166,13 +167,13 @@ func TestOMDbsPlotComesBeforeTMDbsOverview(t *testing.T) {
 	// An OMDb plot is never replaced by TMDb.
 	omdbSays("tt0133093", "OMDb's plot.")
 	tmdbSays("tt0133093", "TMDb's overview.")
-	expect("tt0133093", "OMDb's plot.", SynopsisOMDb)
+	expect("tt0133093", "OMDb's plot.", "omdb")
 
 	// TMDb fills in first, and OMDb's plot replaces it when it comes.
 	tmdbSays("tt0234215", "TMDb's overview.")
-	expect("tt0234215", "TMDb's overview.", SynopsisTMDb)
+	expect("tt0234215", "TMDb's overview.", "tmdb")
 	omdbSays("tt0234215", "OMDb's plot.")
-	expect("tt0234215", "OMDb's plot.", SynopsisOMDb)
+	expect("tt0234215", "OMDb's plot.", "omdb")
 
 	// TMDb's overview is not OMDb's answer, so OMDb is still to be asked.
 	tmdbSays("tt0111161", "TMDb's overview.")
@@ -182,19 +183,19 @@ func TestOMDbsPlotComesBeforeTMDbsOverview(t *testing.T) {
 	// OMDb having nothing does not throw away a fresh overview, but it
 	// is an answer all the same, and OMDb is not asked again.
 	omdbSays("tt0111161", "")
-	expect("tt0111161", "TMDb's overview.", SynopsisTMDb)
+	expect("tt0111161", "TMDb's overview.", "tmdb")
 	if !omdbAnswered(t, s, "tt0111161") {
 		t.Error("OMDb's \"none\" beside a fresh overview was not recorded")
 	}
 	// ...but one past its 150 days is dropped for OMDb's "none".
 	ageSynopsis(t, s, "tt0111161", TMDbRefreshAfter+24*time.Hour)
 	omdbSays("tt0111161", "")
-	expect("tt0111161", "", SynopsisOMDb)
+	expect("tt0111161", "", "omdb")
 
 	// Where OMDb has nothing, TMDb's overview fills the gap, and OMDb's
 	// answer still stands.
 	tmdbSays("tt0111161", "TMDb's overview.")
-	expect("tt0111161", "TMDb's overview.", SynopsisTMDb)
+	expect("tt0111161", "TMDb's overview.", "tmdb")
 	if !omdbAnswered(t, s, "tt0111161") {
 		t.Error("TMDb's overview erased OMDb's answer")
 	}
@@ -232,13 +233,13 @@ func TestTheTMDbJobsKeepTheOverviewForFree(t *testing.T) {
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0111161"); text != "Two imprisoned men bond." || source != SynopsisTMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0111161"); text != "Two imprisoned men bond." || source != "tmdb" {
 		t.Errorf("shawshank = %q from %q", text, source)
 	}
 	if omdbAnswered(t, s, "tt0111161") {
 		t.Error("the matcher's overview counted as OMDb having answered")
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0133093"); text != "OMDb's plot." || source != SynopsisOMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0133093"); text != "OMDb's plot." || source != "omdb" {
 		t.Errorf("matrix = %q from %q; TMDb replaced OMDb", text, source)
 	}
 
@@ -290,11 +291,11 @@ func TestTheSynopsisJobServesDemandFirst(t *testing.T) {
 	if got := fake.asked; !reflect.DeepEqual(got, want) {
 		t.Fatalf("asked %v, want %v", got, want)
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0000001"); text != "An unrated plot." || source != SynopsisOMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0000001"); text != "An unrated plot." || source != "omdb" {
 		t.Errorf("unrated = %q from %q", text, source)
 	}
 	// OMDb had nothing for Reloaded, so the stale overview is dropped.
-	if text, source, _ := synopsisRow(t, s, "tt0234215"); text != "" || source != SynopsisOMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0234215"); text != "" || source != "omdb" {
 		t.Errorf("reloaded = %q from %q, want OMDb's null", text, source)
 	}
 	if fin := sink.of(notify.Finished); len(fin) != 1 || fin[0].Job != notify.JobSynopses || fin[0].Done != 3 || fin[0].None != 1 {
@@ -437,8 +438,8 @@ func (f *pausingOMDb) reset() {
 // mid-sweep is looked at before the next batch, so it goes ahead of the
 // rest of the sweep however long that is.
 func TestTheSynopsisSweepReachesEveryFilmBehindWhatReadersMeet(t *testing.T) {
-	if SynopsisSweepMinVotes != 0 {
-		t.Fatalf("the synopsis sweep's default floor is %d, want 0", SynopsisSweepMinVotes)
+	if config.DefaultSynopsisSweepMinVotes != 0 {
+		t.Fatalf("the synopsis sweep's default floor is %d, want 0", config.DefaultSynopsisSweepMinVotes)
 	}
 	s := testStore(t)
 	ctx := context.Background()
@@ -464,7 +465,7 @@ func TestTheSynopsisSweepReachesEveryFilmBehindWhatReadersMeet(t *testing.T) {
 		}},
 	}
 	// One title a batch, so the order is the whole of what is checked.
-	job := &SynopsisJob{Store: s, Client: fake, Logger: quietLogger(), MinVotes: SynopsisSweepMinVotes, Batch: 1, Workers: 1}
+	job := &SynopsisJob{Store: s, Client: fake, Logger: quietLogger(), MinVotes: config.DefaultSynopsisSweepMinVotes, Batch: 1, Workers: 1}
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +476,7 @@ func TestTheSynopsisSweepReachesEveryFilmBehindWhatReadersMeet(t *testing.T) {
 	if !reflect.DeepEqual(fake.asked, want) {
 		t.Fatalf("asked %v, want %v", fake.asked, want)
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0000001"); text != "Five votes' worth." || source != SynopsisOMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0000001"); text != "Five votes' worth." || source != "omdb" {
 		t.Errorf("five-vote film = %q from %q", text, source)
 	}
 }
@@ -505,7 +506,7 @@ func TestASpentDailyLimitPausesTheSweepAndItResumes(t *testing.T) {
 		errs: map[string]error{"tt0133093": omdb.ErrQuota},
 	}}
 	var sink recordingSink
-	job := &SynopsisJob{Store: s, Client: fake, Logger: quietLogger(), MinVotes: SynopsisSweepMinVotes, Batch: 1, Workers: 1, Notify: &sink}
+	job := &SynopsisJob{Store: s, Client: fake, Logger: quietLogger(), MinVotes: config.DefaultSynopsisSweepMinVotes, Batch: 1, Workers: 1, Notify: &sink}
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -717,10 +718,10 @@ func TestATMDbOverviewDoesNotStopOMDbBeingAsked(t *testing.T) {
 	if want := []string{"tt0111161", "tt0234215"}; !reflect.DeepEqual(fake.asked, want) {
 		t.Fatalf("asked %v, want %v: an overview of TMDb's kept OMDb from being asked", fake.asked, want)
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0111161"); text != "OMDb on Shawshank." || source != SynopsisOMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0111161"); text != "OMDb on Shawshank." || source != "omdb" {
 		t.Errorf("shawshank = %q from %q, want OMDb's plot", text, source)
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0234215"); text != "TMDb on Reloaded." || source != SynopsisTMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0234215"); text != "TMDb on Reloaded." || source != "tmdb" {
 		t.Errorf("reloaded = %q from %q, want TMDb's fresh overview kept", text, source)
 	}
 

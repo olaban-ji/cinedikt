@@ -76,7 +76,7 @@ func TestChangesAsksForOnePageOfMovieChanges(t *testing.T) {
 		t.Fatalf("changes = %+v", page.Changes)
 	}
 	first := page.Changes[0]
-	if first.Type != ChangeNew || first.ShowID != "82" || !first.At.Equal(time.Unix(1790000000, 0)) {
+	if first.ShowID != "82" || !first.At.Equal(time.Unix(1790000000, 0)) {
 		t.Errorf("first = %+v", first)
 	}
 	if !page.Changes[2].At.IsZero() {

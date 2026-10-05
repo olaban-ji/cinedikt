@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,29 +26,23 @@ func newTestClient(t *testing.T, auth Auth, handler http.HandlerFunc, opts ...Op
 
 func TestAuthAPIKeyQuery(t *testing.T) {
 	c, _ := newTestClient(t, Auth{APIKey: "k3y"}, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/movie/603" {
+		if r.URL.Path != "/search/movie" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
 		if got := r.URL.Query().Get("api_key"); got != "k3y" {
 			t.Errorf("api_key = %q, want k3y", got)
 		}
-		if got := r.URL.Query().Get("append_to_response"); got != "credits" {
-			t.Errorf("append_to_response = %q, want credits", got)
+		if r.Header.Get("Authorization") != "" {
+			t.Error("an Authorization header was sent with an API key alone")
 		}
-		w.Write([]byte(`{"id":603,"title":"The Matrix","release_date":"1999-03-31","poster_path":"/m.jpg","vote_average":8.2,"vote_count":26000,"imdb_id":"tt0133093","credits":{"cast":[{"id":6384,"name":"Keanu Reeves","character":"Neo","order":0}],"crew":[{"id":525,"name":"Lana Wachowski","job":"Director","department":"Directing"}]}}`))
+		w.Write([]byte(`{"results":[{"id":603,"title":"The Matrix"}]}`))
 	})
-	m, err := c.Movie(context.Background(), 603)
+	sr, err := c.SearchMovies(context.Background(), "the matrix")
 	if err != nil {
-		t.Fatalf("Movie: %v", err)
+		t.Fatalf("SearchMovies: %v", err)
 	}
-	if m.Title != "The Matrix" || m.Credits == nil || len(m.Credits.Cast) != 1 || m.Credits.Cast[0].Character != "Neo" {
-		t.Errorf("Movie = %+v", m)
-	}
-	if len(m.Credits.Crew) != 1 || m.Credits.Crew[0].Job != JobDirector || m.Credits.Crew[0].ID != 525 {
-		t.Errorf("Movie crew = %+v", m.Credits.Crew)
-	}
-	if m.PosterPath != "/m.jpg" || m.VoteAverage != 8.2 || m.VoteCount != 26000 || m.IMDbID != "tt0133093" {
-		t.Errorf("Movie metadata = %+v", m)
+	if len(sr.Results) != 1 || sr.Results[0].ID != 603 {
+		t.Errorf("results = %+v", sr.Results)
 	}
 }
 
@@ -61,41 +54,17 @@ func TestAuthBearerToken(t *testing.T) {
 		if r.URL.Query().Has("api_key") {
 			t.Error("api_key sent alongside bearer token")
 		}
-		if got := r.URL.Query().Get("append_to_response"); got != "movie_credits" {
-			t.Errorf("append_to_response = %q, want movie_credits", got)
+		if got := r.URL.Query().Get("external_source"); got != "imdb_id" {
+			t.Errorf("external_source = %q, want imdb_id", got)
 		}
-		w.Write([]byte(`{"id":6384,"name":"Keanu Reeves","popularity":40.5,"known_for_department":"Acting","movie_credits":{"cast":[{"id":603,"title":"The Matrix","character":"Neo"}],"crew":[{"id":603,"title":"The Matrix","job":"Director"}]}}`))
+		w.Write([]byte(`{"movie_results":[{"id":603}]}`))
 	})
-	p, err := c.Person(context.Background(), 6384)
+	got, err := c.FindByIMDb(context.Background(), "tt0133093")
 	if err != nil {
-		t.Fatalf("Person: %v", err)
+		t.Fatalf("FindByIMDb: %v", err)
 	}
-	if p.Name != "Keanu Reeves" || p.Popularity != 40.5 || p.MovieCredits == nil || len(p.MovieCredits.Cast) != 1 {
-		t.Errorf("Person = %+v", p)
-	}
-	if len(p.MovieCredits.Crew) != 1 || p.MovieCredits.Crew[0].Job != JobDirector {
-		t.Errorf("Person crew = %+v", p.MovieCredits.Crew)
-	}
-}
-
-func TestCacheServesRepeats(t *testing.T) {
-	var hits atomic.Int32
-	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		w.Write([]byte(`{"id":1,"name":"X","movie_credits":{"cast":[{"id":603,"title":"The Matrix"}]}}`))
-	}, WithCache(newMemCache()))
-
-	for i := 0; i < 3; i++ {
-		p, err := c.Person(context.Background(), 1)
-		if err != nil {
-			t.Fatalf("call %d: %v", i, err)
-		}
-		if p.MovieCredits == nil || len(p.MovieCredits.Cast) != 1 {
-			t.Fatalf("call %d: credits = %+v", i, p.MovieCredits)
-		}
-	}
-	if hits.Load() != 1 {
-		t.Errorf("server hits = %d, want 1", hits.Load())
+	if got.ID != 603 {
+		t.Errorf("found = %+v", got)
 	}
 }
 
@@ -108,28 +77,87 @@ func TestRetryOn429(t *testing.T) {
 			w.Write([]byte(`{"status_message":"slow down"}`))
 			return
 		}
-		w.Write([]byte(`{"id":603,"title":"The Matrix"}`))
+		w.Write([]byte(`{"results":[{"id":603,"title":"The Matrix"}]}`))
 	})
-	m, err := c.Movie(context.Background(), 603)
+	sr, err := c.SearchMovies(context.Background(), "the matrix")
 	if err != nil {
-		t.Fatalf("Movie: %v", err)
+		t.Fatalf("SearchMovies: %v", err)
 	}
-	if m.Title != "The Matrix" || hits.Load() != 3 {
-		t.Errorf("title = %q after %d hits", m.Title, hits.Load())
+	if len(sr.Results) != 1 || hits.Load() != 3 {
+		t.Errorf("results = %+v after %d hits", sr.Results, hits.Load())
 	}
 }
 
+// TestGivesUpAfterMaxAttempts, with no wait after the last of them: a
+// wait there would only delay the failure.
 func TestGivesUpAfterMaxAttempts(t *testing.T) {
 	var hits atomic.Int32
 	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		w.WriteHeader(http.StatusBadGateway)
 	})
-	if _, err := c.Movie(context.Background(), 603); err == nil {
-		t.Fatal("want error after persistent 502")
+	var waits []time.Duration
+	c.sleep = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return nil
 	}
-	if hits.Load() != maxAttempts {
-		t.Errorf("hits = %d, want %d", hits.Load(), maxAttempts)
+	_, err := c.SearchMovies(context.Background(), "the matrix")
+	if err == nil || err.Error() != "tmdb: giving up after 4 attempts: tmdb: HTTP 502" {
+		t.Fatalf("error = %v after persistent 502", err)
+	}
+	if hits.Load() != maxAttempts || len(waits) != maxAttempts-1 {
+		t.Errorf("hits = %d and waits %v, want %d hits and a wait between each", hits.Load(), waits, maxAttempts)
+	}
+}
+
+// TestADateRetryAfterIsHonoured: Retry-After may be a date as well as a
+// number of seconds.
+func TestADateRetryAfterIsHonoured(t *testing.T) {
+	var hits atomic.Int32
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.Header().Set("Retry-After", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Write([]byte(`{"results":[]}`))
+	})
+	var waits []time.Duration
+	c.sleep = func(_ context.Context, d time.Duration) error {
+		waits = append(waits, d)
+		return nil
+	}
+	if _, err := c.SearchMovies(context.Background(), "the matrix"); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 || waits[0] < 59*time.Minute {
+		t.Errorf("waits = %v, want the hour the date asked for", waits)
+	}
+}
+
+// TestAWaitLongerThanTheDeadlineIsNotTaken: a reader waiting on a lookup
+// gives TMDb seconds, not the minute a Retry-After may ask for.
+func TestAWaitLongerThanTheDeadlineIsNotTaken(t *testing.T) {
+	var hits atomic.Int32
+	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	slept := false
+	c.sleep = func(context.Context, time.Duration) error {
+		slept = true
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := c.SearchMovies(ctx, "the matrix")
+	var se *StatusError
+	if !errors.As(err, &se) || se.Status != http.StatusTooManyRequests {
+		t.Errorf("err = %v", err)
+	}
+	if slept || hits.Load() != 1 {
+		t.Errorf("slept = %v after %d hits; the wait outlasted the deadline", slept, hits.Load())
 	}
 }
 
@@ -138,7 +166,7 @@ func TestNotFound(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`{"status_message":"The resource you requested could not be found."}`))
 	})
-	_, err := c.Movie(context.Background(), 0)
+	_, err := c.FindByIMDb(context.Background(), "tt0133093")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("error = %v, want ErrNotFound", err)
 	}
@@ -151,18 +179,27 @@ func TestUnauthorizedIsNotRetried(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"status_message":"Invalid API key"}`))
 	})
-	_, err := c.Movie(context.Background(), 603)
+	_, err := c.SearchMovies(context.Background(), "the matrix")
 	if err == nil || hits.Load() != 1 {
 		t.Fatalf("error = %v after %d hits; want one failed attempt", err, hits.Load())
 	}
 	if want := "Invalid API key"; err != nil && !contains(err.Error(), want) {
 		t.Errorf("error %q does not mention %q", err, want)
 	}
-	// The status travels as a value, so the catalog can tell a refused
-	// key from a fault without reading the text.
+	// A refused key is ErrKey, so the catalog can tell it from a fault
+	// without reading the text, and the status still travels with it.
 	var se *StatusError
-	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized {
-		t.Errorf("error %v is not a *StatusError with status 401", err)
+	if !errors.Is(err, ErrKey) || !errors.As(err, &se) || se.Status != http.StatusUnauthorized {
+		t.Errorf("error %v is not ErrKey with status 401", err)
+	}
+}
+
+func TestForbiddenIsARefusedKeyToo(t *testing.T) {
+	c, _ := newTestClient(t, Auth{AccessToken: "revoked"}, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	if _, err := c.FindByIMDb(context.Background(), "tt0133093"); !errors.Is(err, ErrKey) {
+		t.Errorf("error = %v, want ErrKey", err)
 	}
 }
 
@@ -170,10 +207,13 @@ func TestAServerFaultIsAStatusErrorToo(t *testing.T) {
 	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	})
-	_, err := c.Movie(context.Background(), 603)
+	_, err := c.FindByIMDb(context.Background(), "tt0133093")
 	var se *StatusError
 	if !errors.As(err, &se) || se.Status != http.StatusBadRequest {
 		t.Fatalf("error %v is not a *StatusError with status 400", err)
+	}
+	if errors.Is(err, ErrKey) {
+		t.Error("a bad request read as a refused key")
 	}
 	if err.Error() != "tmdb: HTTP 400" {
 		t.Errorf("error text = %q, want the text it always had", err)
@@ -216,29 +256,6 @@ func TestFindByIMDbReturnsTheTMDBID(t *testing.T) {
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
-
-type memCache struct {
-	mu sync.Mutex
-	m  map[string][]byte
-}
-
-func newMemCache() *memCache {
-	return &memCache{m: map[string][]byte{}}
-}
-
-func (c *memCache) Get(key string) ([]byte, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	b, ok := c.m[key]
-	return b, ok
-}
-
-func (c *memCache) Set(key string, body []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.m[key] = append([]byte(nil), body...)
-	return nil
-}
 
 func TestFindByIMDbKeepsTheOverviewTrimmed(t *testing.T) {
 	c, _ := newTestClient(t, Auth{APIKey: "k"}, func(w http.ResponseWriter, r *http.Request) {
@@ -422,9 +439,9 @@ func TestOnlyANameIDIsSentToThePersonLookup(t *testing.T) {
 	}
 }
 
-// TestARefusedKeyOnThePersonLookupIsAStatusError, so the people job can
-// tell a key only a person can fix from a fault that will pass.
-func TestARefusedKeyOnThePersonLookupIsAStatusError(t *testing.T) {
+// TestARefusedKeyOnThePersonLookupIsErrKey, so the people job can tell
+// a key only a person can fix from a fault that will pass.
+func TestARefusedKeyOnThePersonLookupIsErrKey(t *testing.T) {
 	var hits atomic.Int32
 	c, _ := newTestClient(t, Auth{APIKey: "bad"}, func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -432,9 +449,8 @@ func TestARefusedKeyOnThePersonLookupIsAStatusError(t *testing.T) {
 		w.Write([]byte(`{"status_message":"Invalid API key"}`))
 	})
 	_, err := c.FindPersonByIMDb(context.Background(), "nm0000206")
-	var se *StatusError
-	if !errors.As(err, &se) || se.Status != http.StatusUnauthorized {
-		t.Fatalf("error %v is not a *StatusError with status 401", err)
+	if !errors.Is(err, ErrKey) {
+		t.Fatalf("error %v is not ErrKey", err)
 	}
 	if errors.Is(err, ErrNotFound) {
 		t.Error("a refused key read as no such person")

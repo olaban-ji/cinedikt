@@ -106,7 +106,7 @@ export function carriedFirst<T extends { id: string }>(
 }
 
 /** The map the reader last saw, and who of it the map on screen shares. */
-export interface Shown {
+interface Shown {
   /** The searched film of the map last shown; null on the opening screen. */
   id: string | null;
   /** Its people's ids, to compare the next map against. */

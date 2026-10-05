@@ -181,6 +181,21 @@ func streamNames(t *testing.T, s *Store, tconst, country string) []string {
 	return names
 }
 
+// expiresAt is when the first option kept for tconst in country leaves;
+// zero when none is leaving.
+func expiresAt(t *testing.T, s *Store, tconst, country string) time.Time {
+	t.Helper()
+	var at *time.Time
+	if err := s.pool.QueryRow(context.Background(),
+		`SELECT expires_at FROM meta.where_to_watch WHERE tconst = $1 AND country = $2`, tconst, country).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	if at == nil {
+		return time.Time{}
+	}
+	return *at
+}
+
 func syncRow(t *testing.T, s *Store, country string) (syncedTo, ranAt time.Time, ok bool) {
 	t.Helper()
 	err := s.pool.QueryRow(context.Background(),
@@ -217,7 +232,7 @@ func TestAChangedMovieIsWrittenFromTheFeedAndNothingElseIsTouched(t *testing.T) 
 	base := time.Now().Add(-12 * time.Hour).Truncate(time.Second).UTC()
 	leaves := time.Now().Add(72 * time.Hour).Truncate(time.Second).UTC()
 	feed.show("s1", "tt0133093", map[string][]streaming.StreamingOption{"us": {
-		{Service: service("hulu", "Hulu"), Type: "subscription", Link: "h", ExpiresOn: leaves.Unix(), ExpiresSoon: true},
+		{Service: service("hulu", "Hulu"), Type: "subscription", Link: "h", ExpiresOn: leaves.Unix()},
 	}})
 	feed.show("s2", "tt0234215", map[string][]streaming.StreamingOption{"us": subscription("max", "Max")})
 	feed.show("s3", "tt7777777", map[string][]streaming.StreamingOption{"us": subscription("max", "Max")})
@@ -245,8 +260,8 @@ func TestAChangedMovieIsWrittenFromTheFeedAndNothingElseIsTouched(t *testing.T) 
 	if got := streamNames(t, s, "tt0133093", "us"); len(got) != 1 || got[0] != "Hulu" {
 		t.Errorf("the changed movie = %v, want Hulu from the feed", got)
 	}
-	if row, _ := s.WhereToWatch(ctx, "tt0133093", "us"); !row.ExpiresAt.Equal(leaves) {
-		t.Errorf("expires_at = %v, want %v", row.ExpiresAt, leaves)
+	if got := expiresAt(t, s, "tt0133093", "us"); !got.Equal(leaves) {
+		t.Errorf("expires_at = %v, want %v", got, leaves)
 	}
 	if got := streamNames(t, s, "tt0111161", "us"); len(got) != 1 || got[0] != "Netflix" {
 		t.Errorf("a show without options for us was written: %v", got)

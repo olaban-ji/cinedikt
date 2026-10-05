@@ -22,7 +22,7 @@ export function searchPlaceholder(
 }
 
 /** The parts of a key press the shortcut looks at. */
-export interface ShortcutKey {
+interface ShortcutKey {
   key: string;
   metaKey: boolean;
   ctrlKey: boolean;

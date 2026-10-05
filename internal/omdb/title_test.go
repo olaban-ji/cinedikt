@@ -95,33 +95,6 @@ func TestParseReleased(t *testing.T) {
 	}
 }
 
-func TestSearchReturnsMoviesOnly(t *testing.T) {
-	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("type"); got != "movie" {
-			t.Errorf("type = %q, want movie", got)
-		}
-		w.Write([]byte(`{"Response":"True","Search":[
-			{"Title":"The Matrix","Year":"1999","imdbID":"tt0133093","Type":"movie","Poster":"https://x/p.jpg"},
-			{"Title":"The Matrix Reloaded","Year":"2003","imdbID":"tt0234215","Type":"movie","Poster":"N/A"},
-			{"Title":"The Matrix Series","Year":"2015–2019","imdbID":"tt9","Type":"series","Poster":"N/A"},
-			{"Title":"Nameless","Year":"2001","imdbID":"","Type":"movie","Poster":"N/A"}
-		]}`))
-	})
-	hits, err := c.Search(context.Background(), "matrix")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hits) != 2 {
-		t.Fatalf("hits = %d, want the two movies: %+v", len(hits), hits)
-	}
-	if hits[0].IMDbID != "tt0133093" || hits[0].Year != 1999 || hits[0].Poster == "" {
-		t.Errorf("hit = %+v", hits[0])
-	}
-	if hits[1].Poster != "" {
-		t.Errorf("an N/A poster came through as %q", hits[1].Poster)
-	}
-}
-
 // TestLookupReadsEveryWayOMDbSaysNo is the rule the poster backfill
 // stands on: a definite "I have nothing for this id" is an answer, so
 // it is stored and the title is never asked about again. Anything else
@@ -172,54 +145,6 @@ func TestLookupKeepsARealFailureRetryable(t *testing.T) {
 	}
 }
 
-func TestSearchWithNoMatchIsNotAFailure(t *testing.T) {
-	for _, message := range []string{"Movie not found!", "Too many results."} {
-		c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
-			w.Write([]byte(`{"Response":"False","Error":"` + message + `"}`))
-		})
-		hits, err := c.Search(context.Background(), "zzzz")
-		if err != nil {
-			t.Errorf("%q was read as an error: %v", message, err)
-		}
-		if len(hits) != 0 {
-			t.Errorf("hits = %v", hits)
-		}
-	}
-}
-
-func TestSearchYear(t *testing.T) {
-	for _, c := range []struct {
-		raw  string
-		want int
-	}{{"1999", 1999}, {"2015–2019", 2015}, {"", 0}, {"N/A", 0}, {"abcd", 0}} {
-		if got := searchYear(c.raw); got != c.want {
-			t.Errorf("searchYear(%q) = %d, want %d", c.raw, got, c.want)
-		}
-	}
-}
-
-func TestSearchIsCachedSoARepeatCostsNothing(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.Write([]byte(`{"Response":"True","Search":[{"Title":"The Matrix","Year":"1999","imdbID":"tt0133093","Type":"movie","Poster":"N/A"}]}`))
-	}))
-	defer srv.Close()
-	c := New("key", WithBaseURL(srv.URL), WithRateLimit(1000, 1000), WithCache(newMemCache()))
-	for i := 0; i < 3; i++ {
-		if _, err := c.Search(context.Background(), "Matrix"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// And the same query in another case is the same query.
-	if _, err := c.Search(context.Background(), "matrix"); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 {
-		t.Errorf("OMDb was called %d times for one repeated query", calls)
-	}
-}
-
 func TestOptionsDoNotDependOnTheirOrder(t *testing.T) {
 	// WithHTTPTimeout used to replace the whole http.Client, so giving
 	// it after WithConnections silently threw the pool away and left
@@ -257,9 +182,6 @@ func TestARefusedKeyIsErrKey(t *testing.T) {
 	if _, err := c.Lookup(context.Background(), "tt0000001"); !errors.Is(err, ErrKey) {
 		t.Errorf("Lookup gave %v, want ErrKey", err)
 	}
-	if _, err := c.IMDbRating(context.Background(), "tt0000001"); !errors.Is(err, ErrKey) {
-		t.Errorf("IMDbRating gave %v, want ErrKey", err)
-	}
 }
 
 func TestLookupAsksForTheFullPlotAndTrimsIt(t *testing.T) {
@@ -290,32 +212,5 @@ func TestParsePlot(t *testing.T) {
 		if got := ParsePlot(raw); got != want {
 			t.Errorf("ParsePlot(%q) = %q, want %q", raw, got, want)
 		}
-	}
-}
-
-// TestAShortPlotCachedEarlierIsNotServedAsTheFullOne is why the cache key
-// changed with the question: a body kept before lookups asked for the
-// whole plot holds the one-line summary.
-func TestAShortPlotCachedEarlierIsNotServedAsTheFullOne(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
-		w.Write([]byte(`{"Response":"True","Poster":"N/A","Released":"N/A","Plot":"The whole plot, every sentence of it."}`))
-	}))
-	defer srv.Close()
-	cache := newMemCache()
-	_ = cache.Set("t:tt0133093", []byte(`{"Response":"True","Poster":"N/A","Released":"N/A","Plot":"Short."}`))
-	c := New("key", WithBaseURL(srv.URL), WithRateLimit(1000, 1000), WithCache(cache))
-	for i := 0; i < 2; i++ {
-		got, err := c.Lookup(context.Background(), "tt0133093")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Plot != "The whole plot, every sentence of it." {
-			t.Fatalf("lookup %d read %q", i, got.Plot)
-		}
-	}
-	if calls != 1 {
-		t.Errorf("OMDb was asked %d times; the full answer should be cached after the first", calls)
 	}
 }

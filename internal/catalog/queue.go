@@ -120,7 +120,8 @@ type QueueConfig struct {
 	// date. Nil runs none of it.
 	WhereToWatch *WhereToWatch
 	// GeoIP is the updater the twice-daily check runs. Nil runs no check:
-	// there is no license key to download with.
+	// there are no MaxMind credentials (a license key and an account id)
+	// to download with.
 	GeoIP *geoip.Updater
 	// Notify is told how each GeoIP check ended. Nil leaves that in the
 	// log.
@@ -204,7 +205,8 @@ func OpenQueue(ctx context.Context, cfg QueueConfig) (*Queue, error) {
 }
 
 // Jobs is the notifier's name for each job the queue runs that reports to
-// it: JobGeoIP, when there is a MaxMind key. A nil queue runs none. The
+// it: JobGeoIP, when there are MaxMind credentials (a license key and an
+// account id). A nil queue runs none. The
 // runner names them among its own when it takes the jobs, since the board
 // lists what one process runs, and a job it leaves out reads as off.
 func (q *Queue) Jobs() []string {

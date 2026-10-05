@@ -8,9 +8,9 @@ import matrix from './fixtures/matrix-grid.json';
 import type { GridPayload, GridPerson, SpineTuple } from './grid';
 import type { PreviewClock } from './preview';
 
-const real = matrix as GridPayload;
+const real = matrix as unknown as GridPayload;
 
-const person = (id: string, order: number): GridPerson => ({ id, name: id, role: 'cast', order });
+const person = (id: string): GridPerson => ({ id, name: id, role: 'cast' });
 
 describe('filmCounts', () => {
   // The refresh puts a count back on every chip: how many of that
@@ -18,7 +18,7 @@ describe('filmCounts', () => {
   // ("the map is open-ended"); the handoff brings it back on purpose, as
   // a way to see whose work the map is mostly made of. It is read off
   // the spine the map already has, so it needs nothing new from the API.
-  const people = [person('nm0000001', 0), person('nm0000002', 1), person('nm0000003', 2)];
+  const people = [person('nm0000001'), person('nm0000002'), person('nm0000003')];
 
   it('counts the films each person is on, the searched film included', () => {
     const films: SpineTuple[] = [

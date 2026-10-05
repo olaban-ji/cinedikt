@@ -23,11 +23,6 @@ type Importer struct {
 	Dir    string
 	Logger *slog.Logger
 
-	// Keep leaves the downloaded files on disk. For development: a
-	// gigabyte and a half per attempt is a long wait for a bug three
-	// lines into the load.
-	Keep bool
-
 	// Notify hears the start and each step. Nil means the log is the
 	// only record, which is every run that has no chat configured.
 	Notify notify.Sink
@@ -106,7 +101,6 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 		return live, err
 	}
 	if ready, why := Ready(published, opened, Files); !ready {
-		im.note(ctx, opened, why)
 		live.Reason, live.Skip = why, SkipNotReady
 		return live, nil
 	}
@@ -116,7 +110,7 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 	// this (a first deploy, or a state that could not be read) does not
 	// spend the next two hours saying the site has none.
 	report(im.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Started,
-		Step: 1, Steps: 4, Phase: notify.PhaseDownload, LiveSince: live.LiveSince, Films: live.PrevFilms})
+		Step: 1, LiveSince: live.LiveSince, Films: live.PrevFilms})
 
 	// Last generation's schema goes now rather than at the end of the
 	// run that made it, so its readers had the whole gap to finish.
@@ -128,9 +122,7 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 	if err != nil {
 		return live, err
 	}
-	if !im.Keep {
-		defer Discard(paths)
-	}
+	defer Discard(paths)
 
 	// The set is read again now everything is on disk. If anything moved
 	// while it was being fetched, what we hold is a mixture.
@@ -140,7 +132,6 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 	}
 	if same, which := Same(opened, after, Files); !same {
 		why := fmt.Sprintf("%s moved while the set was being fetched", which)
-		im.note(ctx, opened, why)
 		live.Reason, live.Skip = why, SkipMoved
 		return live, nil
 	}
@@ -154,7 +145,6 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 	if err := im.Store.Publish(ctx, opened, counts); err != nil {
 		return live, err
 	}
-	im.note(ctx, opened, "published")
 	out := live
 	out.Ran, out.Reason, out.Counts = true, "published", counts
 	out.Integrity, out.Took = integrity, time.Since(started)
@@ -162,17 +152,8 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 }
 
 // step tells the notifier which of the four steps the import is on.
-func (im *Importer) step(step int, phase, noun string) {
-	report(im.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Progress,
-		Step: step, Steps: 4, Phase: phase, Noun: noun})
-}
-
-// note records what this attempt saw. It never fails the attempt: the
-// row is for someone looking at the catalog, not for the gate.
-func (im *Importer) note(ctx context.Context, gen Generation, outcome string) {
-	if err := im.Store.RecordCheck(ctx, gen, outcome); err != nil {
-		im.Logger.Warn("record check", "err", err)
-	}
+func (im *Importer) step(step int, noun string) {
+	report(im.Notify, notify.Event{Job: notify.JobImport, Kind: notify.Progress, Step: step, Noun: noun})
 }
 
 // load reads the five files into the staging schema, in the order the
@@ -183,7 +164,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return Counts{}, 0, err
 	}
 
-	im.step(2, notify.PhaseLoad, "films")
+	im.step(2, "films")
 	titles, err := OpenFile(paths[TitleBasics])
 	if err != nil {
 		return Counts{}, 0, err
@@ -197,7 +178,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 
 	credited := make(NConsts, 1<<20)
 
-	im.step(2, notify.PhaseLoad, "credits")
+	im.step(2, "credits")
 	principals, err := OpenFile(paths[TitlePrincipals])
 	if err != nil {
 		return Counts{}, 0, err
@@ -209,7 +190,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 	}
 	im.Logger.Info("loaded principals", "credits", n)
 
-	im.step(2, notify.PhaseLoad, "directors")
+	im.step(2, "directors")
 	crew, err := OpenFile(paths[TitleCrew])
 	if err != nil {
 		return Counts{}, 0, err
@@ -221,7 +202,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 	}
 	im.Logger.Info("loaded directors", "credits", n)
 
-	im.step(2, notify.PhaseLoad, "ratings")
+	im.step(2, "ratings")
 	ratings, err := OpenFile(paths[TitleRatings])
 	if err != nil {
 		return Counts{}, 0, err
@@ -233,7 +214,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 	}
 	im.Logger.Info("loaded ratings", "rated", n)
 
-	im.step(2, notify.PhaseLoad, "people")
+	im.step(2, "people")
 	names, err := OpenFile(paths[NameBasics])
 	if err != nil {
 		return Counts{}, 0, err
@@ -247,7 +228,7 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 
 	im.Logger.Info("building indexes and making the tables durable",
 		"step", "3/4 finish", "note", "this takes a minute or two and logs nothing until it is done")
-	im.step(3, notify.PhaseIndexes, "")
+	im.step(3, "")
 	if err := im.Store.Finish(ctx, im.Logger); err != nil {
 		return Counts{}, 0, err
 	}
@@ -260,13 +241,13 @@ func (im *Importer) load(ctx context.Context, paths map[File]string) (Counts, fl
 		return counts, integrity, err
 	}
 	im.Logger.Info("load checked", "step", "4/4 publish", "integrity", fmt.Sprintf("%.4f", integrity))
-	im.step(4, notify.PhaseLive, "")
+	im.step(4, "")
 	return counts, integrity, nil
 }
 
 // Posters are not filled in here. They are learned from an API a title
 // at a time, and there are more titles than a generation's gap is long,
-// so the job runs continuously beside the importer instead — see
+// so the job runs continuously beside the import instead — see
 // PosterJob. `meta` outlives every swap, so what it learns is kept.
 
 // StaleAfter is when a catalog is old enough to be worth an alert. IMDb

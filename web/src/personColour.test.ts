@@ -18,10 +18,10 @@ const real = matrix as unknown as GridPayload;
 
 /** Memento's people as the server lists them: its director, then its cast. */
 const memento: GridPerson[] = [
-  { id: 'nm0634240', name: 'Christopher Nolan', role: 'director', order: 0 },
-  { id: 'nm0001602', name: 'Guy Pearce', role: 'cast', order: 1 },
-  { id: 'nm0005251', name: 'Carrie-Anne Moss', role: 'cast', order: 2 },
-  { id: 'nm0001592', name: 'Joe Pantoliano', role: 'cast', order: 3 },
+  { id: 'nm0634240', name: 'Christopher Nolan', role: 'director' },
+  { id: 'nm0001602', name: 'Guy Pearce', role: 'cast' },
+  { id: 'nm0005251', name: 'Carrie-Anne Moss', role: 'cast' },
+  { id: 'nm0001592', name: 'Joe Pantoliano', role: 'cast' },
 ];
 
 const people = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `nm${String(i).padStart(7, '0')}` }));

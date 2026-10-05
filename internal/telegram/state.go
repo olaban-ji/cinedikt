@@ -57,7 +57,6 @@ type state struct {
 	NextCheck    time.Time         `json:"next_check,omitzero"`
 	LiveSince    time.Time         `json:"live_since,omitzero"`
 	Films        int64             `json:"films,omitempty"`
-	People       int64             `json:"people,omitempty"`
 	Stale        staleMark         `json:"stale"`
 	Jobs         map[string]*job   `json:"jobs"`
 	Alerts       map[string]*alert `json:"alerts"`
@@ -76,20 +75,16 @@ type staleMark struct {
 }
 
 type job struct {
-	State string    `json:"state"`
-	Since time.Time `json:"since,omitzero"`
+	State string `json:"state"`
 
 	// While it runs.
 	Step      int       `json:"step,omitempty"`
-	Steps     int       `json:"steps,omitempty"`
-	Phase     string    `json:"phase,omitempty"`
 	File      int       `json:"file,omitempty"`
 	Files     int       `json:"files,omitempty"`
 	Noun      string    `json:"noun,omitempty"`
 	Share     float64   `json:"share,omitempty"`
 	ETA       time.Time `json:"eta,omitzero"`
 	Total     int64     `json:"total,omitempty"`
-	Done      int64     `json:"done,omitempty"`
 	Bytes     int64     `json:"bytes,omitempty"`
 	PassBegan time.Time `json:"pass_began,omitzero"`
 
@@ -188,7 +183,7 @@ func (s *state) apply(e notify.Event, w writer) effects {
 	case notify.Started:
 		j := s.job(e.Job)
 		clearRunning(j)
-		j.State, j.Since, j.PassBegan = stRunning, at, at
+		j.State, j.PassBegan = stRunning, at
 		running(j, e)
 		if e.Job == notify.JobImport {
 			s.catalogFacts(e)
@@ -196,9 +191,7 @@ func (s *state) apply(e notify.Event, w writer) effects {
 
 	case notify.Progress:
 		j := s.job(e.Job)
-		if j.State != stRunning {
-			j.State, j.Since = stRunning, at
-		}
+		j.State = stRunning
 		if j.PassBegan.IsZero() {
 			j.PassBegan = at
 		}
@@ -207,7 +200,7 @@ func (s *state) apply(e notify.Event, w writer) effects {
 	case notify.Finished:
 		j := s.job(e.Job)
 		clearRunning(j)
-		j.State, j.Since = stIdle, at
+		j.State = stIdle
 		j.LastAt, j.LastDone, j.LastNone, j.LastErrors = at, e.Done, e.None, e.Errors
 		rec := s.recover(e.Job, j, w)
 		if e.Took >= longPass {
@@ -264,18 +257,18 @@ func (s *state) apply(e notify.Event, w writer) effects {
 		switch j.State {
 		case stFailing, stInterrupted, stStarting, stRunning, stSkipped, stWaiting, "":
 			clearRunning(j)
-			j.State, j.Since = stIdle, at
+			j.State = stIdle
 		case stPaused:
 			if !at.Before(j.NextTry) {
-				j.State, j.Since = stIdle, at
+				j.State = stIdle
 			}
 		}
 
 	case notify.Published:
 		j := s.job(notify.JobImport)
 		clearRunning(j)
-		j.State, j.Since = stIdle, at
-		s.Films, s.People = e.Films, e.People
+		j.State = stIdle
+		s.Films = e.Films
 		s.LiveSince = e.LiveSince
 		if s.LiveSince.IsZero() {
 			s.LiveSince = at
@@ -295,7 +288,7 @@ func (s *state) apply(e notify.Event, w writer) effects {
 	case notify.Downloaded:
 		j := s.job(e.Job)
 		clearRunning(j)
-		j.State, j.Since, j.LastAt, j.Built = stIdle, at, at, e.LiveSince
+		j.State, j.LastAt, j.Built = stIdle, at, e.LiveSince
 		rec := s.recover(e.Job, j, w)
 		fixed := ""
 		if rec.announced {
@@ -307,7 +300,7 @@ func (s *state) apply(e notify.Event, w writer) effects {
 	case notify.Skipped:
 		j := s.job(notify.JobImport)
 		clearRunning(j)
-		j.State, j.Since, j.NextTry = stSkipped, at, e.NextTry
+		j.State, j.NextTry = stSkipped, e.NextTry
 		s.catalogFacts(e)
 		if !e.NextTry.IsZero() {
 			s.NextCheck = e.NextTry
@@ -317,13 +310,13 @@ func (s *state) apply(e notify.Event, w writer) effects {
 	case notify.Paused:
 		j := s.job(e.Job)
 		clearRunning(j)
-		j.State, j.Since, j.NextTry = stPaused, at, e.NextTry
+		j.State, j.NextTry = stPaused, e.NextTry
 		j.LastAt, j.LastDone, j.LastErrors = at, e.Done, e.Errors
 
 	case notify.Stopped:
 		for _, j := range s.Jobs {
 			if j.State == stRunning {
-				j.State, j.Since = stInterrupted, at
+				j.State = stInterrupted
 			}
 		}
 
@@ -342,9 +335,6 @@ func (s *state) apply(e notify.Event, w writer) effects {
 		}
 		j := s.job(e.Job)
 		clearRunning(j)
-		if j.State != stFailing {
-			j.Since = at
-		}
 		j.State = stFailing
 		j.Cause, j.Provider, j.Status, j.Integrity, j.Detail = e.Cause, e.Provider, e.Status, e.Integrity, e.Detail
 		j.Lookups = e.Errors
@@ -400,11 +390,11 @@ func (s *state) apply(e notify.Event, w writer) effects {
 			switch {
 			case !on[in.id]:
 				s.leave(j)
-				*j = job{State: stOff, Since: at, LastAt: j.LastAt, LastDone: j.LastDone, LastNone: j.LastNone, LastErrors: j.LastErrors}
+				*j = job{State: stOff, LastAt: j.LastAt, LastDone: j.LastDone, LastNone: j.LastNone, LastErrors: j.LastErrors}
 			case j.State == stRunning:
-				j.State, j.Since = stInterrupted, at
+				j.State = stInterrupted
 			case j.State == stOff || j.State == "":
-				j.State, j.Since = stStarting, at
+				j.State = stStarting
 			}
 		}
 		fx.parts = append(fx.parts, s.closeDatabase(w, true)...)
@@ -428,18 +418,16 @@ func (s *state) catalogFacts(e notify.Event) {
 }
 
 func running(j *job, e notify.Event) {
-	j.Step, j.Steps, j.Phase = e.Step, e.Steps, e.Phase
-	j.File, j.Files, j.Noun = e.File, e.Files, e.Noun
+	j.Step, j.File, j.Files, j.Noun = e.Step, e.File, e.Files, e.Noun
 	j.Share, j.ETA, j.Bytes = e.Share, e.ETA, e.Bytes
 	if e.Total > 0 {
 		j.Total = e.Total
 	}
-	j.Done = e.Done
 }
 
 func clearRunning(j *job) {
-	j.Step, j.Steps, j.Phase, j.File, j.Files, j.Noun = 0, 0, "", 0, 0, ""
-	j.Share, j.ETA, j.Total, j.Done, j.Bytes, j.PassBegan = 0, time.Time{}, 0, 0, 0, time.Time{}
+	j.Step, j.File, j.Files, j.Noun = 0, 0, 0, ""
+	j.Share, j.ETA, j.Total, j.Bytes, j.PassBegan = 0, time.Time{}, 0, 0, time.Time{}
 }
 
 // severity is how a failing job's line and alert are marked: red when

@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
 
 	"cinedikt/internal/catalog"
+	"cinedikt/internal/imdbid"
 )
 
 // WhereToWatch is the service behind GET /where-to-watch/{id}.
@@ -26,23 +28,19 @@ type CountryLookup interface {
 }
 
 // WithWhereToWatch answers GET /where-to-watch/{id} from watch, placing
-// readers with geo, or with a CDN's country header alone (WithGeoHeader)
-// when geo is nil.
-// Without it the route answers 503, which the page treats as it treats an
-// error: it leaves the section out. Saying "no coverage" instead would
-// tell the reader something untrue about their country.
+// readers with geo. A nil geo places nobody.
+//
+// No country header is trusted, whoever might set one. Railway's edge
+// sets none, so one arriving was written by the reader, who could name
+// any covered country with it and have the metered API asked on its
+// behalf.
+//
+// Without WithWhereToWatch the route answers 503, which the page treats
+// as it treats an error: it leaves the section out. Saying "no coverage"
+// instead would tell the reader something untrue about their country.
 func (s *CatalogServer) WithWhereToWatch(watch WhereToWatch, geo CountryLookup) {
 	s.watch = watch
 	s.geo = geo
-}
-
-// WithGeoHeader trusts one country header, the one a CDN put in front of
-// the app sets on every request, such as Cloudflare's CF-IPCountry. Empty,
-// the default, trusts none. Railway's edge sets no country header, so
-// without a CDN any such header came from the reader, who could name any
-// covered country with it and have the metered API asked on its behalf.
-func (s *CatalogServer) WithGeoHeader(name string) {
-	s.geoHeader = strings.TrimSpace(name)
 }
 
 // watchCacheControl lets the reader's own browser keep an answer for an
@@ -55,7 +53,7 @@ const watchCacheControl = "private, max-age=3600"
 // country. The server works the country out; the page never sends one.
 func (s *CatalogServer) whereToWatch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !validTConst(id) {
+	if !imdbid.Title(id) {
 		noStore(w)
 		writeError(w, http.StatusBadRequest, "id must be an IMDb title id, such as tt0133093")
 		return
@@ -65,7 +63,7 @@ func (s *CatalogServer) whereToWatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "where to watch is not set up")
 		return
 	}
-	country := countryOf(r, s.geo, s.geoHeader)
+	country := countryOf(r, s.geo)
 	if country == "" && s.geo != nil && !s.geo.Ready() {
 		// GeoLite2 is set up but has no database yet: on the first deploy
 		// with a license key, until the download is in, or in a second
@@ -83,23 +81,16 @@ func (s *CatalogServer) whereToWatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		noStore(w)
-		if errors.Is(err, catalog.ErrNotFound) {
+		switch {
+		case errors.Is(err, catalog.ErrNotFound):
 			writeError(w, http.StatusNotFound, "no movie with that id")
-			return
+		case errors.Is(err, catalog.ErrUpstream):
+			// The service's own error stays in the log. It may name the
+			// API's status or its message, and none of that is the reader's.
+			s.failed(w, r, http.StatusBadGateway, "could not find where to watch this movie", slog.LevelWarn, err, "where to watch", "id", id)
+		default:
+			s.failed(w, r, http.StatusInternalServerError, "could not read where to watch", slog.LevelError, err, "where to watch", "id", id)
 		}
-		// The service's own error stays in the log. It may name the
-		// API's status or its message, and none of that is the reader's.
-		if errors.Is(err, catalog.ErrUpstream) {
-			if s.Logger != nil {
-				s.Logger.Warn("where to watch", "id", id, "err", err)
-			}
-			writeError(w, http.StatusBadGateway, "could not find where to watch this movie")
-			return
-		}
-		if s.Logger != nil {
-			s.Logger.Error("where to watch", "id", id, "err", err)
-		}
-		writeError(w, http.StatusInternalServerError, "could not read where to watch")
 		return
 	}
 	w.Header().Set("Cache-Control", watchCacheControl)
@@ -107,19 +98,10 @@ func (s *CatalogServer) whereToWatch(w http.ResponseWriter, r *http.Request) {
 }
 
 // countryOf is the reader's country, lowercased, or "" when it cannot be
-// told:
-//
-//  1. the trusted geo header, when one is configured (WithGeoHeader),
-//     unless it says Cloudflare's XX (unknown) or T1 (Tor);
-//  2. otherwise the client's address (clientAddr), looked up in GeoLite2;
-//  3. a private, loopback or otherwise unroutable address, or one the
-//     database has no country for, cannot be placed.
-func countryOf(r *http.Request, geo CountryLookup, geoHeader string) string {
-	if geoHeader != "" {
-		if cc, ok := headerCountry(r.Header.Get(geoHeader)); ok {
-			return cc
-		}
-	}
+// told: the client's address (clientAddr), looked up in GeoLite2. A
+// private, loopback or otherwise unroutable address, or one the database
+// has no country for, cannot be placed.
+func countryOf(r *http.Request, geo CountryLookup) string {
 	if geo == nil {
 		return ""
 	}
@@ -131,17 +113,6 @@ func countryOf(r *http.Request, geo CountryLookup, geoHeader string) string {
 		return strings.ToLower(cc)
 	}
 	return ""
-}
-
-func headerCountry(v string) (string, bool) {
-	v = strings.ToUpper(strings.TrimSpace(v))
-	if len(v) != 2 || v[0] < 'A' || v[0] > 'Z' || v[1] < 'A' || v[1] > 'Z' {
-		return "", false
-	}
-	if v == "XX" || v == "T1" {
-		return "", false
-	}
-	return strings.ToLower(v), true
 }
 
 // clientAddr is the address the request came from: X-Real-IP, which

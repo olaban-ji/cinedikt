@@ -1,47 +1,7 @@
 // Thin client for the cinedikt Go API. In dev, Vite proxies /api to :8080.
 
 import type { GridFilm, GridPayload } from './grid';
-import { analyticsHeaders } from './analytics';
-
-export type NodeKind = 'movie' | 'person';
-
-export interface ApiNode {
-  id: string; // "m:603" | "p:6384"
-  type: NodeKind;
-  label: string;
-  tmdb_id: number;
-  year?: number;
-  poster?: string;
-  backdrop?: string; // landscape still, for wide tiles
-  rating?: number; // TMDb 0–10
-  votes?: number;
-  imdb_id?: string;
-  imdb_rating?: number;
-  imdb_votes?: number;
-  /** TMDb person popularity; present on person nodes. */
-  popularity?: number;
-}
-
-/** A film in a pathway, with the connecting actor's role in it. */
-export interface PathwayFilm extends ApiNode {
-  role: string;
-  order: number;
-}
-
-/** One cast member of a movie with their most voted other films.
- *  Role is the character name, or "Director". */
-export interface Pathway {
-  person: ApiNode;
-  role: string;
-  order: number;
-  films: PathwayFilm[];
-}
-
-/** The lean expansion of one stop: everything the map needs to grow from it. */
-export interface Pathways {
-  movie: ApiNode;
-  cast: Pathway[];
-}
+import { isImdbId } from './movieParam';
 
 export interface SearchHit {
   /** An IMDb title id, such as tt0133093. */
@@ -56,11 +16,7 @@ export interface SearchHit {
 const BASE = '/api';
 
 async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  for (const [k, v] of Object.entries(analyticsHeaders())) {
-    if (!headers.has(k)) headers.set(k, v);
-  }
-  const res = await fetch(BASE + path, { ...init, headers });
+  const res = await fetch(BASE + path, init);
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {
@@ -74,33 +30,9 @@ async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** A stop's pathways. The API crawls the movie first if it never was, and
- *  warms the films it hands back so the next hop is ready. How many
- *  co-stars and films, the billing cutoff and the vote floor are the
- *  API's own defaults: an ordinary hop has only ever wanted one pool, so
- *  the map does not restate it. `films` is sent only when a career-wide
- *  follow needs a wider pool than that default. */
-export function fetchPathways(
-  movieId: string,
-  opts: {
-    /** Narrow the answer to one person's career, by TMDb id. */
-    person?: number;
-    /** Override the default film pool. Used when following one career. */
-    films?: number;
-    signal?: AbortSignal;
-  } = {},
-): Promise<Pathways> {
-  const params = new URLSearchParams();
-  if (opts.person) params.set('person', String(opts.person));
-  if (opts.films) params.set('films', String(opts.films));
-  const q = params.toString();
-  return getJSON<Pathways>(`/movies/${movieId}/pathways${q ? `?${q}` : ''}`, { signal: opts.signal });
-}
-
 /** Eight films to start a map from, a different eight each time, one per
- *  era so the screen spans the century. The API answers with nothing when
- *  the graph is unreachable; the caller keeps a built-in set for that.
- *  This is the API root: the first thing a cold screen asks for. */
+ *  era so the screen spans the century. This is the API root: the first
+ *  thing a cold screen asks for. */
 export async function fetchFirstRun(signal?: AbortSignal): Promise<FirstRunHit[]> {
   const res = await getJSON<{ results: FirstRunHit[] }>('/', { signal });
   return res.results ?? [];
@@ -271,10 +203,6 @@ interface PhotosBody {
  *  not one either, so neither is kept: the next call asks again. */
 const photoAnswers = new Map<string, string | null>();
 
-/** IMDb's name id, the only kind the server takes. One malformed id
- *  would have the whole request refused. */
-const NCONST = /^nm\d+$/;
-
 /** The photos of people a map's payload came without: each person's
  *  photo address, or null when they have none. A person whose answer was
  *  still pending when the asking stopped, whose request failed, or whose
@@ -304,7 +232,8 @@ export async function fetchPeoplePhotos(
   for (const id of new Set(ids)) {
     const known = photoAnswers.get(id);
     if (known !== undefined) out[id] = known;
-    else if (NCONST.test(id)) asking.push(id);
+    // One malformed id would have the whole request refused.
+    else if (isImdbId(id, 'nm')) asking.push(id);
   }
   const stop = signal ?? new AbortController().signal;
   if (onSome && !stop.aborted && Object.keys(out).length > 0) onSome({ ...out });
@@ -361,7 +290,6 @@ export interface WatchOfferBody {
 /** Where a movie can be watched, as the server sends it. A country
  *  without coverage comes with `covered: false` and nothing else. */
 export interface WhereToWatchBody {
-  country?: string;
   countryName?: string;
   covered?: boolean;
   stream?: WatchOfferBody[];

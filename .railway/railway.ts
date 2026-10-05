@@ -47,8 +47,8 @@ export default defineRailway(() => {
       // restartPolicyType (ON_FAILURE) and sleepApplication (false) are
       // Railway's defaults and are deliberately not declared: the API
       // stores a default as null, so declaring one leaves `config plan`
-      // permanently dirty. Both matter to this service — the importer
-      // runs between requests and a sleeping machine would drop that
+      // permanently dirty. Both matter to this service — the catalog
+      // jobs run between requests and a sleeping machine would drop that
       // work — but the default is already what we want.
     },
     // Every variable the service holds is named here so this file is the
@@ -85,9 +85,10 @@ export default defineRailway(() => {
       // synopsis nobody has met yet; unset takes 0, every film. An
       // operational dial like the ones above.
       SYNOPSIS_SWEEP_MIN_VOTES: preserve(),
-      // The catalog. The importer writes it; the API only reads. The
-      // value is the private URL of the Postgres service, kept out of
-      // the repo the same way the other credentials are.
+      // The catalog, which the API serves and its jobs keep current; the
+      // API will not start without it. The value is the private URL of
+      // the Postgres service, kept out of the repo the same way the other
+      // credentials are.
       DATABASE_URL: preserve(),
       // Every tracker's switch (PostHog and Mixpanel, page and server);
       // off unless "true", with the tokens below left in place.
@@ -114,14 +115,11 @@ export default defineRailway(() => {
       STREAMING_RATE_PER_SEC: preserve(),
       STREAMING_CHANGES_MAX_PAGES: preserve(),
       // GeoLite2 Country, which places a reader's address in a country.
-      // The service downloads it itself with these; without the key
-      // nobody is placed. The account id is not a secret, but it lives in
-      // Railway with the key it belongs to.
+      // The service downloads it itself with these, and needs both;
+      // without them nobody is placed. The account id is not a secret,
+      // but it lives in Railway with the key it belongs to.
       MAXMIND_LICENSE_KEY: preserve(),
       MAXMIND_ACCOUNT_ID: preserve(),
-      // The one country header to trust, for when a CDN stands in front
-      // of the service; unset trusts none, which is right on Railway alone.
-      GEO_COUNTRY_HEADER: preserve(),
       WEB_DIR: preserve(),
     },
   });

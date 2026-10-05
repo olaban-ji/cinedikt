@@ -13,18 +13,10 @@ CREATE TABLE IF NOT EXISTS meta.generation (
     imported_at   timestamptz NOT NULL
 );
 
--- What the last HEAD saw, whether or not it led to an import. The
--- generation row only moves when something publishes, so without this
--- there is no way to tell "checked an hour ago, the files had not moved"
--- from "nothing has run for a day" except by reading logs.
-CREATE TABLE IF NOT EXISTS meta.last_check (
-    id         int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    checked_at timestamptz NOT NULL,
-    -- file -> {last_modified, etag, length}, as the host reported them.
-    files      jsonb,
-    -- Why the check did or did not start an import.
-    outcome    text NOT NULL
-);
+-- Nothing reads these. Dropping what is already gone costs nothing, so
+-- this runs on every start like the rest of the file.
+DROP TABLE IF EXISTS meta.last_check;
+DROP INDEX IF EXISTS meta.posters_missing;
 
 CREATE TABLE IF NOT EXISTS meta.posters (
     tconst     text PRIMARY KEY,
@@ -63,81 +55,24 @@ CREATE TABLE IF NOT EXISTS meta.posters (
     votes      int
 );
 
--- Databases that predate the columns above. Each is a no-op on a fresh
--- one, so both paths end at the same shape.
-ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS source text;
-ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS tmdb_at timestamptz;
-ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS wanted_at timestamptz;
-ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS colour char(7);
-ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS votes int;
-ALTER TABLE meta.posters ADD COLUMN IF NOT EXISTS released_tmdb boolean NOT NULL DEFAULT false;
--- Widening the status check, once. Guarded because this file runs on
--- every process start, and ADD CONSTRAINT is not free: it validates
--- every row and holds ACCESS EXCLUSIVE while it does. On this table
--- that is a third of a second of blocked writes at each boot, against
--- a backfill that may be mid-pass in the container being replaced.
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'meta.posters'::regclass
-          AND conname  = 'posters_status_check'
-          AND pg_get_constraintdef(oid) LIKE '%dead%'
-    ) THEN
-        ALTER TABLE meta.posters DROP CONSTRAINT IF EXISTS posters_status_check;
-        ALTER TABLE meta.posters ADD CONSTRAINT posters_status_check
-            CHECK (status IN ('ok', 'missing', 'dead'));
-    END IF;
-END $$;
-
--- The backfill asks for these first.
-CREATE INDEX IF NOT EXISTS posters_missing ON meta.posters (status) WHERE status = 'missing';
-
 -- The TMDb fallback's queue, in the order the job reads it: what a
 -- reader asked for first, then the best known of the rest.
 --
 -- Partial, so it holds only the rows that are actually waiting rather
 -- than all three-quarters of a million. Both sort keys are on this
--- table, which is the point — the old index could only order by
--- wanted_at, so every page re-sorted the whole remaining queue by a
--- vote count joined from a schema that is renamed daily.
+-- table, so a page is read in index order rather than re-sorting the
+-- remaining queue by a vote count joined from a schema that is renamed
+-- daily.
 CREATE INDEX IF NOT EXISTS posters_tmdb_queue
     ON meta.posters (wanted_at DESC NULLS LAST, votes DESC, tconst)
     WHERE tmdb_at IS NULL
       AND (status = 'dead' OR poster_url IS NULL OR btrim(poster_url) = '');
-
-DROP INDEX IF EXISTS meta.posters_want_tmdb;
 
 -- TMDb's answers in the order they come due: the fallback's re-asks read
 -- it oldest first, and the backstop clears what is past its time. Partial,
 -- so it holds only the rows TMDb has been asked about.
 CREATE INDEX IF NOT EXISTS posters_tmdb_asked
     ON meta.posters (tmdb_at) WHERE tmdb_at IS NOT NULL;
-
--- Fill the snapshot in for rows written before the column existed.
---
--- Guarded twice over, because this file runs on every process start:
--- once on whether there is any row to fill, which an index makes
--- almost free, and once on whether there is a live catalog to read
--- votes from at all. A first start has neither.
-DO $$
-BEGIN
-    IF to_regclass('catalog.ratings') IS NOT NULL
-       AND EXISTS (
-           SELECT 1 FROM meta.posters
-           WHERE votes IS NULL AND tmdb_at IS NULL
-           LIMIT 1
-       )
-    THEN
-        UPDATE meta.posters p
-        SET votes = coalesce(r.num_votes, 0)
-        FROM catalog.titles t
-        LEFT JOIN catalog.ratings r USING (tconst)
-        WHERE p.tconst = t.tconst
-          AND p.votes IS NULL
-          AND p.tmdb_at IS NULL;
-    END IF;
-END $$;
 
 -- Trigram search, installed into meta rather than wherever the search
 -- path happens to point. An unqualified CREATE EXTENSION needs a valid
@@ -204,10 +139,6 @@ CREATE TABLE IF NOT EXISTS meta.synopses (
     omdb_at    timestamptz
 );
 
--- A database that made the table before the column. A no-op on a fresh
--- one, so both paths end at the same shape.
-ALTER TABLE meta.synopses ADD COLUMN IF NOT EXISTS omdb_at timestamptz;
-
 -- The 'tmdb' rows in the order they come due.
 CREATE INDEX IF NOT EXISTS synopses_tmdb_age
     ON meta.synopses (fetched_at) WHERE source = 'tmdb';
@@ -248,10 +179,6 @@ CREATE TABLE IF NOT EXISTS meta.trailer_queue (
     votes     int NOT NULL,
     wanted_at timestamptz
 );
-
--- A database that made the table before the column. A no-op on a fresh
--- one, so both paths end at the same shape.
-ALTER TABLE meta.trailer_queue ADD COLUMN IF NOT EXISTS wanted_at timestamptz;
 
 -- The sweep's order.
 CREATE INDEX IF NOT EXISTS trailer_queue_order

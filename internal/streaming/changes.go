@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"cinedikt/internal/imdbid"
 )
 
 // The kinds of change the /changes feed reports that have already
@@ -45,7 +47,6 @@ type ChangesPage struct {
 
 // Change is one change to one show.
 type Change struct {
-	Type   string
 	ShowID string
 	// At is when it happened. Zero when the API gave no time, which it
 	// says it never does for a change that has happened.
@@ -115,9 +116,8 @@ func (c *Client) Changes(ctx context.Context, q ChangesQuery) (ChangesPage, erro
 	}
 	var raw struct {
 		Changes []struct {
-			ChangeType string `json:"changeType"`
-			ShowID     string `json:"showId"`
-			Timestamp  *int64 `json:"timestamp"`
+			ShowID    string `json:"showId"`
+			Timestamp *int64 `json:"timestamp"`
 		} `json:"changes"`
 		Shows      json.RawMessage `json:"shows"`
 		HasMore    bool            `json:"hasMore"`
@@ -133,7 +133,7 @@ func (c *Client) Changes(ctx context.Context, q ChangesQuery) (ChangesPage, erro
 		NextCursor: raw.NextCursor,
 	}
 	for _, ch := range raw.Changes {
-		change := Change{Type: ch.ChangeType, ShowID: ch.ShowID}
+		change := Change{ShowID: ch.ShowID}
 		if ch.Timestamp != nil && *ch.Timestamp > 0 {
 			change.At = time.Unix(*ch.Timestamp, 0).UTC()
 		}
@@ -174,7 +174,7 @@ func readShows(raw json.RawMessage) map[string]ChangedShow {
 			IMDbID           string          `json:"imdbId"`
 			StreamingOptions json.RawMessage `json:"streamingOptions"`
 		}
-		if err := json.Unmarshal(item, &show); err != nil || !validIMDbID(show.IMDbID) {
+		if err := json.Unmarshal(item, &show); err != nil || !imdbid.Title(show.IMDbID) {
 			continue
 		}
 		changed := ChangedShow{IMDbID: show.IMDbID}

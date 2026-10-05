@@ -9,7 +9,7 @@ import (
 	"cinedikt/internal/notify"
 )
 
-var testPlace = place{env: "dev", commit: "d017008c9a4e"}
+var testPlace = place{env: "dev"}
 
 var allJobs = []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobTMDbPosters, notify.JobTMDbIDs,
 	notify.JobSynopses, notify.JobTrailers, notify.JobPeople, notify.JobGeoIP}
@@ -68,14 +68,14 @@ func boards(t *testing.T) map[string]*policy {
 	out["quiet-day"] = quietDay(t)
 
 	running := quietDay(t)
-	running.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4, Phase: notify.PhaseDownload})
-	running.after(3 * time.Minute).note(notify.Event{Job: notify.JobImport, Kind: notify.Progress, Step: 1, Steps: 4,
-		Phase: notify.PhaseDownload, File: 3, Files: 5, Noun: "credits", Share: 0.41, Total: 700 << 20, Done: 287 << 20})
+	running.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1})
+	running.after(3 * time.Minute).note(notify.Event{Job: notify.JobImport, Kind: notify.Progress, Step: 1,
+		File: 3, Files: 5, Noun: "credits", Share: 0.41, Total: 700 << 20})
 	out["import-downloading"] = running
 
 	loading := quietDay(t)
-	loading.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4})
-	loading.after(9 * time.Minute).note(notify.Event{Job: notify.JobImport, Kind: notify.Progress, Step: 2, Steps: 4, Phase: notify.PhaseLoad, Noun: "credits"})
+	loading.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1})
+	loading.after(9 * time.Minute).note(notify.Event{Job: notify.JobImport, Kind: notify.Progress, Step: 2, Noun: "credits"})
 	out["import-loading"] = loading
 
 	failing := quietDay(t)
@@ -132,7 +132,7 @@ func boards(t *testing.T) map[string]*policy {
 	first := newPolicy(t)
 	first.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver,
 		Jobs: []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobSynopses}})
-	first.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4, Phase: notify.PhaseDownload})
+	first.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1})
 	out["first-start-no-catalog"] = first
 
 	// A first deploy of the board, or a state that could not be read,
@@ -140,7 +140,7 @@ func boards(t *testing.T) map[string]*policy {
 	// and the import's first event says so.
 	fresh := newPolicy(t)
 	fresh.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
-	fresh.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4, Phase: notify.PhaseDownload,
+	fresh.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1,
 		LiveSince: time.Date(2026, 9, 26, 4, 58, 0, 0, lagos), Films: 756598})
 	out["fresh-state-import-running"] = fresh
 
@@ -188,7 +188,7 @@ func boards(t *testing.T) map[string]*policy {
 	// The country lookup in each state its line can be in. In use is
 	// quiet-day's; on hold is database-down's.
 	//
-	// Off: no MaxMind key, so the runner does not name the check.
+	// Off: no MaxMind credentials, so the runner does not name the check.
 	off := quietDay(t)
 	off.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs[:len(allJobs)-1]})
 	out["country-lookup-off"] = off

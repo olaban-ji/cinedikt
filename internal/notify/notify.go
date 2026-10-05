@@ -92,14 +92,6 @@ const (
 	Unknown Cause = "unknown"
 )
 
-// The four steps of an import, in the order they happen.
-const (
-	PhaseDownload = "downloading"
-	PhaseLoad     = "loading"
-	PhaseIndexes  = "indexes"
-	PhaseLive     = "live"
-)
-
 // Event is one fact about one job. Only the fields that belong to its
 // Kind are set; the rest are zero.
 type Event struct {
@@ -124,10 +116,8 @@ type Event struct {
 	// An import's place: step 1 to 4 of 4, and for the download, file
 	// i of n and what that file holds (films, people, credits,
 	// directors or ratings).
-	Step, Steps int
-	Phase       string
-	File, Files int
-	Noun        string
+	Step, File, Files int
+	Noun              string
 
 	// Published. Took is also set on Finished. On Downloaded, PrevAt is
 	// when the build it replaced was built, and zero for the first.

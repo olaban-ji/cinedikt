@@ -91,7 +91,6 @@ const (
 func (p *progress) event(base notify.Event, done int64) notify.Event {
 	e := base
 	e.Kind = notify.Progress
-	e.Done = done
 	e.Total = p.total
 	if p.total <= 0 {
 		if p.bytes {

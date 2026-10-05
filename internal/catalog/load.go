@@ -91,7 +91,7 @@ func (s *Store) LoadTitles(ctx context.Context, logger *slog.Logger, r io.Reader
 	}
 	defer reader.Close()
 	if err := reader.Require("tconst", "titleType", "primaryTitle", "originalTitle",
-		"isAdult", "startYear", "runtimeMinutes", "genres"); err != nil {
+		"isAdult", "startYear", "genres"); err != nil {
 		return nil, 0, err
 	}
 	// Sized for the movie count rather than the file's twelve million
@@ -111,11 +111,11 @@ func (s *Store) LoadTitles(ctx context.Context, logger *slog.Logger, r io.Reader
 			genres = []string{}
 		}
 		return one([]any{t.TConst, t.Primary, t.Original, t.IsAdult,
-			nullInt(t.StartYear), nullInt(t.Runtime), genres}, true)
+			nullInt(t.StartYear), genres}, true)
 	}}
 	n, err := s.copyRows(ctx, "titles",
 		[]string{"tconst", "primary_title", "original_title", "is_adult",
-			"start_year", "runtime_minutes", "genres"}, src)
+			"start_year", "genres"}, src)
 	if err != nil {
 		return nil, n, err
 	}
@@ -216,7 +216,7 @@ func (s *Store) LoadNames(ctx context.Context, logger *slog.Logger, r io.Reader,
 		return 0, err
 	}
 	defer reader.Close()
-	if err := reader.Require("nconst", "primaryName", "birthYear", "deathYear"); err != nil {
+	if err := reader.Require("nconst", "primaryName"); err != nil {
 		return 0, err
 	}
 	src := &rowSource{track: newProgress(logger, "loading people", 0), r: reader, rows: func(r *Reader) [][]any {
@@ -224,10 +224,10 @@ func (s *Store) LoadNames(ctx context.Context, logger *slog.Logger, r io.Reader,
 		if !ok {
 			return nil
 		}
-		return one([]any{n.NConst, n.Primary, nullInt(n.Born), nullInt(n.Died)}, true)
+		return one([]any{n.NConst, n.Primary}, true)
 	}}
 	n, err := s.copyRows(ctx, "names",
-		[]string{"nconst", "primary_name", "birth_year", "death_year"}, src)
+		[]string{"nconst", "primary_name"}, src)
 	if err != nil {
 		return n, err
 	}

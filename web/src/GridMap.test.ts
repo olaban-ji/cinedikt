@@ -737,7 +737,6 @@ function previewing(over: Partial<PreviewMap> = {}) {
           createElement(MapPreview, {
             film: words(p.id),
             leaving,
-            back: p.back,
             people: MAP.people,
             anchorTitle: MAP.anchor.title,
             theme: 'dark',

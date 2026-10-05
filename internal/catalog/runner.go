@@ -22,23 +22,16 @@ import (
 // checks hourly for a new generation, and fills in posters, synopses,
 // trailers and people's photos continuously beside both.
 //
-// It is the whole of what the importer does, in one place, because the
-// API can run it too. Starting the app on an empty database should
-// leave you with a working map rather than a 503 and a second command
-// to find.
+// The API runs it beside the server, so starting the app on an empty
+// database leaves a working map rather than a 503.
 type Runner struct {
-	// Store is the pool the jobs write through. Leave it nil and set
-	// DatabaseURL to have Start open one of its own — which is what
-	// the API does, so a bulk load never takes a connection a reader
-	// is waiting for.
-	Store *Store
-	// DatabaseURL and MaxConns open that pool. Ignored when Store is
-	// already set, which is how cmd/importer supplies its own.
+	// DatabaseURL and MaxConns open the pool the jobs write through. It
+	// is theirs alone, so a bulk load never takes a connection a reader
+	// is waiting for. The lease is held on a connection of its own to the
+	// same database.
 	DatabaseURL string
 	MaxConns    int32
 	Logger      *slog.Logger
-	// Dir is where the downloads are kept. Empty means a temp directory.
-	Dir string
 	// OMDbKey enables posters, release dates and synopses. Empty leaves
 	// the catalog working, without pictures.
 	OMDbKey       string
@@ -76,8 +69,6 @@ type Runner struct {
 	// in lookups a second, on top of TMDbLimiter. Zero or less takes
 	// PeopleSweepPerSecond.
 	PeopleSweepRate float64
-	// Keep leaves the downloaded files on disk, for development.
-	Keep bool
 	// Notify is told what every job is doing: when an import starts,
 	// publishes or fails, when the catalog goes stale, and how the other
 	// jobs are getting on. It decides for itself what is worth a sound;
@@ -86,9 +77,13 @@ type Runner struct {
 	Notify notify.Sink
 	// Queued is the jobs this process runs on its queue rather than
 	// here, that report to Notify too (Queue.Jobs): the GeoIP check, when
-	// there is a MaxMind key. The runner names them among its own when it
-	// takes the jobs, so the board shows them on rather than off.
+	// there are MaxMind credentials (a license key and an account id). The
+	// runner names them among its own when it takes the jobs, so the board
+	// shows them on rather than off.
 	Queued []string
+
+	// store is the jobs' pool, opened by Start.
+	store *Store
 }
 
 // Start runs the whole cycle until ctx is done. It returns as soon as
@@ -100,32 +95,21 @@ type Runner struct {
 // stops if it loses it. Two runners would call OMDb and TMDb twice over
 // and hand each other the same page.
 func (r *Runner) Start(ctx context.Context) error {
-	own := false
-	if r.Store == nil {
-		if r.DatabaseURL == "" {
-			return errors.New("catalog: the runner needs a Store or a DatabaseURL")
-		}
-		store, err := OpenForJobs(ctx, r.DatabaseURL, r.MaxConns)
-		if err != nil {
-			return fmt.Errorf("catalog: open the runner's pool: %w", err)
-		}
-		r.Store = store
-		own = true
-		r.Logger.Info("the catalog jobs have their own pool", "max_conns", r.MaxConns)
+	if r.DatabaseURL == "" {
+		return errors.New("catalog: the runner needs a DatabaseURL")
 	}
+	store, err := OpenForJobs(ctx, r.DatabaseURL, r.MaxConns)
+	if err != nil {
+		return fmt.Errorf("catalog: open the runner's pool: %w", err)
+	}
+	r.store = store
+	r.Logger.Info("the catalog jobs have their own pool", "max_conns", r.MaxConns)
 	go func() {
-		if own {
-			defer r.Store.Close()
-		}
-		HoldLease(ctx, r.leaseURL(), r.Logger, r.Notify, r.run)
+		defer store.Close()
+		HoldLease(ctx, r.DatabaseURL, r.Logger, r.Notify, r.run)
 	}()
 	return nil
 }
-
-// leaseURL is where the lease connection goes. It is the same database
-// the pool uses; a runner given a ready-made Store is told the URL the
-// same way.
-func (r *Runner) leaseURL() string { return r.DatabaseURL }
 
 // run is everything the runner does while it holds the lease. It
 // returns when ctx is cancelled, which is either shutdown or the lease
@@ -133,7 +117,7 @@ func (r *Runner) leaseURL() string { return r.DatabaseURL }
 func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	// The notifier owns the board from here, and reads back what it had
 	// already said, so this process does not say it again.
-	notify.Attach(r.Notify, r.Store)
+	notify.Attach(r.Notify, r.store)
 	im, posters, synopses := r.build()
 	client := r.tmdbClient()
 	enabled := []string{notify.JobImport, notify.JobColours}
@@ -153,12 +137,23 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 			loop()
 		}()
 	}
+	keep := func(loop jobLoop) { start(func() { r.keepRunning(ctx, loop) }) }
 
 	if posters != nil {
-		start(func() { fillPosters(ctx, posters, r.Logger, wakes) })
+		// Deliberately not part of an import: three-quarters of a million
+		// lookups take longer than the gap between generations, so tying
+		// the two together would leave the catalog permanently a day
+		// behind its own pictures.
+		keep(jobLoop{name: "poster backfill", job: notify.JobPosters, rest: PosterRest,
+			run:  func(ctx context.Context) error { return posters.Run(ctx, Live) },
+			wake: wakes.Published})
 	}
 	if synopses != nil {
-		start(func() { fillSynopses(ctx, synopses, r.Logger, wakes) })
+		// A reader meeting a film OMDb has not answered for is new work;
+		// the rest interval covers a wake sent while nobody was
+		// listening, and brings the queue's refill.
+		keep(jobLoop{name: "synopses", job: notify.JobSynopses, rest: SynopsisRest,
+			run: synopses.Run, wake: wakes.Synopses})
 	}
 	// Whatever was learned from TMDb goes before its six months are up,
 	// whether or not the jobs that re-ask it are running or succeeding.
@@ -168,71 +163,82 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 		// dropped the day it comes due instead.
 		overviewDays = tmdbRefreshDays
 	}
-	start(func() { forgetTMDbDataWhenDue(ctx, r.Store, r.Logger, overviewDays) })
+	start(func() { forgetTMDbDataWhenDue(ctx, r.store, r.Logger, overviewDays) })
 	// One client between the TMDb jobs, waiting on the process's one
 	// limiter, so the jobs and a reader's lookups share one budget.
 	if client != nil {
-		start(func() {
-			fillFromTMDb(ctx, &TMDbJob{
-				Store:    r.Store,
-				Client:   client,
-				Logger:   r.Logger.With("job", "tmdb-posters"),
-				MinVotes: r.TMDbSweepMinVotes,
-				Notify:   r.Notify,
-			}, r.Logger, wakes)
-		})
-		start(func() {
-			fillTMDbIDs(ctx, &TMDbIDJob{
-				Store:  r.Store,
-				Client: client,
-				Logger: r.Logger.With("job", "tmdb-ids"),
-				Notify: r.Notify,
-			}, r.Logger, wakes)
-		})
-		start(func() {
-			fillTrailers(ctx, &TrailerJob{
-				Store: r.Store,
-				TMDb:  client,
-				// The only thing in the process that asks YouTube, so
-				// its limiter is the whole of that budget.
-				Check:    trailer.NewOEmbed(),
-				Logger:   r.Logger.With("job", "trailers"),
-				MinVotes: r.TrailerSweepMinVotes,
-				Wanted:   wakes.TrailersWanted,
-				Notify:   r.Notify,
-			}, r.Logger, wakes)
-		})
+		// The poster fallback runs beside the OMDb backfill rather than
+		// inside it: the two answer to different rate limits, and
+		// chaining them would drop the faster one to the pace of the
+		// slower. A reader who opens a film with no picture is the best
+		// reason there is to ask TMDb about it, and should not have to
+		// wait out a rest for the asking.
+		tmdbPosters := &TMDbJob{
+			Store:    r.store,
+			Client:   client,
+			Logger:   r.Logger.With("job", "tmdb-posters"),
+			MinVotes: r.TMDbSweepMinVotes,
+			Notify:   r.Notify,
+		}
+		keep(jobLoop{name: "tmdb posters", job: notify.JobTMDbPosters, rest: TMDbRest,
+			run: tmdbPosters.Run, wake: wakes.Wanted})
+		// A new generation is the only thing that brings the matcher new
+		// titles. Its own channel, not the poster backfill's: sharing one
+		// would give a publish to whichever of the two took it first.
+		ids := &TMDbIDJob{
+			Store:  r.store,
+			Client: client,
+			Logger: r.Logger.With("job", "tmdb-ids"),
+			Notify: r.Notify,
+		}
+		keep(jobLoop{name: "tmdb ids", job: notify.JobTMDbIDs, rest: TMDbRest,
+			run: ids.Run, wake: wakes.PublishedIDs})
+		trailers := &TrailerJob{
+			Store: r.store,
+			TMDb:  client,
+			// The only thing in the process that asks YouTube, so
+			// its limiter is the whole of that budget.
+			Check:    trailer.NewOEmbed(),
+			Logger:   r.Logger.With("job", "trailers"),
+			MinVotes: r.TrailerSweepMinVotes,
+			Wanted:   wakes.TrailersWanted,
+			Notify:   r.Notify,
+		}
+		keep(trailerLoop(trailers, wakes))
 		sweepRate := r.PeopleSweepRate
 		if sweepRate <= 0 {
 			sweepRate = PeopleSweepPerSecond
 		}
-		start(func() {
-			fillPeople(ctx, &PersonPhotoJob{
-				Store:    r.Store,
-				TMDb:     client,
-				Logger:   r.Logger.With("job", "people-photos"),
-				MinVotes: r.PeopleSweepMinVotes,
-				// A pace of the sweep's own, on top of the limiter the
-				// client waits on, so the rest of that budget stays free
-				// for what readers are waiting on.
-				Sweep:  rate.NewLimiter(rate.Limit(sweepRate), 1),
-				Wanted: wakes.PeopleWanted,
-				Notify: r.Notify,
-			}, r.Logger, wakes)
-		})
+		people := &PersonPhotoJob{
+			Store:    r.store,
+			TMDb:     client,
+			Logger:   r.Logger.With("job", "people-photos"),
+			MinVotes: r.PeopleSweepMinVotes,
+			// A pace of the sweep's own, on top of the limiter the
+			// client waits on, so the rest of that budget stays free
+			// for what readers are waiting on.
+			Sweep:  rate.NewLimiter(rate.Limit(sweepRate), 1),
+			Wanted: wakes.PeopleWanted,
+			Notify: r.Notify,
+		}
+		keep(peopleLoop(people, wakes))
 	} else {
 		r.Logger.Info("no TMDb credentials; movies OMDb has no poster for will have none, an empty search stays empty, and no trailers or people's photos are found")
 	}
 	// And the colours the opening screen fills its frames with. It
 	// needs no credentials — the posters are public — so it runs
-	// wherever the catalog does.
-	start(func() {
-		fillColours(ctx, &ColourJob{
-			Store:  r.Store,
-			Logger: r.Logger.With("job", "opening-colours"),
-			Notify: r.Notify,
-		}, r.Logger, wakes)
-	})
+	// wherever the catalog does. A poster landing for a film on the
+	// opening screen is the only thing that makes new work here, and
+	// the wake carries at most one pending run — the backfill stores
+	// five hundred a second and none of them wants its own pass.
+	colours := &ColourJob{
+		Store:  r.store,
+		Logger: r.Logger.With("job", "opening-colours"),
+		Notify: r.Notify,
+	}
+	keep(jobLoop{name: "opening screen colours", job: notify.JobColours, rest: ColourRest,
+		run:  func(ctx context.Context) error { return colours.Run(ctx, Live) },
+		wake: wakes.Ready})
 	start(func() {
 		// The files are rebuilt once a day. The hourly check is not
 		// about catching the moment they land; it is about not waiting
@@ -252,24 +258,6 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	})
 	wg.Wait()
 	report(r.Notify, notify.Event{Job: notify.JobSystem, Kind: notify.Stopped})
-}
-
-// Once runs a single attempt and reports whether it ended well. A run
-// that decided not to import is a success: most hours are.
-func (r *Runner) Once(ctx context.Context) bool {
-	im, _, _ := r.build()
-	return r.attempt(ctx, im)
-}
-
-// Posters fills in what it can and returns. Nothing else runs.
-func (r *Runner) Posters(ctx context.Context) error {
-	_, job, _ := r.build()
-	if job == nil {
-		return nil
-	}
-	err := job.Run(ctx, Live)
-	reportRun(ctx, r.Notify, notify.JobPosters, err, time.Time{})
-	return err
 }
 
 // reportRun tells the notifier how one run of a background job ended:
@@ -292,18 +280,13 @@ func reportRun(ctx context.Context, sink notify.Sink, job string, err error, nex
 // requests are spent, both stop until it resets. Without an OMDb key
 // both are nil.
 func (r *Runner) build() (*Importer, *PosterJob, *SynopsisJob) {
-	dir := r.Dir
-	if dir == "" {
-		dir = os.TempDir() + "/cinedikt-catalog"
-	}
 	im := &Importer{
-		Store: r.Store,
+		Store: r.store,
 		// Two files are most of a gigabyte; the per-file deadline lives
 		// in the downloader, so this client has none of its own.
 		Client: &http.Client{},
-		Dir:    dir,
+		Dir:    os.TempDir() + "/cinedikt-catalog",
 		Logger: r.Logger,
-		Keep:   r.Keep,
 		Notify: r.Notify,
 	}
 	if r.OMDbKey == "" {
@@ -319,7 +302,7 @@ func (r *Runner) build() (*Importer, *PosterJob, *SynopsisJob) {
 		omdb.WithHTTPTimeout(15*time.Second),
 		omdb.WithConnections(workers))
 	posters := &PosterJob{
-		Store:   r.Store,
+		Store:   r.store,
 		Client:  client,
 		Logger:  r.Logger,
 		Batch:   DefaultPosterBatch,
@@ -327,25 +310,17 @@ func (r *Runner) build() (*Importer, *PosterJob, *SynopsisJob) {
 		Notify:  r.Notify,
 	}
 	synopses := &SynopsisJob{
-		Store:    r.Store,
-		Client:   client,
+		Store:  r.store,
+		Client: client,
+		// `job`, not `component`: the runner's logger already carries a
+		// component, and a second one makes two keys of the same name in
+		// every JSON line this writes. A strict reader keeps one of them.
+		// Every job's logger is named the same way.
 		Logger:   r.Logger.With("job", "synopses"),
 		MinVotes: r.SynopsisSweepMinVotes,
 		Notify:   r.Notify,
 	}
 	return im, posters, synopses
-}
-
-// TMDbPosters fills in what OMDb could not and returns. Nothing else
-// runs, and no credentials means nothing to do.
-func (r *Runner) TMDbPosters(ctx context.Context) error {
-	job := r.buildTMDb()
-	if job == nil {
-		return nil
-	}
-	err := job.Run(ctx)
-	reportRun(ctx, r.Notify, notify.JobTMDbPosters, err, time.Time{})
-	return err
 }
 
 // tmdbClient is the one TMDb client the runner's jobs share, waiting on
@@ -358,27 +333,7 @@ func (r *Runner) tmdbClient() *tmdb.Client {
 	return tmdb.New(r.TMDbAuth, tmdb.WithLimiter(r.TMDbLimiter))
 }
 
-// buildTMDb is the poster fallback, or nil when there are no TMDb
-// credentials to use.
-func (r *Runner) buildTMDb() *TMDbJob {
-	client := r.tmdbClient()
-	if client == nil {
-		r.Logger.Info("no TMDb credentials; movies OMDb has no poster for will have none")
-		return nil
-	}
-	return &TMDbJob{
-		Store:  r.Store,
-		Client: client,
-		// `job`, not `component`: the runner's logger already carries a
-		// component, and a second one makes two keys of the same name in
-		// every JSON line this writes. A strict reader keeps one of them.
-		Logger:   r.Logger.With("job", "tmdb-posters"),
-		MinVotes: r.TMDbSweepMinVotes,
-		Notify:   r.Notify,
-	}
-}
-
-func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
+func (r *Runner) attempt(ctx context.Context, im *Importer) {
 	began := time.Now()
 	next := began.Add(PollInterval)
 	out, err := im.RunOnce(ctx)
@@ -386,7 +341,7 @@ func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
 		// Shutdown, or the lease going to another process. Nothing
 		// failed: the next holder starts the import again.
 		r.Logger.Info("import stopped", "err", err)
-		return false
+		return
 	}
 	if err != nil {
 		// A failed hour is not a crisis, but a run of them means the
@@ -395,7 +350,7 @@ func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
 		r.Logger.Error("import failed", "err", err)
 		report(r.Notify, failure(notify.JobImport, err, next, out.LiveSince))
 		r.warnIfStale(ctx)
-		return false
+		return
 	}
 	if !out.Ran {
 		// Most hours are this one. It still reaches the notifier, which
@@ -414,7 +369,7 @@ func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
 			report(r.Notify, e)
 		}
 		r.warnIfStale(ctx)
-		return true
+		return
 	}
 	r.Logger.Info("import published",
 		"titles", out.Counts.Titles,
@@ -428,13 +383,12 @@ func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
 		Films: out.Counts.Titles, People: out.Counts.Names,
 		PrevFilms: out.PrevFilms, PrevAt: out.PrevAt, Took: out.Took,
 		LiveSince: time.Now(), NextTry: next})
-	if n, err := r.Store.ForgetUnknownPosters(ctx); err != nil {
+	if n, err := r.store.ForgetUnknownPosters(ctx); err != nil {
 		r.Logger.Warn("forget withdrawn posters", "err", err)
 	} else if n > 0 {
 		r.Logger.Info("forgot posters for withdrawn titles", "rows", n)
 	}
 	r.warnIfStale(ctx)
-	return true
 }
 
 // warnIfStale says so when the published catalog is old. It is a log
@@ -447,7 +401,7 @@ func (r *Runner) attempt(ctx context.Context, im *Importer) bool {
 // the runner could not.
 func (r *Runner) warnIfStale(ctx context.Context) {
 	now := time.Now()
-	stale, built, err := r.Store.Stale(ctx, now)
+	stale, built, err := r.store.Stale(ctx, now)
 	if err != nil {
 		r.Logger.Warn("read generation", "err", err)
 		return
@@ -470,44 +424,66 @@ func (r *Runner) warnIfStale(ctx context.Context) {
 // being told the key is spent, before looking for work again.
 const PosterRest = 20 * time.Minute
 
-// PosterWaitForCatalog is how often it looks while there is no catalog
-// to fill in yet. On a first start the import is running and will finish
-// in minutes; resting the full period would leave the backfill asleep
-// for most of the time it could have been working.
-const PosterWaitForCatalog = 15 * time.Second
+// catalogPoll is how often a job looks while there is no catalog to work
+// on yet. On a first start the import is running and will finish in
+// minutes; resting the full period would leave the jobs asleep for most
+// of the time they could have been working.
+const catalogPoll = 15 * time.Second
 
-// fillPosters keeps meta.posters filled for as long as the process runs.
-// It is deliberately not part of an import: three-quarters of a million
-// lookups take longer than the gap between generations, so tying the two
-// together would leave the catalog permanently a day behind its own
-// pictures.
-func fillPosters(ctx context.Context, job *PosterJob, logger *slog.Logger, wakes *Wakes) {
+// jobLoop is one of the background jobs keepRunning keeps going.
+type jobLoop struct {
+	// name is what the log calls the job, and job what the notifier
+	// calls it.
+	name string
+	job  string
+	// rest is how long it waits after a pass before looking again.
+	rest time.Duration
+	// run is one pass.
+	run func(context.Context) error
+	// wake cuts a rest short: whatever signal means there is new work.
+	wake <-chan struct{}
+	// wanted, for the jobs a reader waits on, is a second wake: a
+	// reader's mark, where wake is a new generation. A pass already
+	// running hears it for itself.
+	wanted <-chan struct{}
+	// refill, when set, is called when wake ends a rest, so the next
+	// pass refills its queue from the new generation. A reader's mark
+	// brings no new names to queue, so it does not call it.
+	refill func()
+}
+
+// keepRunning runs a job for as long as the process does: nothing until
+// a catalog has been published — on a first start that is a few minutes
+// away, so the wait is short — then a pass, then a rest a wake can cut
+// short.
+func (r *Runner) keepRunning(ctx context.Context, loop jobLoop) {
 	waited := false
 	for {
-		// Nothing to fill until a catalog has been published. On a first
-		// start that is a few minutes away, so the wait is short.
-		ready, err := job.Store.LiveReady(ctx)
-		if err != nil {
-			logger.Warn("poster backfill: readiness", "err", err)
+		ready, err := r.store.LiveReady(ctx)
+		if err != nil && ctx.Err() == nil {
+			r.Logger.Warn(loop.name+": readiness", "err", err)
 		}
-		wait := PosterRest
-		switch {
-		case err != nil || !ready:
+		wait := loop.rest
+		if err != nil || !ready {
 			if !waited {
-				logger.Info("poster backfill waiting for a catalog")
+				r.Logger.Info(loop.name + " waiting for a catalog")
 				waited = true
 			}
-			wait = PosterWaitForCatalog
-		default:
+			wait = catalogPoll
+		} else {
 			waited = false
-			err := job.Run(ctx, Live)
+			err := loop.run(ctx)
 			if err != nil && ctx.Err() == nil {
-				logger.Warn("poster backfill", "err", err)
+				r.Logger.Warn(loop.name, "err", err)
 			}
-			reportRun(ctx, job.Notify, notify.JobPosters, err, time.Now().Add(wait))
+			reportRun(ctx, r.Notify, loop.job, err, time.Now().Add(wait))
 		}
-		if !waitFor(ctx, wakes.Published, wait) {
+		woke, byWake := waitForEither(ctx, loop.wake, loop.wanted, wait)
+		if !woke {
 			return
+		}
+		if byWake && loop.refill != nil {
+			loop.refill()
 		}
 	}
 }

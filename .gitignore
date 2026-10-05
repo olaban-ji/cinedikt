@@ -7,9 +7,6 @@
 .env
 .env.local
 
-# PostHog wizard run artifacts (may contain project tokens)
-.posthog-wizard-cache/
-
 # TMDb response cache
 /.cache
 

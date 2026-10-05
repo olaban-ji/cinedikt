@@ -371,7 +371,7 @@ func TestACheckClearsAPauseOnlyOnceItIsOver(t *testing.T) {
 
 func TestTakingOverInterruptsWhatWasRunningAndTurnsOffTheRest(t *testing.T) {
 	p := newPolicy(t)
-	p.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4})
+	p.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1})
 	p.note(notify.Event{Job: notify.JobPosters, Kind: notify.Started, Total: 100})
 	p.note(notify.Event{Job: notify.JobSystem, Kind: notify.Stopped})
 	if got := p.st.Jobs[notify.JobImport].State; got != stInterrupted {
@@ -497,16 +497,17 @@ func TestFailingGeoLite2ChecksAreSaidAtTheSecondCheck(t *testing.T) {
 	}
 }
 
-// TestTheCountryLookupIsOffWithoutAKey: the runner names the check only
-// when this process's queue runs it, which takes a MaxMind key and where
-// to watch on, since the queue is where to watch's. The line names both,
-// so it never sends anyone to a key that is already set.
-func TestTheCountryLookupIsOffWithoutAKey(t *testing.T) {
+// TestTheCountryLookupIsOffWithoutCredentials: the runner names the
+// check only when this process's queue runs it, which takes MaxMind
+// credentials and where to watch on, since the queue is where to watch's.
+// The line names both, so it never sends anyone to credentials that are
+// already set.
+func TestTheCountryLookupIsOffWithoutCredentials(t *testing.T) {
 	p := newPolicy(t)
 	p.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: []string{notify.JobImport, notify.JobColours}})
 	w := writer{loc: lagos, now: p.now}
-	if m, text := p.st.line(notify.JobGeoIP, w); m != markPause || text != "off (no MaxMind key, or where to watch is off)" {
-		t.Errorf("without a key: %s %q", m, text)
+	if m, text := p.st.line(notify.JobGeoIP, w); m != markPause || text != "off (no MaxMind credentials, or where to watch is off)" {
+		t.Errorf("without credentials: %s %q", m, text)
 	}
 	p.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 	if m, text := p.st.line(notify.JobGeoIP, w); m != markWork || text != "waiting for the first download" {

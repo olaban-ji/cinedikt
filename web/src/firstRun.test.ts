@@ -1,26 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   COLD_MAX,
-  coldColumns,
   coldScreenCount,
   coldTopPad,
   tilesFrom,
 } from './firstRun';
-
-describe('coldColumns', () => {
-  it('is two on a phone and four on a tablet or a desktop', () => {
-    expect(coldColumns(390, 844)).toBe(2);
-    expect(coldColumns(639, 900)).toBe(2);
-    expect(coldColumns(640, 900)).toBe(4);
-    expect(coldColumns(820, 1180)).toBe(4);
-    expect(coldColumns(1440, 900)).toBe(4);
-  });
-
-  it('lays all eight in one row on a landscape phone', () => {
-    expect(coldColumns(844, 390)).toBe(8);
-    expect(coldColumns(667, 375)).toBe(8);
-  });
-});
 
 describe('coldTopPad', () => {
   it('is fixed on phones and landscape phones', () => {
@@ -51,19 +35,21 @@ describe('coldScreenCount', () => {
   });
 
   it('shows whole rows, never a ragged last one', () => {
-    for (const [vw, vh] of [
-      [1440, 500],
-      [1440, 600],
-      [1440, 700],
-      [1180, 820],
-      [1440, 900],
-      [820, 1180],
-      [390, 844],
-      [375, 667],
-      [844, 390],
+    // Columns as `.cd-tiles` lays them: two on a phone, all eight in one
+    // row on a landscape phone, four everywhere else.
+    for (const [vw, vh, columns] of [
+      [1440, 500, 4],
+      [1440, 600, 4],
+      [1440, 700, 4],
+      [1180, 820, 4],
+      [1440, 900, 4],
+      [820, 1180, 4],
+      [390, 844, 2],
+      [375, 667, 2],
+      [844, 390, 8],
     ]) {
       const n = coldScreenCount(vw, vh);
-      expect(n % coldColumns(vw, vh), `${vw}x${vh}`).toBe(0);
+      expect(n % columns, `${vw}x${vh}`).toBe(0);
     }
   });
 
@@ -118,7 +104,7 @@ describe('coldScreenCount', () => {
     // real measurement it uses that instead.
     expect(coldScreenCount(1440, 900, 300)).toBe(8);
     expect(coldScreenCount(1440, 900, 600)).toBe(4);
-    expect(coldScreenCount(1440, 900, 300) % coldColumns(1440, 900)).toBe(0);
+    expect(coldScreenCount(1440, 900, 300) % 4).toBe(0);
   });
 });
 

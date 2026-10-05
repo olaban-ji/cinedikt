@@ -5,10 +5,6 @@ import type { WhereToWatchBody } from './api';
 import { PREVIEW_REST_MS } from './preview';
 import type { WatchOffer, WatchState, WhereToWatch } from './whereToWatch';
 
-// The real module reaches for PostHog, which has nothing to do with
-// what is under test here.
-vi.mock('./analytics', () => ({ analyticsHeaders: () => ({}) }));
-
 // The effects each render asks for. The server renderer runs none of
 // them; a test that needs what it drew mounted runs them by hand (see
 // mount).
@@ -66,7 +62,6 @@ const offer = (id: string, name: string, more: Partial<WatchOffer> = {}): WatchO
 });
 
 const US: WhereToWatchBody = {
-  country: 'us',
   countryName: 'United States',
   covered: true,
   stream: [offer('netflix', 'Netflix'), offer('starz', 'Starz', { via: 'Prime Video' })],
@@ -109,7 +104,6 @@ describe('asking where a movie can be watched', () => {
     const got = await askWhereToWatch(ID);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe('/api/where-to-watch/tt0133093');
-    expect(got?.country).toBe('us');
     expect(got?.countryName).toBe('United States');
     expect(got?.stream.map((o) => o.name)).toEqual(['Netflix', 'Starz']);
   });
@@ -137,7 +131,7 @@ describe('asking where a movie can be watched', () => {
     await askWhereToWatch(ID);
     await askWhereToWatch('tt0234215');
     expect(whereToWatchKnown(ID)?.covered).toBe(true);
-    expect(whereToWatchKnown('tt0234215')).toEqual({ country: 'xx', covered: false, stream: [], free: [], rent: [], buy: [] });
+    expect(whereToWatchKnown('tt0234215')).toEqual({ covered: false, stream: [], free: [], rent: [], buy: [] });
     await askWhereToWatch(ID);
     await askWhereToWatch('tt0234215');
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -278,8 +272,7 @@ describe('useWhereToWatch', () => {
 describe('readAnswer', () => {
   it('takes what the server sent, groups missing as empty', async () => {
     const { readAnswer } = await load();
-    expect(readAnswer({ country: 'GB', countryName: 'United Kingdom', covered: true, stream: [offer('netflix', 'Netflix')] })).toEqual({
-      country: 'gb',
+    expect(readAnswer({ countryName: 'United Kingdom', covered: true, stream: [offer('netflix', 'Netflix')] })).toEqual({
       countryName: 'United Kingdom',
       covered: true,
       stream: [offer('netflix', 'Netflix')],
@@ -308,8 +301,7 @@ describe('readAnswer', () => {
 
   it('puts nothing in any group for a country without coverage', async () => {
     const { readAnswer } = await load();
-    expect(readAnswer({ country: 'xx', covered: false, stream: [offer('netflix', 'Netflix')] })).toEqual({
-      country: 'xx',
+    expect(readAnswer({ covered: false, stream: [offer('netflix', 'Netflix')] })).toEqual({
       covered: false,
       stream: [],
       free: [],
@@ -321,7 +313,6 @@ describe('readAnswer', () => {
 
 /** An answer for these groups, in the United States. */
 const answer = (groups: Partial<Pick<WhereToWatch, 'stream' | 'free' | 'rent' | 'buy'>>): WhereToWatch => ({
-  country: 'us',
   countryName: 'United States',
   covered: true,
   stream: [],
@@ -353,7 +344,7 @@ describe('the preview’s Stream row', () => {
     const { streamPeek } = await load();
     expect(streamPeek(ok(answer({ rent: [offer('apple', 'Apple TV')], buy: [offer('apple', 'Apple TV')] })))).toBeNull();
     expect(streamPeek(ok(answer({})))).toBeNull();
-    expect(streamPeek(ok({ ...answer({}), country: 'xx', covered: false }))).toBeNull();
+    expect(streamPeek(ok({ ...answer({}), covered: false }))).toBeNull();
     expect(streamPeek({ status: 'wait', data: null })).toBeNull();
     expect(streamPeek({ status: 'error', data: null })).toBeNull();
   });

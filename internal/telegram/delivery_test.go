@@ -156,7 +156,7 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func newHarness(t *testing.T, manual bool) *harness {
+func newHarness(t *testing.T) *harness {
 	t.Helper()
 	clock := &fakeClock{t: testNow}
 	api := &fakeAPI{clock: clock}
@@ -164,7 +164,7 @@ func newHarness(t *testing.T, manual bool) *harness {
 	t.Cleanup(srv.Close)
 	logs := &syncBuffer{}
 	s := newSink(context.Background(), Config{
-		Token: "123:secret", ChatID: "42", Location: lagos, Env: "dev", Commit: "d017008c9a4e", Manual: manual,
+		Token: "123:secret", ChatID: "42", Location: lagos, Env: "dev",
 	}, slog.New(slog.NewTextHandler(logs, nil)))
 	s.base = srv.URL
 	s.now = clock.now
@@ -199,7 +199,7 @@ func dbDown() notify.Event {
 }
 
 func TestA429IsRetriedNotDropped(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.api.reply = func(c apiCall, n int) (int, string) {
 		if n == 1 {
 			return 429, `{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 7","parameters":{"retry_after":7}}`
@@ -227,7 +227,7 @@ func TestA429IsRetriedNotDropped(t *testing.T) {
 }
 
 func TestA5xxBacksOffThenIsDropped(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.api.reply = func(apiCall, int) (int, string) { return 502, "Bad Gateway" }
 	h.sink.Note(dbDown())
 	h.run(5 * time.Minute)
@@ -246,7 +246,7 @@ func TestA5xxBacksOffThenIsDropped(t *testing.T) {
 }
 
 func TestA403TurnsSendingOffWithOneError(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.api.reply = func(apiCall, int) (int, string) {
 		return 403, `{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}`
 	}
@@ -264,7 +264,7 @@ func TestA403TurnsSendingOffWithOneError(t *testing.T) {
 }
 
 func TestAParseErrorIsResentAsPlainText(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.api.reply = func(c apiCall, n int) (int, string) {
 		if c.body.ParseMode != "" {
 			return 400, `{"ok":false,"error_code":400,"description":"Bad Request: can't parse entities: unsupported start tag"}`
@@ -284,7 +284,7 @@ func TestAParseErrorIsResentAsPlainText(t *testing.T) {
 }
 
 func TestAFailedEditIsTriedAgainWithoutWaitingForNews(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.attach(&fakeMemory{raw: []byte(`{"v":1,"board_id":77,"jobs":{},"alerts":{}}`)})
 	h.api.reply = func(c apiCall, n int) (int, string) {
 		if c.method == "editMessageText" && n == 1 {
@@ -304,7 +304,7 @@ func TestAFailedEditIsTriedAgainWithoutWaitingForNews(t *testing.T) {
 }
 
 func TestEditsAreAMinuteApartAndCallsASecondApart(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.attach(&fakeMemory{})
 	h.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 	h.sink.Note(notify.Event{Job: notify.JobPosters, Kind: notify.Started, Total: 100000})
@@ -338,7 +338,7 @@ func TestEditsAreAMinuteApartAndCallsASecondApart(t *testing.T) {
 }
 
 func TestTwoPushesWithinTwoSecondsAreOneLoudMessage(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.attach(&fakeMemory{})
 	h.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 	h.run(10 * time.Second)
@@ -348,10 +348,7 @@ func TestTwoPushesWithinTwoSecondsAreOneLoudMessage(t *testing.T) {
 	h.run(time.Second)
 	h.sink.Note(notify.Event{Job: notify.JobTMDbIDs, Kind: notify.Failed, Cause: notify.KeyRejected, Provider: "TMDb"})
 	h.run(10 * time.Second)
-	var pushes []apiCall
-	for _, c := range h.api.of("sendMessage")[before:] {
-		pushes = append(pushes, c)
-	}
+	pushes := h.api.of("sendMessage")[before:]
 	if len(pushes) != 1 {
 		t.Fatalf("%d messages, want the two pushes as one", len(pushes))
 	}
@@ -366,31 +363,12 @@ func TestTwoPushesWithinTwoSecondsAreOneLoudMessage(t *testing.T) {
 }
 
 func TestTheBoardIsLeftAloneUntilAttach(t *testing.T) {
-	h := newHarness(t, false)
-	h.sink.Note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4})
+	h := newHarness(t)
+	h.sink.Note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1})
 	h.sink.Note(notify.Event{Job: notify.JobImport, Kind: notify.Published, Films: 1, People: 1})
 	h.run(10 * time.Minute)
 	if n := len(h.api.all()); n != 0 {
 		t.Fatalf("%d calls from a process that does not hold the jobs, want none", n)
-	}
-}
-
-func TestAManualRunSendsOneQuietSummaryOnClose(t *testing.T) {
-	h := newHarness(t, true)
-	h.attach(&fakeMemory{})
-	h.sink.Note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1, Steps: 4})
-	h.sink.Note(notify.Event{Job: notify.JobImport, Kind: notify.Published, Films: 757802, People: 3120442, PrevFilms: 756598, Took: time.Hour})
-	h.run(10 * time.Minute)
-	if n := len(h.api.all()); n != 0 {
-		t.Fatalf("%d calls before Close, want none", n)
-	}
-	h.sink.shutdown()
-	calls := h.api.all()
-	if len(calls) != 1 || calls[0].method != "sendMessage" || !calls[0].body.DisableNotification {
-		t.Fatalf("calls = %+v, want one silent sendMessage", calls)
-	}
-	if !strings.Contains(calls[0].body.Text, "New catalog is live (manual run)") {
-		t.Errorf("text = %q", calls[0].body.Text)
 	}
 }
 
@@ -436,7 +414,7 @@ func TestCloseSendsWhatIsLeftAfterTheContextEnds(t *testing.T) {
 }
 
 func TestAttachWithASavedBoardEditsThatBoard(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.attach(&fakeMemory{raw: []byte(`{"v":1,"board_id":77,"board_body":"old","jobs":{},"alerts":{}}`)})
 	h.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 	h.run(time.Minute)
@@ -447,7 +425,7 @@ func TestAttachWithASavedBoardEditsThatBoard(t *testing.T) {
 }
 
 func TestALostBoardIsReplacedPinnedAndTheOldOneUnpinned(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	mem := &fakeMemory{raw: []byte(`{"v":1,"board_id":77,"jobs":{},"alerts":{}}`)}
 	h.attach(mem)
 	h.api.reply = func(c apiCall, n int) (int, string) {
@@ -477,7 +455,7 @@ func TestSavedStateIsNotSaidTwice(t *testing.T) {
 	mem := &fakeMemory{}
 	stale := notify.Event{Job: notify.JobImport, Kind: notify.Stale, LiveSince: testNow.Add(-40 * time.Hour)}
 	for i := 0; i < 2; i++ {
-		h := newHarness(t, false)
+		h := newHarness(t)
 		h.attach(mem)
 		h.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 		h.sink.Note(stale)
@@ -495,7 +473,7 @@ func TestSavedStateIsNotSaidTwice(t *testing.T) {
 }
 
 func TestAPIErrorsCarryTheirRetry(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.api.reply = func(apiCall, int) (int, string) {
 		return 400, `{"ok":false,"error_code":400,"description":"Bad Request: group chat was upgraded to a supergroup chat","parameters":{"migrate_to_chat_id":-1001234}}`
 	}
@@ -507,7 +485,7 @@ func TestAPIErrorsCarryTheirRetry(t *testing.T) {
 }
 
 func TestA401TurnsSendingOffWithOneError(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.attach(&fakeMemory{})
 	h.api.reply = func(apiCall, int) (int, string) {
 		return 401, `{"ok":false,"error_code":401,"description":"Unauthorized"}`
@@ -530,7 +508,7 @@ func TestA401TurnsSendingOffWithOneError(t *testing.T) {
 // losing is a harness whose process held the jobs, wrote its board, and
 // has just lost the lease.
 func losing(t *testing.T) (*harness, *fakeMemory) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	mem := &fakeMemory{}
 	h.attach(mem)
 	h.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
@@ -611,7 +589,7 @@ func TestATakeoverAfterALostLeaseAttachesAgain(t *testing.T) {
 // the process does not hold the jobs; once it does, the build is said
 // once and the board names it.
 func TestAGeoIPCheckBeforeTheTakeoverIsSaidAfterIt(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.sink.Note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Downloaded, LiveSince: fridayBuild, Bytes: 9871234})
 	h.run(10 * time.Minute)
 	if n := len(h.api.all()); n != 0 {
@@ -641,7 +619,7 @@ func TestAGeoIPCheckBeforeTheTakeoverIsSaidAfterIt(t *testing.T) {
 	}
 
 	// Said, saved, and not said again by the next process.
-	next := newHarness(t, false)
+	next := newHarness(t)
 	next.attach(mem)
 	next.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs})
 	next.run(time.Minute)
@@ -659,7 +637,7 @@ func TestAGeoIPCheckBeforeTheTakeoverIsSaidAfterIt(t *testing.T) {
 // build that check found, not "waiting for the first download".
 func TestAHeldGeoIPCheckTurnsTheLineOnBeforeTheTakeover(t *testing.T) {
 	mem := &fakeMemory{}
-	prev := newHarness(t, false)
+	prev := newHarness(t)
 	prev.attach(mem)
 	prev.sink.Note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver, Jobs: allJobs[:len(allJobs)-1]})
 	prev.run(time.Minute)
@@ -667,7 +645,7 @@ func TestAHeldGeoIPCheckTurnsTheLineOnBeforeTheTakeover(t *testing.T) {
 		t.Fatalf("saved country lookup = %+v, want it off", got)
 	}
 
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.sink.Note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Checked, LiveSince: fridayBuild})
 	h.run(time.Minute)
 	h.attach(mem)

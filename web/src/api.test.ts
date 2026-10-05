@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The real module reaches for PostHog, which has nothing to do with
-// what is under test here.
-vi.mock('./analytics', () => ({ analyticsHeaders: () => ({}) }));
-
 type Answer = { status: number; body?: unknown };
 
 function stubFetch(answers: Answer[]) {

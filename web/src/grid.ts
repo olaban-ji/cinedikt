@@ -16,9 +16,6 @@ export interface GridPerson {
   name: string;
   role: 'cast' | 'director';
   character?: string;
-  order: number;
-  /** How many of this person's films belong on the grid, career-wide. */
-  count?: number;
   /** The address of the person's photo on TMDb's image host, 185 pixels
    *  wide. Absent when the server's people job has not answered for them
    *  yet, when TMDb has no photo, and once an answer is too old to show;
@@ -69,8 +66,6 @@ export interface SpineFilm {
  *  draws a marker per person and looks each one up by id. */
 export interface GridFilm extends Omit<SpineFilm, 'people' | 'genres'> {
   title: string;
-  /** YYYY-MM-DD when we have it. The year band stacks by this, not labels. */
-  released?: string;
   poster?: string;
   /** What the film is about, from OMDb or, where it has none, TMDb.
    *  Absent when no source has one yet. */
@@ -176,10 +171,10 @@ export function yearCounts(payload: GridPayload, showUnrated = true): Map<number
 /** A histogram bar's least height, and how much taller the busiest
  *  year's is, in pixels: a year with one film still shows, and none is
  *  taller than the space over the track. */
-export const HIST_MIN_H = 4;
-export const HIST_RANGE_H = 26;
+const HIST_MIN_H = 4;
+const HIST_RANGE_H = 26;
 
-export interface HistBar {
+interface HistBar {
   year: number;
   /** Where along the slider's track it stands, 0–1. */
   at: number;
@@ -255,29 +250,20 @@ export const DEFAULT_SETTINGS: GridSettings = {
 };
 
 /** Settings a stored string, read back. Anything missing takes its
- *  default, and anything the app no longer has is dropped rather than
- *  carried: an install from before Compact cards was removed still has
- *  `density` in its JSON, and spreading that back would put a dead
- *  setting into every object written from then on.
+ *  default.
  *
  *  A string rather than the storage itself, so it can be tested without
  *  one and so a blocked localStorage is the caller's problem. */
 export function settingsFrom(raw: string | null): GridSettings {
   if (!raw) return DEFAULT_SETTINGS;
-  let stored: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return DEFAULT_SETTINGS;
-    stored = { ...(parsed as Record<string, unknown>) };
+    return { ...DEFAULT_SETTINGS, ...(parsed as Partial<GridSettings>) };
   } catch {
     return DEFAULT_SETTINGS;
   }
-  for (const gone of RETIRED) delete stored[gone];
-  return { ...DEFAULT_SETTINGS, ...stored } as GridSettings;
 }
-
-/** Settings that used to exist. */
-const RETIRED = ['density'];
 
 /** The rungs the rating filter offers. Whole and half points, because a
  *  reader thinks in "at least a seven", not in decimals. */
@@ -316,7 +302,7 @@ export const AXIS_H = 26;
  *  opened. Beyond this the card would be lying about its rating. */
 export const NUDGE_RATIO = 0.25;
 
-export interface Metrics {
+interface Metrics {
   /** The small card: a phone's, and a landscape phone's. */
   compact: boolean;
   cardW: number;
@@ -330,7 +316,6 @@ export interface Metrics {
   plotW: number;
   unratedW: number;
   titleLines: number;
-  titleSize: number;
   /** x of R_LO and R_HI, at card centres. */
   left: number;
   right: number;
@@ -365,7 +350,6 @@ export function metricsFor(width: number, s: GridSettings, compact = width < 640
     // sits beside a 60px poster, and two lines of 13px at 1.22 come to
     // under 32px, which leaves the foot row its line below them.
     titleLines: 2,
-    titleSize: 13,
     left,
     right,
   };
@@ -380,7 +364,7 @@ export function xOf(r: number, m: Metrics): number {
   return m.left + ((clampRating(r) - R_LO) / (R_HI - R_LO)) * (m.right - m.left);
 }
 
-export interface GridLine {
+interface GridLine {
   rating: number;
   label: string;
   x: number;
@@ -540,11 +524,11 @@ const GAP_MARK = 10;
 
 /** The height of the break row between the searched film and a year
  *  range that does not hold it. */
-export const BREAK_H = 28;
+const BREAK_H = 28;
 
 /** Whether a year is inside the reader's range. Either end may be open,
  *  and both open is no range at all. */
-export function inYearRange(year: number, settings: GridSettings): boolean {
+function inYearRange(year: number, settings: GridSettings): boolean {
   if (settings.yearFrom != null && year < settings.yearFrom) return false;
   if (settings.yearTo != null && year > settings.yearTo) return false;
   return true;
@@ -839,7 +823,7 @@ export function withoutPill(settings: GridSettings, rungsInView: boolean): GridS
 }
 
 /** One toggle in the View panel's Genres section. */
-export interface GenreChoice {
+interface GenreChoice {
   /** As the legend writes it: "Sci-Fi", "Film-Noir". */
   name: string;
   /** How many films on the plot have every genre picked and this one. */
@@ -1022,10 +1006,10 @@ export function revealDelay(card: Placed, anchor: Placed | null, after = 0): num
 export const MAX_MARKS = 5;
 
 /** A mark's swatch, square or round, 7px either way. */
-export const DOT = 7;
+const DOT = 7;
 
 /** The card's foot row: rating, spacer, marks and "+N", 5px apart. */
-export const FOOT_GAP = 5;
+const FOOT_GAP = 5;
 
 /** Between a swatch and the initials beside it. */
 const SWATCH_GAP = 3;
@@ -1078,12 +1062,12 @@ export function textWidth(text: string, px: number): number {
   return em * px;
 }
 
-/** What the rating corner of a card says. */
-function ratingText(rating: number | null): string {
+/** What a rating says on a card, in the hover preview and in the panel. */
+export function ratingText(rating: number | null): string {
   return rating == null ? 'No rating' : rating.toFixed(1);
 }
 
-export interface Markers {
+interface Markers {
   /** People to draw, in order. */
   show: string[];
   /** People counted in the "+N" rather than drawn. */

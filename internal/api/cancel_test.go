@@ -37,7 +37,7 @@ func (f failingCatalog) ByTMDB(ctx context.Context, _ []int) ([]catalog.Hit, err
 	return nil, f.fail(ctx)
 }
 
-func (f failingCatalog) FirstRun(ctx context.Context, _ int) ([]catalog.Hit, error) {
+func (f failingCatalog) FirstRun(ctx context.Context) ([]catalog.Hit, error) {
 	return nil, f.fail(ctx)
 }
 
@@ -47,8 +47,6 @@ func (f failingCatalog) LiveReady(ctx context.Context) (bool, error) {
 	}
 	return true, nil
 }
-
-func (f failingCatalog) Ping(ctx context.Context) error { return f.fail(ctx) }
 
 // errorCount counts the records logged at Error, which are the ones
 // that reach PostHog's error tracking.
@@ -141,6 +139,34 @@ func TestACancelledRequestIsNotLoggedAsAnError(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+// TestAServerWithoutALoggerStillAnswersAFailure: a server built with no
+// logger, as tests build one, answers a failed read with its status
+// rather than a panic.
+func TestAServerWithoutALoggerStillAnswersAFailure(t *testing.T) {
+	broken := func(context.Context) error { return errors.New("connection refused") }
+	for _, c := range []struct {
+		target string
+		serve  func(s *CatalogServer, w http.ResponseWriter, r *http.Request)
+		ready  bool
+		want   int
+	}{
+		{"/grid/tt0133093", (*CatalogServer).movieGrid, true, http.StatusInternalServerError},
+		{"/grid/tt0133093/films?ids=tt0133093", (*CatalogServer).movieGridFilms, true, http.StatusInternalServerError},
+		{"/search?q=matrix", (*CatalogServer).searchMovies, true, http.StatusInternalServerError},
+		{"/", (*CatalogServer).firstRun, true, http.StatusOK},
+		{"/grid/tt0133093", (*CatalogServer).movieGrid, false, http.StatusServiceUnavailable},
+	} {
+		s := NewCatalogServer(failingCatalog{notReady: !c.ready, fail: broken}, nil)
+		req := httptest.NewRequest(http.MethodGet, c.target, nil)
+		req.SetPathValue("id", "tt0133093")
+		rec := httptest.NewRecorder()
+		c.serve(s, rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s (ready %v): status %d, want %d", c.target, c.ready, rec.Code, c.want)
 		}
 	}
 }

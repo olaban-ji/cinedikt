@@ -18,17 +18,12 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/time/rate"
 
 	"cinedikt/internal/notify"
 	"cinedikt/internal/tmdb"
 )
-
-// PeopleSweepMinVotes is how well known a person's best known film a map
-// can show has to be for the sweep to reach them. Zero is everyone a map
-// can show, and a person below a higher floor is still looked up the
-// moment a reader opens a map they are on.
-const PeopleSweepMinVotes = 0
 
 // PeopleSweepPerSecond is the pace of the sweep and the re-asks, on top of
 // the process's TMDb limiter. The sweep is over a million people long,
@@ -186,6 +181,15 @@ type PersonPhotoJob struct {
 	refilled time.Time
 }
 
+// peopleLoop is how the runner keeps the people job going. It wakes as
+// the trailer job does: on a reader's mark, and on a new generation,
+// which brings people to queue and so has the next pass refill.
+func peopleLoop(job *PersonPhotoJob, wakes *Wakes) jobLoop {
+	return jobLoop{name: "people's photos", job: notify.JobPeople, rest: PeopleRest,
+		run: job.Run, wake: wakes.People, wanted: wakes.PeopleWanted,
+		refill: func() { job.refilled = time.Time{} }}
+}
+
 // personToAsk is one person the job is about to ask about.
 type personToAsk struct {
 	nconst string
@@ -193,6 +197,8 @@ type personToAsk struct {
 	// person taken as wanted; zero for the sweep and the re-asks.
 	wantedAt time.Time
 }
+
+func (p personToAsk) mark() (string, time.Time) { return p.nconst, p.wantedAt }
 
 // Run asks what it can before ctx is done, in three kinds, each only
 // once the ones before it have nothing left to give: the people on maps
@@ -267,20 +273,20 @@ func (j *PersonPhotoJob) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if j.heard() {
+			if heard(j.Wanted) {
 				// A reader has opened a map with people who have no
 				// answer. The rest of this round waits behind them.
 				break
 			}
 			if person.wantedAt.IsZero() {
-				heard, err := j.sweepTurn(ctx)
+				woken, err := j.sweepTurn(ctx)
 				if stopping(err) {
 					return nil
 				}
 				if err != nil {
 					return err
 				}
-				if heard {
+				if woken {
 					break
 				}
 			}
@@ -292,7 +298,7 @@ func (j *PersonPhotoJob) Run(ctx context.Context) error {
 			switch {
 			case stopping(err):
 				return nil
-			case refused(err):
+			case errors.Is(err, tmdb.ErrKey):
 				return &KeyError{Provider: "TMDb", Err: err}
 			case err != nil:
 				failed++
@@ -317,21 +323,10 @@ func (j *PersonPhotoJob) Run(ctx context.Context) error {
 	}
 }
 
-// heard reports whether a reader's mark has arrived, taking the wake if
-// so: the pass that hears it is the one that serves it.
-func (j *PersonPhotoJob) heard() bool {
-	select {
-	case <-j.Wanted:
-		return true
-	default:
-		return false
-	}
-}
-
 // sweepTurn waits for the sweep's own pace. A reader's mark ends the wait
-// at once, and heard says that is why it returned: however slow the
+// at once, and woken says that is why it returned: however slow the
 // sweep is set, nobody waiting on a photo waits on it.
-func (j *PersonPhotoJob) sweepTurn(ctx context.Context) (heard bool, err error) {
+func (j *PersonPhotoJob) sweepTurn(ctx context.Context) (woken bool, err error) {
 	if j.Sweep == nil {
 		return false, nil
 	}
@@ -494,106 +489,23 @@ func (s *Store) peopleOutstanding(ctx context.Context, minVotes int) (int64, err
 }
 
 // peopleWanted is the next round: the head of the first of the three
-// kinds that has anybody this pass has not already tried. A lookup that
-// failed stores nothing, so it is still at the head of its kind, and is
-// left out here until a reader marks the person after the mark that try
-// served; tried holds that mark, zero for one that served none.
+// kinds that has anybody this pass has not already tried.
 func (s *Store) peopleWanted(ctx context.Context, limit, minVotes int, tried map[string]time.Time) ([]personToAsk, error) {
-	for _, kind := range []struct {
-		from  string
-		args  []any
-		want  string
-		order string
-	}{
+	people, err := nextByKind(ctx, s, limit, "n.nconst", []wantKind{
 		{personWantedFrom, nil, "q.wanted_at", "q.wanted_at DESC, q.nconst"},
 		{personQueued("$2"), []any{minVotes}, "NULL::timestamptz", "q.votes DESC, q.nconst"},
 		{stalePeople("$2"), []any{tmdbRefreshDays}, "NULL::timestamptz", "ph.asked_at, ph.nconst"},
-	} {
-		rows, err := s.pool.Query(ctx, `
-			SELECT n.nconst, `+kind.want+` `+kind.from+`
-			ORDER BY `+kind.order+`
-			LIMIT $1`, append([]any{limit}, kind.args...)...)
-		if err != nil {
-			return nil, fmt.Errorf("catalog: people wanting a photo: %w", err)
+	}, tried, func(rows pgx.Rows) (personToAsk, error) {
+		var p personToAsk
+		var wantedAt *time.Time
+		err := rows.Scan(&p.nconst, &wantedAt)
+		if wantedAt != nil {
+			p.wantedAt = *wantedAt
 		}
-		var fresh []personToAsk
-		for rows.Next() {
-			var p personToAsk
-			var wantedAt *time.Time
-			if err := rows.Scan(&p.nconst, &wantedAt); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			if wantedAt != nil {
-				p.wantedAt = *wantedAt
-			}
-			if at, ok := tried[p.nconst]; ok && !p.wantedAt.After(at) {
-				continue
-			}
-			fresh = append(fresh, p)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
-		if len(fresh) > 0 {
-			return fresh, nil
-		}
+		return p, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("catalog: people wanting a photo: %w", err)
 	}
-	return nil, nil
-}
-
-// fillPeople keeps the people job running for as long as the process
-// does. It shares the runner's TMDb client, and with it the process's one
-// limiter, so its requests and the other jobs' add up to one budget.
-func fillPeople(ctx context.Context, job *PersonPhotoJob, logger *slog.Logger, wakes *Wakes) {
-	waited := false
-	for {
-		ready, err := job.Store.LiveReady(ctx)
-		wait := PeopleRest
-		switch {
-		case err != nil || !ready:
-			if !waited {
-				logger.Info("people's photos waiting for a catalog")
-				waited = true
-			}
-			wait = PosterWaitForCatalog
-		default:
-			waited = false
-			err := job.Run(ctx)
-			if err != nil && ctx.Err() == nil {
-				logger.Warn("people's photos", "err", err)
-			}
-			reportRun(ctx, job.Notify, notify.JobPeople, err, time.Now().Add(wait))
-		}
-		// A reader opening a map whose people have no answer is waiting
-		// on this job, and should not wait out its rest to be heard. A
-		// new generation brings people to queue, so the next pass
-		// refills; the rest interval covers a wake sent while nobody was
-		// listening, and brings a refill of its own.
-		woke, published := waitForPeople(ctx, wakes, wait)
-		if !woke {
-			return
-		}
-		if published {
-			job.refilled = time.Time{}
-		}
-	}
-}
-
-// waitForPeople is waitFor for the people job, which has two wakes: a
-// reader's mark, and a new generation. published says it was the second.
-func waitForPeople(ctx context.Context, wakes *Wakes, backstop time.Duration) (woke, published bool) {
-	timer := time.NewTimer(backstop)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false, false
-	case <-wakes.People:
-		return true, true
-	case <-wakes.PeopleWanted:
-		return true, false
-	case <-timer.C:
-		return true, false
-	}
+	return people, nil
 }

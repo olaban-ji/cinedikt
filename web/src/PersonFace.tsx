@@ -2,7 +2,7 @@ import { useLayoutEffect, useReducer, useRef, type Ref } from 'react';
 
 /** Where a face is drawn, which sets its size (see .cd-face-chip and the
  *  rest in grid.css). */
-export type FaceSize = 'chip' | 'preview' | 'sheet';
+type FaceSize = 'chip' | 'preview' | 'sheet';
 
 interface Props {
   photo?: string;
@@ -27,7 +27,7 @@ export interface FaceState {
  *  failing. The image's own events carry the address they were for, so
  *  one that lands for an address the face has moved on from changes
  *  nothing. */
-export type FaceEvent =
+type FaceEvent =
   | { type: 'photo'; photo: string | undefined }
   | { type: 'load'; photo: string }
   | { type: 'error'; photo: string };

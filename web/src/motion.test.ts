@@ -5,8 +5,6 @@ import {
   BREATHE_AT_MS,
   CHIP_FLIP_MS,
   CHIP_IN_MS,
-  COPY_FADE_MS,
-  COPY_STEP_MS,
   EASE,
   FAST_PATH_MS,
   FACE_MS,
@@ -34,10 +32,11 @@ import {
   SET_AT_MS,
   SPREAD_AFTER_LANDING_MS,
   SPREAD_MS,
+  TILES_AFTER_LIFT_MS,
   VEIL_AT_MS,
   VEIL_IN_MS,
-  VEIL_OPACITY,
   VEIL_OUT_MS,
+  WORD_BEFORE_LANDING_MS,
   arriveKeyframes,
   chipInDelay,
   chipShift,
@@ -56,8 +55,6 @@ import {
   springAxis,
   stayKeyframes,
   stayShift,
-  tileCaptionDelay,
-  tileFillDelay,
 } from './motion';
 import { REVEAL_MAX_MS } from './grid';
 
@@ -90,8 +87,7 @@ describe('the curves', () => {
 describe('the opening timeline', () => {
   it('matches the design’s numbers', () => {
     expect(FAST_PATH_MS).toBe(120);
-    expect([COPY_FADE_MS, COPY_STEP_MS]).toEqual([600, 120]);
-    expect([VEIL_OPACITY, VEIL_IN_MS, VEIL_OUT_MS]).toEqual([0.72, 420, 600]);
+    expect([VEIL_IN_MS, VEIL_OUT_MS]).toEqual([420, 600]);
     expect([LOADER_W, LOADER_H]).toEqual([46, 70]);
     // In focus from 140 to 1060.
     expect([FOCUS_DELAY_MS, FOCUS_MS, FOCUS_END_MS]).toEqual([140, 920, 1060]);
@@ -120,42 +116,25 @@ describe('the opening timeline', () => {
   });
 
   it('lets the focus finish before the mark lifts off, however quick the list', () => {
-    const plan = openingPlan(300);
-    expect(plan.lift).toBe(1060);
-    expect(plan.breathes).toBe(false);
+    expect(openingPlan(300).lift).toBe(1060);
   });
 
   it('lifts off the moment a slow list lands, and breathes until then', () => {
-    const plan = openingPlan(2400);
-    expect(plan.lift).toBe(2400);
-    expect(plan.breathes).toBe(true);
+    expect(openingPlan(2400).lift).toBe(2400);
     // The breathing starts just after the focus settles.
     expect(BREATHE_AT_MS).toBe(1120);
-    expect(openingPlan(BREATHE_AT_MS).breathes).toBe(false);
+    expect(BREATHE_AT_MS).toBeGreaterThan(FOCUS_END_MS);
   });
 
-  it('times the posters, the word and the landing from the lift', () => {
-    const { lift, tilesIn, word, done } = openingPlan(500);
-    expect(tilesIn - lift).toBe(80);
-    expect(word - lift).toBe(320);
-    // The loader goes, and the header's mark appears, as the glide ends.
-    expect(done - lift).toBe(GLIDE_MS);
+  it('times the posters and the word from the lift', () => {
+    expect(TILES_AFTER_LIFT_MS).toBe(80);
+    expect(GLIDE_MS - WORD_BEFORE_LANDING_MS).toBe(320);
   });
 
-  it('brings each poster into focus in reading order', () => {
-    // This replaces firstRun's TILE_STEP_MS of 40, whose test held all
-    // eight within 320 ms: the fills were then a quick fade of colour.
-    // They are a focus pull now, as the design times it, 70 ms apart,
-    // so the eighth starts 510 ms in and its caption 600 ms in.
-    expect(tileFillDelay(0)).toBe(20);
-    expect(tileFillDelay(7)).toBe(20 + 7 * 70);
-    expect(tileCaptionDelay(0)).toBe(110);
-    expect(tileCaptionDelay(7)).toBe(110 + 7 * 70);
-  });
-
-  it('draws the poster stagger in the stylesheet from the same numbers', () => {
-    // .cd-cold-fill and .cd-cold-meta write the delays as calc()s; this
-    // keeps them saying what tileFillDelay and tileCaptionDelay say.
+  it('brings each poster into focus in reading order, in the stylesheet', () => {
+    // .cd-cold-fill and .cd-cold-meta write the delays as calc()s: the
+    // fills 70ms apart from 20ms, the captions a little behind from
+    // 110ms, so the eighth starts 510ms in and its caption 600ms in.
     expect(css).toContain('640ms var(--ease-settle) calc(20ms + var(--i, 0) * 70ms)');
     expect(css).toContain('400ms ease calc(110ms + var(--i, 0) * 70ms)');
   });

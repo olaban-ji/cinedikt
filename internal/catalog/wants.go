@@ -20,6 +20,8 @@ package catalog
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // wantQueue is how many marks may be waiting to be written. It is a
@@ -216,4 +218,73 @@ func (s *Store) MarkPosterDead(ctx context.Context, tconst string) error {
 		s.notify(ctx, NotifyWanted)
 	}
 	return err
+}
+
+// heard reports whether a reader's mark has arrived on wanted, taking
+// the wake if so: the pass that hears it is the one that serves it.
+func heard(wanted <-chan struct{}) bool {
+	select {
+	case <-wanted:
+		return true
+	default:
+		return false
+	}
+}
+
+// wantKind is one kind of work a job that readers wait on takes its
+// rounds from: the FROM and WHERE it shares with the job's count, the
+// arguments its placeholders after $1 take, the reader's mark (a NULL
+// timestamptz for a kind no reader marked), and the order it is worked
+// in.
+type wantKind struct {
+	from  string
+	args  []any
+	want  string
+	order string
+}
+
+// marked is a round's item that carries the id it was tried under and
+// the reader's mark it was taken for, zero for one no reader marked.
+type marked interface {
+	mark() (id string, wantedAt time.Time)
+}
+
+// nextByKind is a job's next round: the head of the first of kinds that
+// has anything this pass has not already tried. A lookup that failed
+// stores nothing, so it is still at the head of its kind, and is left
+// out here until a reader marks it after the mark that try served; tried
+// holds that mark, zero for one that served none. columns is what each
+// row is read from, before the mark, which scan reads last.
+func nextByKind[T marked](ctx context.Context, s *Store, limit int, columns string, kinds []wantKind,
+	tried map[string]time.Time, scan func(pgx.Rows) (T, error)) ([]T, error) {
+	for _, kind := range kinds {
+		rows, err := s.pool.Query(ctx, `
+			SELECT `+columns+`, `+kind.want+` `+kind.from+`
+			ORDER BY `+kind.order+`
+			LIMIT $1`, append([]any{limit}, kind.args...)...)
+		if err != nil {
+			return nil, err
+		}
+		var fresh []T
+		for rows.Next() {
+			item, err := scan(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			id, wantedAt := item.mark()
+			if at, ok := tried[id]; ok && !wantedAt.After(at) {
+				continue
+			}
+			fresh = append(fresh, item)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		if len(fresh) > 0 {
+			return fresh, nil
+		}
+	}
+	return nil, nil
 }

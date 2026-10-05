@@ -18,6 +18,7 @@ import {
   markersFor,
   passesFloor,
   railLabelTop,
+  ratingText,
   revealDelay,
   rowKey,
   seamArriving,
@@ -82,7 +83,7 @@ import {
 /** A flown copy of a card on its way to land on this map's searched
  *  film (see GridApp's glideTo). The map hides that card until the copy
  *  is on it, then shows it in the same frame the copy goes. */
-export interface Landing {
+interface Landing {
   /** Turns the copy, wherever it has got to, towards this box, and calls
    *  `done` once it is on it. How long that will take, or null when it
    *  cannot move and has in effect already landed. */
@@ -803,7 +804,6 @@ export function GridMap({
                       key={key}
                       film={film}
                       leaving={leaving}
-                      back={p.back}
                       people={payload.people}
                       anchorTitle={payload.anchor.title}
                       theme={theme}
@@ -1976,7 +1976,7 @@ export const Card = memo(function Card({
           <span className="cd-card-title">{said?.title ?? ''}</span>
           <span className="cd-card-foot">
             <span className={`cd-card-rating${film.rating == null ? ' cd-card-unrated' : ''}`}>
-              {film.rating == null ? 'No rating' : film.rating.toFixed(1)}
+              {ratingText(film.rating)}
             </span>
             <span className="cd-card-spacer" />
             {/* For the eye only: the card's own label is what is read

@@ -205,8 +205,11 @@ func TestAFirstAskIsKeptAndTheNextIsServedFromTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !row.Stored || time.Since(row.FetchedAt) > time.Minute || !row.ExpiresAt.IsZero() {
+	if !row.Stored || time.Since(row.FetchedAt) > time.Minute {
 		t.Errorf("row = %+v", row)
+	}
+	if got := expiresAt(t, s, "tt0133093", "us"); !got.IsZero() {
+		t.Errorf("expires_at = %v, want none", got)
 	}
 	// Nothing in it is leaving, so nothing is scheduled.
 	if jobs := refreshJobs(t, q); len(jobs) != 0 {
@@ -396,7 +399,7 @@ func TestALeavingOptionSchedulesARefreshForItsMoment(t *testing.T) {
 	then := now.Add(120 * time.Hour).UTC()
 	api := &fakeStreaming{t: t, countries: coveredCountries}
 	api.set("tt0133093/us", []streaming.StreamingOption{
-		{Service: service("netflix", "Netflix"), Type: "subscription", Link: "n", ExpiresOn: leaves.Unix(), ExpiresSoon: true},
+		{Service: service("netflix", "Netflix"), Type: "subscription", Link: "n", ExpiresOn: leaves.Unix()},
 		{Service: service("hulu", "Hulu"), Type: "subscription", Link: "h", ExpiresOn: then.Unix()},
 		{Service: service("max", "Max"), Type: "subscription", Link: "m"},
 	}, nil)
@@ -410,9 +413,8 @@ func TestALeavingOptionSchedulesARefreshForItsMoment(t *testing.T) {
 	if len(got.Stream) != 3 {
 		t.Fatalf("stream = %+v", got.Stream)
 	}
-	row, err := s.WhereToWatch(ctx, "tt0133093", "us")
-	if err != nil || !row.ExpiresAt.Equal(leaves) {
-		t.Fatalf("expires_at = %v (%v), want %v", row.ExpiresAt, err, leaves)
+	if got := expiresAt(t, s, "tt0133093", "us"); !got.Equal(leaves) {
+		t.Fatalf("expires_at = %v, want %v", got, leaves)
 	}
 	job := rivertest.RequireInserted(ctx, t, q.driver(), WatchRefreshArgs{},
 		&rivertest.RequireInsertedOpts{Schema: QueueSchema, ScheduledAt: leaves, State: rivertype.JobStateScheduled})
@@ -442,7 +444,7 @@ func TestALeavingOptionSchedulesARefreshForItsMoment(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.now = nil
-	row, err = s.WhereToWatch(ctx, "tt0133093", "us")
+	row, err := s.WhereToWatch(ctx, "tt0133093", "us")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,8 +455,8 @@ func TestALeavingOptionSchedulesARefreshForItsMoment(t *testing.T) {
 	if len(names) != 2 || names[0] != "Hulu" || names[1] != "Max" {
 		t.Errorf("after the refresh = %v, want Hulu and Max", names)
 	}
-	if !row.ExpiresAt.Equal(then) {
-		t.Errorf("expires_at = %v, want %v", row.ExpiresAt, then)
+	if got := expiresAt(t, s, "tt0133093", "us"); !got.Equal(then) {
+		t.Errorf("expires_at = %v, want %v", got, then)
 	}
 	var next []WatchRefreshArgs
 	for _, j := range refreshJobs(t, q) {
@@ -680,7 +682,7 @@ func TestTheGeoIPDatabaseIsKeptForTheNextProcess(t *testing.T) {
 	u := &geoip.Updater{
 		AccountID: geoiptest.Account, LicenseKey: geoiptest.License,
 		Store: s, Lookup: first, HTTP: srv.Client(),
-		PermalinkURL: srv.PermalinkURL(), LegacyURL: srv.LegacyURL(),
+		PermalinkURL: srv.PermalinkURL(),
 	}
 	worker := &geoIPWorker{u: u}
 
@@ -785,7 +787,7 @@ func TestAFailedGeoIPCheckIsLogged(t *testing.T) {
 	u := &geoip.Updater{
 		AccountID: geoiptest.Account, LicenseKey: "wrong",
 		Store: &memGeoIP{}, Lookup: &geoip.Lookup{}, HTTP: srv.Client(),
-		PermalinkURL: srv.PermalinkURL(), LegacyURL: srv.LegacyURL(), Logger: log.logger(),
+		PermalinkURL: srv.PermalinkURL(), Logger: log.logger(),
 	}
 	worker := &geoIPWorker{u: u}
 	ctx := context.Background()

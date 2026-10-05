@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type Ref } from 'react';
 import { flushSync } from 'react-dom';
 import type { FaceCardEvents } from './faceCard';
-import { genreLine, type GridFilm, type GridPerson } from './grid';
+import { genreLine, ratingText, type GridFilm, type GridPerson } from './grid';
 import { WatchLogo, headingFor } from './GridSheet';
 import { stillNow } from './motion';
 import { personVars } from './personColour';
@@ -19,7 +19,7 @@ import {
   type PreviewBounds,
   type PreviewPlace,
 } from './preview';
-import { ENTER_MS } from './sheet';
+import { ENTER_MS, useEntered } from './sheet';
 import type { Theme } from './theme';
 import { TrailerRow, useTrailer, type Player } from './TrailerRow';
 import { PLAYER, isFor, videoHeight, wellHeight, type Play } from './trailer';
@@ -59,8 +59,6 @@ interface Props {
    *  preview on a swap (`gone`). A leaving preview can still be taken
    *  back by the pointer; a gone one cannot. */
   leaving?: 'plain' | 'playing' | 'gone';
-  /** Taken back while it was leaving. */
-  back?: boolean;
 }
 
 /** How a trailer opening in the preview made room for itself: the top
@@ -99,14 +97,7 @@ export function MapPreview({
 }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const syn = useRef<HTMLParagraphElement>(null);
-  // In a moment after it mounts, so its entrance has somewhere to run
-  // from; at once for a reader who has asked for nothing to move. A
-  // timer, as the sheets use, rather than a frame.
-  const [shown, setShown] = useState(stillNow);
-  useEffect(() => {
-    const t = window.setTimeout(() => setShown(true), ENTER_MS);
-    return () => window.clearTimeout(t);
-  }, []);
+  const shown = useEntered();
 
   // Where it sits once its height is known: moved back inside the map
   // if it grows past an edge. Measured before the first paint, so it is
@@ -330,9 +321,7 @@ export function MapPreview({
         <span className="cd-preview-title">{film.title}</span>
         <span className="cd-preview-meta">
           <span>{film.year}</span>
-          <span className="cd-preview-pill">
-            {film.rating == null ? 'No rating' : film.rating.toFixed(1)}
-          </span>
+          <span className="cd-preview-pill">{ratingText(film.rating)}</span>
           {genres && <span className="cd-preview-genres">{genres}</span>}
         </span>
       </div>
@@ -383,7 +372,7 @@ export function MapPreview({
 /** How the preview's Stream row is drawn: closed, about to grow in for
  *  an answer that came after the preview opened (`out`); open (`in`); or
  *  folded away while a trailer is set in the preview (`folded`). */
-export type StreamPhase = 'out' | 'in' | 'folded';
+type StreamPhase = 'out' | 'in' | 'folded';
 
 /** Whether a preview's Stream row starts open: for an answer in as the
  *  preview opened, and for a reader who has asked for nothing to move,
@@ -652,10 +641,10 @@ export function faceEvents(
 
 /** How many faces fit across the preview: nine at 30px with their gaps
  *  inside its 360px. Past that, one makes way for the count. */
-export const PREVIEW_FACES = 9;
+const PREVIEW_FACES = 9;
 
 /** The preview's row of faces. */
-export interface FacesRow {
+interface FacesRow {
   /** The faces drawn, in the chip row's order. */
   shown: GridPerson[];
   /** How many more there are than are drawn, said as "+N". */

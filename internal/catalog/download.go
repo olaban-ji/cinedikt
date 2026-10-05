@@ -36,8 +36,7 @@ func Download(ctx context.Context, client *http.Client, dir string, files []File
 	paths := make(map[File]string, len(files))
 	for i, f := range files {
 		logger.Info("downloading", "file", f, "of", fmt.Sprintf("%d/%d", i+1, len(files)))
-		base := notify.Event{Job: notify.JobImport, Step: 1, Steps: 4, Phase: notify.PhaseDownload,
-			File: i + 1, Files: len(files), Noun: noun(f)}
+		base := notify.Event{Job: notify.JobImport, Step: 1, File: i + 1, Files: len(files), Noun: noun(f)}
 		// Said once as the file starts, so the board moves on to it
 		// straight away rather than at its first tick.
 		report(sink, withKind(base, notify.Progress))

@@ -153,10 +153,10 @@ export function watchUrl(key: string): string {
 }
 
 /** The commands the player is sent. */
-export type YouTubeCommand = 'mute' | 'unMute' | 'playVideo' | 'pauseVideo' | 'setVolume';
+type YouTubeCommand = 'mute' | 'unMute' | 'playVideo' | 'pauseVideo' | 'setVolume';
 
 /** A command with what it takes, such as setVolume's 0 to 100. */
-export type YouTubeCall = [func: YouTubeCommand, args?: number[]];
+type YouTubeCall = [func: YouTubeCommand, args?: number[]];
 
 /** One IFrame API command, as the message the player listens for. */
 export function ytCommand(func: YouTubeCommand, args: number[] = []): string {
@@ -189,7 +189,7 @@ export function catchUp(play: Play | null): YouTubeCall[] {
 }
 
 /** The page's line to the embedded player. */
-export interface PlayerLink {
+interface PlayerLink {
   /** A new frame is about to mount, which has to say it is ready again. */
   reset: () => void;
   /** Sends a command, if the player can hear it yet. */

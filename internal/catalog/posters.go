@@ -24,10 +24,29 @@ type Poster struct {
 	OK   bool
 }
 
-// PosterFiller looks up a title. The importer owns the client, so the
+// PosterFiller looks up a title. The runner owns the client, so the
 // rate it runs at is set in one place.
 type PosterFiller interface {
 	Lookup(ctx context.Context, imdbID string) (omdb.Title, error)
+}
+
+// omdbPaused reports whether a spent daily quota has client waiting, and
+// until when. A client that does not say, as a test's fake does not, is
+// never paused.
+func omdbPaused(client PosterFiller) (until time.Time, paused bool) {
+	if p, ok := client.(interface{ PausedUntil() time.Time }); ok && p.PausedUntil().After(time.Now()) {
+		return p.PausedUntil(), true
+	}
+	return time.Time{}, false
+}
+
+// quotaResumes is when a pass a spent quota stopped can ask again: when
+// the client says, or QuotaPause from now for one that does not say.
+func quotaResumes(client PosterFiller) time.Time {
+	if until, paused := omdbPaused(client); paused {
+		return until
+	}
+	return time.Now().Add(omdb.QuotaPause)
 }
 
 // PosterJob fills meta.posters. It is the only thing in the catalog that
@@ -87,7 +106,7 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 	// A spent daily quota means every lookup would be told no. Asking
 	// anyway would start a pass only to pause it again, every rest
 	// interval until the quota comes back.
-	if p, ok := j.Client.(interface{ PausedUntil() time.Time }); ok && time.Now().Before(p.PausedUntil()) {
+	if _, paused := omdbPaused(j.Client); paused {
 		return nil
 	}
 	batch := j.Batch
@@ -146,11 +165,7 @@ func (j *PosterJob) Run(ctx context.Context, schema string) error {
 			j.Logger.Info("poster backfill paused",
 				"filled", found.Load(), "none", blank.Load(), "failed", failed.Load(), "quota", spent.Load())
 			if spent.Load() {
-				until := time.Now().Add(omdb.QuotaPause)
-				if p, ok := j.Client.(interface{ PausedUntil() time.Time }); ok && p.PausedUntil().After(time.Now()) {
-					until = p.PausedUntil()
-				}
-				run.pause(notify.DailyLimit, found.Load(), failed.Load(), until)
+				run.pause(notify.DailyLimit, found.Load(), failed.Load(), quotaResumes(j.Client))
 			}
 			return nil
 		}
@@ -420,35 +435,6 @@ func (s *Store) writePosters(ctx context.Context, schema string, batch []Poster)
 			s.notify(ctx, NotifyReady)
 			break
 		}
-	}
-	return nil
-}
-
-func (s *Store) savePoster(ctx context.Context, p Poster) error {
-	status := "missing"
-	if p.OK {
-		status = "ok"
-	}
-	var released any
-	if !p.Released.IsZero() {
-		released = p.Released
-	}
-	var url any
-	if p.URL != "" {
-		url = p.URL
-	}
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO meta.posters (tconst, poster_url, released, status, fetched_at)
-		VALUES ($1, $2, $3, $4, now())
-		ON CONFLICT (tconst) DO UPDATE
-		SET poster_url    = EXCLUDED.poster_url,
-		    released      = EXCLUDED.released,
-		    released_tmdb = false,
-		    status        = EXCLUDED.status,
-		    fetched_at    = EXCLUDED.fetched_at`,
-		p.TConst, url, released, status)
-	if err != nil {
-		return fmt.Errorf("catalog: save poster %s: %w", p.TConst, err)
 	}
 	return nil
 }

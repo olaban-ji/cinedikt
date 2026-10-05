@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"cinedikt/internal/catalog"
+	"cinedikt/internal/imdbid"
 )
 
 // TrailerStore is where the trailer job's answers are read, and where a
@@ -46,7 +48,7 @@ type trailerAnswer struct {
 // answer is pending.
 func (s *CatalogServer) trailerFor(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !validTConst(id) {
+	if !imdbid.Title(id) {
 		writeError(w, http.StatusBadRequest, "id must be an IMDb title id, such as tt0133093")
 		return
 	}
@@ -54,13 +56,7 @@ func (s *CatalogServer) trailerFor(w http.ResponseWriter, r *http.Request) {
 	if s.trailerStore != nil {
 		row, err := s.trailerStore.Trailer(r.Context(), id)
 		if err != nil {
-			if gone(r) {
-				return
-			}
-			if s.Logger != nil {
-				s.Logger.Warn("trailer", "id", id, "err", err)
-			}
-			writeError(w, http.StatusInternalServerError, "could not read the trailer")
+			s.failed(w, r, http.StatusInternalServerError, "could not read the trailer", slog.LevelWarn, err, "trailer", "id", id)
 			return
 		}
 		switch {

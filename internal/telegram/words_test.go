@@ -178,13 +178,6 @@ func messages() map[string][]part {
 		"p10-synopses":             {w.longPass(notify.JobSynopses, notify.Event{Done: 36120, None: 1880, Errors: 14, Took: 52 * time.Minute}, "")},
 		"p10-trailers":             {w.longPass(notify.JobTrailers, notify.Event{Done: 9310, None: 1204, Took: 38 * time.Minute}, "")},
 		"p10-people-photos":        {w.longPass(notify.JobPeople, notify.Event{Done: 41280, None: 8812, Took: 2*time.Hour + 47*time.Minute}, "")},
-		"p11-manual-published":     {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Published, Films: 757802, People: 3120442, PrevFilms: 756598, Took: 97 * time.Minute})},
-		"p11-manual-nothing-new":   {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Checked, LiveSince: yesterday})},
-		"p11-manual-skipped":       {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Skipped, Cause: notify.FileMoved})},
-		"p11-manual-locked":        {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Checked, Cause: notify.Locked})},
-		"p11-manual-failed":        {mustManual(w, notify.Event{Job: notify.JobImport, Kind: notify.Failed, Cause: notify.IMDbDown, Status: 503, Detail: "catalog: HEAD title.basics: HTTP 503"})},
-		"p11-manual-posters":       {mustManual(w, notify.Event{Job: notify.JobPosters, Kind: notify.Finished, Done: 1830, Errors: 12}, notify.Event{Job: notify.JobTMDbPosters, Kind: notify.Finished, Done: 214})},
-		"p11-manual-posters-limit": {mustManual(w, notify.Event{Job: notify.JobPosters, Kind: notify.Paused, Cause: notify.DailyLimit, Done: 950})},
 
 		// The country lookup's messages, from the GeoIP check on the queue.
 		"p12-country-lookup-updated":      {w.downloaded(newBuild, "")},
@@ -208,14 +201,6 @@ func messages() map[string][]part {
 		// day and a half old: the stale alert says the cause, once.
 		"coalesced-import-failing-and-stale": {w.importFailing(mismatch, yesterday), w.stale(1, testNow.Add(-37*time.Hour), mismatch)},
 	}
-}
-
-func mustManual(w writer, events ...notify.Event) part {
-	p, ok := w.manual(events)
-	if !ok {
-		panic("no manual summary")
-	}
-	return p
 }
 
 // TestEveryPushReadsAsWritten renders every message the chat can get,

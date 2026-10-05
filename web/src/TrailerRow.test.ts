@@ -6,7 +6,7 @@ import { FADE_STEP_MS, usePlayer, type Player } from './TrailerRow';
 
 // The real module reaches for PostHog, which has nothing to do with
 // what is under test here.
-vi.mock('./analytics', () => ({ analyticsHeaders: () => ({}), capture: () => {} }));
+vi.mock('./analytics', () => ({ capture: () => {} }));
 
 // The effects each render asks for. The server renderer runs none of
 // them; a test that needs what it drew mounted runs them by hand (see

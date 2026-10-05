@@ -1,11 +1,9 @@
-import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { bigPhoto, type FaceCard } from './faceCard';
 import type { GridPerson } from './grid';
 import { roleLine } from './GridSheet';
-import { stillNow } from './motion';
 import { personColour } from './personColour';
-import { ENTER_MS } from './sheet';
+import { useEntered } from './sheet';
 import { useResolvedTheme, type Theme } from './theme';
 
 interface Props {
@@ -30,13 +28,7 @@ interface Props {
  *  afresh for each card, so each one comes in from its own edge. */
 export function PersonCard(props: Props) {
   const theme = useResolvedTheme();
-  // In a moment after it mounts, so its entrance has somewhere to run
-  // from; at once for a reader who has asked for nothing to move.
-  const [shown, setShown] = useState(stillNow);
-  useEffect(() => {
-    const t = window.setTimeout(() => setShown(true), ENTER_MS);
-    return () => window.clearTimeout(t);
-  }, []);
+  const shown = useEntered();
   return createPortal(<PersonCardView {...props} theme={theme} shown={shown} />, document.body);
 }
 

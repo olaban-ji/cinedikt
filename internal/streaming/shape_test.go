@@ -174,9 +174,6 @@ func TestAnAnswerAlwaysHasItsFourLists(t *testing.T) {
 	if raw, _ := json.Marshal(back); string(raw) != `{"stream":[],"free":[],"rent":[],"buy":[]}` {
 		t.Errorf("normalised = %s", raw)
 	}
-	if !back.Empty() {
-		t.Error("an empty answer is not Empty")
-	}
 }
 
 func TestAmountsReadAsStringsOrNumbers(t *testing.T) {

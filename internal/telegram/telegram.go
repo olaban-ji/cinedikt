@@ -74,11 +74,8 @@ type Config struct {
 	// Location is the zone times are written in. Nil is UTC, and the
 	// board says so.
 	Location *time.Location
-	// Env and Commit name the deploy in the board's footer.
-	Env, Commit string
-	// Manual is a one-off cmd/importer run: no board, no memory, and
-	// one quiet summary when it closes.
-	Manual bool
+	// Env names the deploy in the board's footer.
+	Env string
 }
 
 // Start posts events to the chat for as long as ctx lasts. An empty
@@ -102,7 +99,7 @@ func Start(ctx context.Context, cfg Config, logger *slog.Logger) notify.Sink {
 	s := newSink(ctx, cfg, logger)
 	s.token, s.chatID = token, chatID
 	go s.loop(ctx)
-	logger.Info("telegram notifications on", "manual", cfg.Manual)
+	logger.Info("telegram notifications on")
 	return s
 }
 
@@ -136,8 +133,7 @@ func newSink(ctx context.Context, cfg Config, logger *slog.Logger) *Sink {
 		token:       cfg.Token,
 		chatID:      cfg.ChatID,
 		loc:         loc,
-		place:       place{env: cfg.Env, commit: cfg.Commit, utc: utc},
-		manual:      cfg.Manual,
+		place:       place{env: cfg.Env, utc: utc},
 		logger:      logger,
 		client:      &http.Client{},
 		base:        "https://api.telegram.org",
@@ -159,7 +155,6 @@ type Sink struct {
 	chatID string
 	loc    *time.Location
 	place  place
-	manual bool
 	logger *slog.Logger
 	client *http.Client
 	base   string
@@ -199,7 +194,6 @@ type Sink struct {
 	lastCall  time.Time
 	disabled  bool
 	plainOnly bool
-	heard     []notify.Event
 	savedWarn time.Time
 	pinWarned bool
 	// held is what the queue's jobs said while this process did not hold
@@ -261,7 +255,7 @@ func (s *Sink) kick() {
 // running one is editing. The saved state is read here, in the caller,
 // so the loop is never blocked on the database.
 func (s *Sink) Attach(m notify.Memory) {
-	if s == nil || m == nil || s.manual {
+	if s == nil || m == nil {
 		return
 	}
 	s.mu.Lock()
@@ -309,7 +303,7 @@ func (s *Sink) Attach(m notify.Memory) {
 // shutdown's "Shutting down" or a save from here would overwrite theirs.
 // A later takeover here attaches afresh and reads the state back.
 func (s *Sink) Detach() {
-	if s == nil || s.manual {
+	if s == nil {
 		return
 	}
 	s.mu.Lock()
@@ -320,9 +314,9 @@ func (s *Sink) Detach() {
 	s.kick()
 }
 
-// Close waits, up to ctx, for the sink to say what it still has to say.
-// For a manual run that is its one summary; for the process that owns
-// the board it is the last pushes and the last board.
+// Close waits, up to ctx, for the sink to say what it still has to say:
+// the last pushes and, for the process that owns the board, the last
+// board.
 func (s *Sink) Close(ctx context.Context) {
 	if s == nil {
 		return
@@ -439,7 +433,7 @@ func (s *Sink) applyDetach() {
 // the jobs, or when it lost them to the database going away and the
 // database is still away, so that nobody holds them.
 func (s *Sink) ownsBoard() bool {
-	if s.manual || s.disabled {
+	if s.disabled {
 		return false
 	}
 	return s.memory != nil || (s.lost && s.st.Alerts[alertDatabase] != nil)
@@ -453,7 +447,7 @@ func (s *Sink) handle(e notify.Event) {
 	if e.At.IsZero() {
 		e.At = s.now()
 	}
-	if s.memory == nil && !s.manual && queued(e.Job) {
+	if s.memory == nil && queued(e.Job) {
 		// The queue runs in every process, so its jobs can report from
 		// one that does not hold the jobs. A new container's queue starts
 		// while the old container still holds them, and its runner takes
@@ -471,11 +465,6 @@ func (s *Sink) handle(e notify.Event) {
 	}
 	w := s.writer()
 	fx := s.st.apply(e, w)
-	if s.manual {
-		// A manual run says one thing, at the end, from all of it.
-		s.heard = append(s.heard, e)
-		return
-	}
 	attached := s.memory != nil
 	// A process that does not hold the jobs speaks only about the
 	// database, which is the one thing it can see better than anyone.
@@ -757,16 +746,11 @@ func (s *Sink) shutdown() {
 	defer cancel()
 	s.reqBase = ctx
 	s.absorb()
-	if s.manual {
-		if p, ok := s.writer().manual(s.heard); ok {
-			s.pending = append(s.pending, p)
-		}
-	}
-	attached := s.memory != nil && !s.manual
+	attached := s.memory != nil
 	if attached {
 		for _, j := range s.st.Jobs {
 			if j.State == stRunning {
-				j.State, j.Since = stInterrupted, s.now()
+				j.State = stInterrupted
 			}
 		}
 		s.st.shutting = true
@@ -801,7 +785,7 @@ func (s *Sink) shutdown() {
 
 // save writes the state through the Memory, if this sink has one.
 func (s *Sink) save() {
-	if s.memory == nil || s.manual {
+	if s.memory == nil {
 		return
 	}
 	raw, err := json.Marshal(s.st)

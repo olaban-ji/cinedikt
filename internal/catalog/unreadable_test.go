@@ -103,7 +103,7 @@ func TestAnUnreadableAnswerIsNoSynopsis(t *testing.T) {
 	if want := []string{"tt0111161", "tt0133093"}; !slices.Equal(server.askedFor(), want) {
 		t.Fatalf("asked %v, want %v", server.askedFor(), want)
 	}
-	if text, source, ok := synopsisRow(t, s, "tt0111161"); !ok || text != "" || source != SynopsisOMDb {
+	if text, source, ok := synopsisRow(t, s, "tt0111161"); !ok || text != "" || source != "omdb" {
 		t.Errorf("unreadable = %q from %q (row %v), want OMDb's null", text, source, ok)
 	}
 	if !omdbAnswered(t, s, "tt0111161") {
@@ -135,7 +135,7 @@ func TestAnUnreadableAnswerIsNoSynopsis(t *testing.T) {
 	if err := s.keepTMDbOverview(ctx, "tt0111161", "TMDb's overview."); err != nil {
 		t.Fatal(err)
 	}
-	if text, source, _ := synopsisRow(t, s, "tt0111161"); text != "TMDb's overview." || source != SynopsisTMDb {
+	if text, source, _ := synopsisRow(t, s, "tt0111161"); text != "TMDb's overview." || source != "tmdb" {
 		t.Errorf("after TMDb = %q from %q", text, source)
 	}
 	if !omdbAnswered(t, s, "tt0111161") {
@@ -174,7 +174,7 @@ func TestAnUnreadableAnswerIsNoPoster(t *testing.T) {
 	if url != nil || status != "ok" {
 		t.Errorf("unreadable = %v %q, want no address and ok", url, status)
 	}
-	if text, source, ok := synopsisRow(t, s, "tt0133093"); !ok || text != "" || source != SynopsisOMDb {
+	if text, source, ok := synopsisRow(t, s, "tt0133093"); !ok || text != "" || source != "omdb" {
 		t.Errorf("unreadable synopsis = %q from %q (row %v), want OMDb's null", text, source, ok)
 	}
 	if err := s.pool.QueryRow(ctx,

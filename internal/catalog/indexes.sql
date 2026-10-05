@@ -15,10 +15,6 @@ CREATE INDEX ON {{schema}}.titles
 CREATE INDEX ON {{schema}}.titles
     USING gin (lower(original_title) gin_trgm_ops) WHERE NOT is_adult;
 
--- Ordering search hits and the poster backfill by how well known a film
--- is. Descending, because every reader of this index wants the top.
-CREATE INDEX ON {{schema}}.ratings (num_votes DESC);
-
 -- The grid's film test: released, not a documentary, not adult. A
 -- partial index over exactly the rows a map can hold.
 CREATE INDEX ON {{schema}}.titles (start_year)

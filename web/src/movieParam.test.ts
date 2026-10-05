@@ -1,39 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
   ABOUT_PATH,
-  filmHref,
   filmPath,
   isAboutPath,
-  movieIdFrom,
+  isImdbId,
   movieIdFromPath,
-  movieIdFromState,
   HOME_TITLE,
   pageTitle,
   routeAt,
-  routeFrom,
   slugify,
 } from './movieParam';
 
-describe('movieIdFrom', () => {
-  it('accepts an IMDb title id and nothing else', () => {
-    expect(movieIdFrom('tt0133093')).toBe('tt0133093');
-    expect(movieIdFrom('tt1')).toBe('tt1');
+describe('isImdbId', () => {
+  it('accepts an IMDb title id as a title and nothing else', () => {
+    expect(isImdbId('tt0133093', 'tt')).toBe(true);
+    expect(isImdbId('tt1', 'tt')).toBe(true);
     // The old TMDb ids are not addresses any more.
-    expect(movieIdFrom('603')).toBeNull();
-    expect(movieIdFrom('nm0000206')).toBeNull();
-    expect(movieIdFrom('tt')).toBeNull();
-    expect(movieIdFrom('ttabc')).toBeNull();
-    expect(movieIdFrom('TT0133093')).toBeNull();
-    expect(movieIdFrom(null)).toBeNull();
+    expect(isImdbId('603', 'tt')).toBe(false);
+    expect(isImdbId('nm0000206', 'tt')).toBe(false);
+    expect(isImdbId('tt', 'tt')).toBe(false);
+    expect(isImdbId('ttabc', 'tt')).toBe(false);
+    expect(isImdbId('tt0133093x', 'tt')).toBe(false);
+    expect(isImdbId('TT0133093', 'tt')).toBe(false);
+    expect(isImdbId('', 'tt')).toBe(false);
   });
-});
 
-describe('movieIdFromState', () => {
-  it('reads the id a pushState left behind', () => {
-    expect(movieIdFromState({ movie: 'tt0133093' })).toBe('tt0133093');
-    expect(movieIdFromState({ movie: 603 })).toBeNull();
-    expect(movieIdFromState({ movie: 'x' })).toBeNull();
-    expect(movieIdFromState(null)).toBeNull();
+  it('accepts an IMDb name id as a person and nothing else', () => {
+    expect(isImdbId('nm0000206', 'nm')).toBe(true);
+    expect(isImdbId('tt0133093', 'nm')).toBe(false);
+    expect(isImdbId('nm', 'nm')).toBe(false);
+    expect(isImdbId('nm-1', 'nm')).toBe(false);
+    expect(isImdbId('NM0000206', 'nm')).toBe(false);
   });
 });
 
@@ -69,6 +66,8 @@ describe('movieIdFromPath', () => {
     expect(movieIdFromPath('/')).toBeNull();
     expect(movieIdFromPath('/movie/')).toBeNull();
     expect(movieIdFromPath('/movie/abc')).toBeNull();
+    expect(movieIdFromPath('/movie/nm0000206')).toBeNull();
+    expect(movieIdFromPath('/movie/tt0133093x-the-matrix')).toBeNull();
     expect(movieIdFromPath('/movies/tt0133093')).toBeNull();
     expect(movieIdFromPath('/film/tt0133093')).toBeNull();
   });
@@ -89,7 +88,6 @@ describe('isAboutPath', () => {
 
   it('is not a movie route either', () => {
     expect(movieIdFromPath('/about')).toBeNull();
-    expect(routeFrom('https://x.test/about')).toEqual({ movieId: null, path: '/about' });
   });
 });
 
@@ -105,29 +103,6 @@ describe('routeAt', () => {
     for (const path of ['/about/team', '/movie/nope', '/film/tt0133093', '']) {
       expect(routeAt(path), path).toEqual({ movieId: null, about: false });
     }
-  });
-});
-
-describe('routeFrom', () => {
-  it('keeps a movie route as it is', () => {
-    expect(routeFrom('https://x.test/movie/tt0133093-the-matrix')).toEqual({
-      movieId: 'tt0133093',
-      path: '/movie/tt0133093-the-matrix',
-    });
-  });
-  it('leaves a cold start alone', () => {
-    expect(routeFrom('https://x.test/?device=phone')).toEqual({
-      movieId: null,
-      path: '/?device=phone',
-    });
-  });
-});
-
-describe('filmHref', () => {
-  it('moves to the movie path and keeps the query', () => {
-    expect(filmHref('tt0137523', 'Fight Club', 'https://x.test/movie/tt0133093-the-matrix?device=phone')).toBe(
-      '/movie/tt0137523-fight-club?device=phone',
-    );
   });
 });
 

@@ -151,9 +151,6 @@ func (s *Store) ByTMDB(ctx context.Context, ids []int) ([]Hit, error) {
 	return out, nil
 }
 
-// FirstRunCount is how many movies the cold screen offers.
-const FirstRunCount = 8
-
 // firstRunDepth is how many candidates an era may offer before the cold
 // screen gives up on it. The first one usually has a picture; the rest
 // are there so a broken poster does not leave the era blank.
@@ -178,7 +175,7 @@ const firstRunProbe = 4 * time.Second
 // A movie with no poster, or whose poster answers 404, is not one of
 // them. The pool is built before the pictures arrive, so that choice is
 // made here, and the next candidate in the era takes the place.
-func (s *Store) FirstRun(ctx context.Context, _ int) ([]Hit, error) {
+func (s *Store) FirstRun(ctx context.Context) ([]Hit, error) {
 	qctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	rows, err := s.pool.Query(qctx, `
 		SELECT tconst, title, year, poster, colour, votes, era

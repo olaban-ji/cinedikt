@@ -26,19 +26,6 @@ import (
 	"cinedikt/internal/omdb"
 )
 
-// Where a stored synopsis came from.
-const (
-	SynopsisOMDb = "omdb"
-	SynopsisTMDb = "tmdb"
-)
-
-// SynopsisSweepMinVotes is how well known a title has to be for the
-// synopsis job to ask about it before any reader has met it. Zero is
-// every film: the sweep reaches the whole catalog, most voted first,
-// behind the films readers have met. Below a higher floor, a film is
-// asked about only once a card for it has been drawn.
-const SynopsisSweepMinVotes = 0
-
 // SynopsisBatch is how many titles are claimed per round. Small, so a
 // title a reader has just met waits behind a handful rather than a page.
 const SynopsisBatch = 50
@@ -188,7 +175,7 @@ type plotAnswer struct {
 func (j *SynopsisJob) Run(ctx context.Context) error {
 	// A spent daily quota is shared with the poster pass. Asking anyway
 	// would start a pass only to pause it again.
-	if p, ok := j.Client.(interface{ PausedUntil() time.Time }); ok && time.Now().Before(p.PausedUntil()) {
+	if _, paused := omdbPaused(j.Client); paused {
 		return nil
 	}
 	batch := j.Batch
@@ -309,11 +296,7 @@ func (j *SynopsisJob) Run(ctx context.Context) error {
 		}
 		if spent {
 			j.Logger.Info("synopses paused on the daily limit", "found", found, "none", blank, "failed", failed)
-			until := time.Now().Add(omdb.QuotaPause)
-			if p, ok := j.Client.(interface{ PausedUntil() time.Time }); ok && p.PausedUntil().After(time.Now()) {
-				until = p.PausedUntil()
-			}
-			run.pause(notify.DailyLimit, found, failed, until)
+			run.pause(notify.DailyLimit, found, failed, quotaResumes(j.Client))
 			return nil
 		}
 	}
@@ -483,35 +466,4 @@ func (s *Store) markSynopsesWanted(ctx context.Context, ids []string) error {
 		  AND `+omdbUnanswered("t.tconst")+`
 		ON CONFLICT (tconst) DO UPDATE SET wanted_at = EXCLUDED.wanted_at`, ids)
 	return err
-}
-
-// fillSynopses keeps the synopsis job running for as long as the process
-// does.
-func fillSynopses(ctx context.Context, job *SynopsisJob, logger *slog.Logger, wakes *Wakes) {
-	waited := false
-	for {
-		ready, err := job.Store.LiveReady(ctx)
-		wait := SynopsisRest
-		switch {
-		case err != nil || !ready:
-			if !waited {
-				logger.Info("synopses waiting for a catalog")
-				waited = true
-			}
-			wait = PosterWaitForCatalog
-		default:
-			waited = false
-			err := job.Run(ctx)
-			if err != nil && ctx.Err() == nil {
-				logger.Warn("synopses", "err", err)
-			}
-			reportRun(ctx, job.Notify, notify.JobSynopses, err, time.Now().Add(wait))
-		}
-		// A reader meeting a film OMDb has not answered for, or a new
-		// catalog, is new work; the rest interval covers a wake sent
-		// while nobody was listening, and brings the queue's refill.
-		if !waitFor(ctx, wakes.Synopses, wait) {
-			return
-		}
-	}
 }

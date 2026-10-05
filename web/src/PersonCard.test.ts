@@ -12,7 +12,7 @@ import type { PreviewClock } from './preview';
 
 const KEANU = 'https://image.tmdb.org/t/p/w185/keanu.jpg';
 const LANA = 'https://image.tmdb.org/t/p/w185/lana.jpg';
-const PEOPLE = (matrix as GridPayload).people;
+const PEOPLE = (matrix as unknown as GridPayload).people;
 const who = (name: string) => PEOPLE.find((p) => p.name === name)!;
 
 /** The card as it is drawn once it is in. */

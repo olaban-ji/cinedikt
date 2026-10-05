@@ -8,7 +8,7 @@ import {
   type MutableRefObject,
   type Ref,
 } from 'react';
-import { genreLine, initialsFor, type GridFilm, type GridPayload, type GridPerson } from './grid';
+import { genreLine, initialsFor, ratingText, type GridFilm, type GridPayload, type GridPerson } from './grid';
 import { stillNow } from './motion';
 import { personColour } from './personColour';
 import { PersonFace } from './PersonFace';
@@ -266,9 +266,7 @@ export function GridSheet({ film, payload, photoOf, onOnly, onRemap, onClose, cl
               <h2 className="cd-sheet-title">{film.title}</h2>
               <div className="cd-sheet-meta">
                 <span>{film.year}</span>
-                <span className="cd-sheet-pill">
-                  {film.rating == null ? 'No rating' : film.rating.toFixed(1)}
-                </span>
+                <span className="cd-sheet-pill">{ratingText(film.rating)}</span>
                 {genres && <span className="cd-sheet-genres">{genres}</span>}
               </div>
             </div>
@@ -378,7 +376,7 @@ export function synFor(s: SynState, id: string): SynState {
 }
 
 /** What measuring the panel finds. */
-export interface SynMeasure {
+interface SynMeasure {
   lines: number;
   over: boolean;
   full: number;
@@ -419,7 +417,7 @@ export function collapsedSyn(s: SynState): SynState {
 }
 
 /** How the synopsis is drawn. */
-export interface SynView {
+interface SynView {
   /** The paragraph's max-height, in px. */
   maxHeight: number;
   /** Its line clamp, which gives the ellipsis; off while it moves or
@@ -471,7 +469,7 @@ function topIn(el: HTMLElement, body: HTMLElement): number {
 /** The paragraph's height with its whole text drawn: its clamp and its
  *  max-height taken off for one read, then put back before anything is
  *  painted. */
-export function fullHeight(p: HTMLElement): number {
+function fullHeight(p: HTMLElement): number {
   const { webkitLineClamp, maxHeight } = p.style;
   p.style.webkitLineClamp = 'unset';
   p.style.maxHeight = 'none';
@@ -666,7 +664,7 @@ export function roleLine(p: GridPerson, anchorTitle: string): string {
   return p.character ? `${p.character} in ${anchorTitle}` : `In ${anchorTitle}`;
 }
 
-export type Versus = {
+type Versus = {
   dir: 'up' | 'down' | 'same';
   delta: number;
   title: string;

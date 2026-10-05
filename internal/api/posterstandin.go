@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"cinedikt/internal/imdbid"
 	"cinedikt/internal/tmdb"
 )
 
@@ -21,7 +22,7 @@ const standInBudget = 4 * time.Second
 // read does not have to ask.
 func (s *CatalogServer) posterStandIn(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !validTConst(id) {
+	if !imdbid.Title(id) {
 		writeError(w, http.StatusBadRequest, "id must be an IMDb title id, such as tt0133093")
 		return
 	}

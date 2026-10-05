@@ -21,7 +21,6 @@ type Video struct {
 	Language string
 	// Published is when the clip went up. Zero when TMDb does not say.
 	Published time.Time
-	Name      string
 }
 
 // Videos lists the clips TMDb has for a movie, by TMDb's own id.
@@ -40,7 +39,6 @@ func (c *Client) Videos(ctx context.Context, id int) ([]Video, error) {
 			Official    bool   `json:"official"`
 			Language    string `json:"iso_639_1"`
 			PublishedAt string `json:"published_at"`
-			Name        string `json:"name"`
 		} `json:"results"`
 	}
 	if err := c.get(ctx, fmt.Sprintf("/movie/%d/videos", id), nil, &payload); err != nil {
@@ -54,7 +52,6 @@ func (c *Client) Videos(ctx context.Context, id int) ([]Video, error) {
 			Type:     strings.TrimSpace(r.Type),
 			Official: r.Official,
 			Language: strings.ToLower(strings.TrimSpace(r.Language)),
-			Name:     r.Name,
 		}
 		// TMDb writes "2014-10-02T19:00:25.000Z". RFC 3339 reads the
 		// fraction whether or not the layout names one.

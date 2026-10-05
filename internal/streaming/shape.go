@@ -23,8 +23,7 @@ type StreamingOption struct {
 	Price *Price `json:"price,omitempty"`
 	// ExpiresOn is when the option leaves, in Unix seconds. Only an
 	// option that is leaving has one.
-	ExpiresOn   int64 `json:"expiresOn,omitempty"`
-	ExpiresSoon bool  `json:"expiresSoon,omitempty"`
+	ExpiresOn int64 `json:"expiresOn,omitempty"`
 }
 
 // Service is a streaming service, or an addon channel, with its logos.
@@ -112,11 +111,6 @@ type Offer struct {
 type Logo struct {
 	Dark  string `json:"dark"`
 	Light string `json:"light"`
-}
-
-// Empty reports whether the movie is on nothing at all.
-func (a Answer) Empty() bool {
-	return len(a.Stream) == 0 && len(a.Free) == 0 && len(a.Rent) == 0 && len(a.Buy) == 0
 }
 
 // Normalise gives every list a value, so an answer read back from

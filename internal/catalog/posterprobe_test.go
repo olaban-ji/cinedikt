@@ -47,7 +47,7 @@ func TestAskPosterTreats404AsMissing(t *testing.T) {
 	}
 }
 
-func TestRememberPosterMissingKeepsADefiniteAnswer(t *testing.T) {
+func TestRememberPosterGoneKeepsADefiniteAnswer(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -56,10 +56,10 @@ func TestRememberPosterMissingKeepsADefiniteAnswer(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	raw := srv.URL + "/cached.jpg"
-	if !rememberPosterMissing(context.Background(), raw) {
+	if missing, _ := rememberPosterGone(context.Background(), raw); !missing {
 		t.Fatal("a 404 was kept")
 	}
-	if !rememberPosterMissing(context.Background(), raw) {
+	if missing, _ := rememberPosterGone(context.Background(), raw); !missing {
 		t.Fatal("the remembered 404 was kept the second time")
 	}
 	if hits.Load() != 1 {

@@ -20,7 +20,6 @@ const person = (id: string, name: string, photo?: string): GridPerson => ({
   id,
   name,
   role: 'cast',
-  order: 0,
   ...(photo ? { photo } : {}),
 });
 
@@ -158,7 +157,7 @@ describe('the About page’s route', () => {
   });
 
   it('is pushed from a map too, leaving the map behind', () => {
-    const h = at('/movie/tt0133093-the-matrix', { movie: 'tt0133093', depth: 1, filters: freshFilters() });
+    const h = at('/movie/tt0133093-the-matrix', { depth: 1, filters: freshFilters() });
     route().openAbout(click());
     expect(h.pushState).toHaveBeenCalledWith({ depth: 2, filters: freshFilters() }, '', '/about');
     expect(routeAt(location.pathname)).toEqual({ movieId: null, about: true });
@@ -221,7 +220,7 @@ describe('the About page’s route', () => {
     const adopt = { current: vi.fn() };
     route(adopt).openMovie('tt0133093', 'The Matrix');
     expect(h.pushState).toHaveBeenCalledWith(
-      { movie: 'tt0133093', depth: 2, filters: freshFilters() },
+      { depth: 2, filters: freshFilters() },
       '',
       '/movie/tt0133093-the-matrix',
     );

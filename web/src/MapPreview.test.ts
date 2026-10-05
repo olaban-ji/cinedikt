@@ -111,7 +111,7 @@ function playerWith(play: Play | null): Player {
 }
 
 /** The Matrix's twelve, directors first, as its map lists them. */
-const PEOPLE = (matrix as GridPayload).people;
+const PEOPLE = (matrix as unknown as GridPayload).people;
 
 /** The preview as its first render draws it, on The Matrix's map. */
 function preview(
@@ -229,13 +229,12 @@ describe('the hover preview as it leaves', () => {
   const classOf = (more: Partial<ComponentProps<typeof MapPreview>>) => tag(more).match(/class="([^"]*)"/)?.[1];
 
   it('takes cd-preview-out, with -out-playing for its trailer, or -gone giving way to the next card’s', () => {
+    // Not leaving, or taken back while it was: the entrance alone.
     expect(classOf({})).toBe('cd-preview cd-preview-left');
+    expect(leavingClass(undefined)).toBe('');
     expect(classOf({ leaving: 'plain' })).toBe('cd-preview cd-preview-left cd-preview-out');
     expect(classOf({ leaving: 'playing' })).toBe('cd-preview cd-preview-left cd-preview-out cd-preview-out-playing');
     expect(classOf({ leaving: 'gone' })).toBe('cd-preview cd-preview-left cd-preview-out cd-preview-gone');
-    // Taken back, it simply loses them, and the entrance takes over.
-    expect(classOf({ back: true })).toBe('cd-preview cd-preview-left');
-    expect(leavingClass(undefined)).toBe('');
   });
 
   it('is inert and hidden only while giving way: one leaving can still be taken back by the pointer', () => {
@@ -523,8 +522,8 @@ describe('a bigger photo from the hover preview’s faces', () => {
         '<span class="cd-preview-face" title="Keanu Reeves" style="--tone:',
       );
     }
-    // Taken back, its faces open one again.
-    expect(preview(KEY, people, undefined, null, photoOf, { back: true })).not.toContain('title="Keanu Reeves"');
+    // Taken back, it is no longer leaving, and its faces open one again.
+    expect(preview(KEY, people, undefined, null, photoOf)).not.toContain('title="Keanu Reeves"');
   });
 });
 
@@ -541,7 +540,7 @@ const service = (id: string, name: string, more: Partial<WatchOffer> = {}): Watc
 function streams(groups: Partial<Pick<WhereToWatch, 'stream' | 'free' | 'rent' | 'buy'>>): WatchState {
   return {
     status: 'ok',
-    data: { country: 'us', countryName: 'United States', covered: true, stream: [], free: [], rent: [], buy: [], ...groups },
+    data: { countryName: 'United States', covered: true, stream: [], free: [], rent: [], buy: [], ...groups },
   };
 }
 
@@ -626,7 +625,7 @@ describe('the hover preview’s Stream row', () => {
     const none: WatchState[] = [
       streams({ rent: [service('apple', 'Apple TV', { price: '3.99 USD' })], buy: [service('apple', 'Apple TV')] }),
       streams({}),
-      { status: 'ok', data: { country: 'xx', covered: false, stream: [], free: [], rent: [], buy: [] } },
+      { status: 'ok', data: { covered: false, stream: [], free: [], rent: [], buy: [] } },
       { status: 'wait', data: null },
       { status: 'error', data: null },
     ];

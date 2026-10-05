@@ -20,11 +20,11 @@ export const ABOUT_GAP = 14;
  *  controls. */
 export const TRAILER_ROW_H = 44;
 /** The room kept under the trailer row when the synopsis rests. */
-export const REST_ROOM = 16;
+const REST_ROOM = 16;
 /** How far above the body's bottom edge an open video ends. */
-export const VIDEO_ROOM = 12;
+const VIDEO_ROOM = 12;
 /** How far below the body's top edge the controls row may be scrolled. */
-export const ROW_ROOM = 8;
+const ROW_ROOM = 8;
 
 /** More opens the rest on the glide curve; Less folds it back, easing
  *  in and out. */

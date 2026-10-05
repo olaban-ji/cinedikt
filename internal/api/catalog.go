@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"cinedikt/internal/catalog"
+	"cinedikt/internal/imdbid"
 	"cinedikt/internal/tmdb"
 )
 
@@ -22,9 +23,8 @@ type CatalogReader interface {
 	// ByTMDB resolves TMDb movie ids already matched to this catalog,
 	// in the order given. An id with no row is left out.
 	ByTMDB(ctx context.Context, ids []int) ([]catalog.Hit, error)
-	FirstRun(ctx context.Context, pool int) ([]catalog.Hit, error)
+	FirstRun(ctx context.Context) ([]catalog.Hit, error)
 	LiveReady(ctx context.Context) (bool, error)
-	Ping(ctx context.Context) error
 }
 
 // CatalogServer serves maps out of the catalog.
@@ -52,10 +52,9 @@ type CatalogServer struct {
 	photosLooked bool
 	// watch answers where a movie can be watched, and geo places a reader
 	// in a country for it. A nil watch answers 503; a nil geo places
-	// readers only by a CDN's country header.
-	watch     WhereToWatch
-	geo       CountryLookup
-	geoHeader string
+	// nobody.
+	watch WhereToWatch
+	geo   CountryLookup
 }
 
 // PosterLookup is TMDb's mapping from an IMDb title to a picture.
@@ -91,7 +90,7 @@ const SearchHits = 10
 // every card's place. There is no second request for the shape of it.
 func (s *CatalogServer) movieGrid(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if !validTConst(id) {
+	if !imdbid.Title(id) {
 		writeError(w, http.StatusBadRequest, "id must be an IMDb title id, such as tt0133093")
 		return
 	}
@@ -104,11 +103,7 @@ func (s *CatalogServer) movieGrid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		if gone(r) {
-			return
-		}
-		s.Logger.Error("grid", "id", id, "err", err)
-		writeError(w, http.StatusInternalServerError, "could not build that map")
+		s.failed(w, r, http.StatusInternalServerError, "could not build that map", slog.LevelError, err, "grid", "id", id)
 		return
 	}
 	noStore(w)
@@ -118,36 +113,17 @@ func (s *CatalogServer) movieGrid(w http.ResponseWriter, r *http.Request) {
 // movieGridFilms is what the cards on screen say, asked for by id.
 func (s *CatalogServer) movieGridFilms(w http.ResponseWriter, r *http.Request) {
 	anchor := r.PathValue("id")
-	if !validTConst(anchor) {
+	if !imdbid.Title(anchor) {
 		writeError(w, http.StatusBadRequest, "id must be an IMDb title id, such as tt0133093")
 		return
 	}
-	raw := r.URL.Query().Get("ids")
-	if raw == "" {
-		writeError(w, http.StatusBadRequest, "ids is required")
-		return
-	}
-	ids := strings.Split(raw, ",")
-	if len(ids) > MaxDetailIDs {
-		writeError(w, http.StatusBadRequest, "too many ids")
-		return
-	}
-	for _, id := range ids {
-		if !validTConst(id) {
-			writeError(w, http.StatusBadRequest, "ids must be IMDb title ids")
-			return
-		}
-	}
-	if !s.ready(w, r) {
+	ids, ok := idsParam(w, r, MaxDetailIDs, imdbid.Title, "ids must be IMDb title ids")
+	if !ok || !s.ready(w, r) {
 		return
 	}
 	films, err := s.Catalog.Films(r.Context(), anchor, ids)
 	if err != nil {
-		if gone(r) {
-			return
-		}
-		s.Logger.Error("grid films", "anchor", anchor, "err", err)
-		writeError(w, http.StatusInternalServerError, "could not read those films")
+		s.failed(w, r, http.StatusInternalServerError, "could not read those films", slog.LevelError, err, "grid films", "anchor", anchor)
 		return
 	}
 	noStore(w)
@@ -160,12 +136,12 @@ func (s *CatalogServer) firstRun(w http.ResponseWriter, r *http.Request) {
 	if !s.ready(w, r) {
 		return
 	}
-	hits, err := s.Catalog.FirstRun(r.Context(), 0)
+	hits, err := s.Catalog.FirstRun(r.Context())
 	if err != nil && gone(r) {
 		return
 	}
 	if err != nil {
-		s.Logger.Error("first run", "err", err)
+		s.log(slog.LevelError, "first run", err)
 		// An empty screen is better than an error on the way in.
 		hits = nil
 	}
@@ -189,11 +165,7 @@ func (s *CatalogServer) searchMovies(w http.ResponseWriter, r *http.Request) {
 	}
 	hits, err := s.Catalog.Search(r.Context(), q, SearchHits)
 	if err != nil {
-		if gone(r) {
-			return
-		}
-		s.Logger.Error("search", "err", err)
-		writeError(w, http.StatusInternalServerError, "could not search")
+		s.failed(w, r, http.StatusInternalServerError, "could not search", slog.LevelError, err, "search")
 		return
 	}
 	if len(hits) == 0 {
@@ -213,11 +185,7 @@ func (s *CatalogServer) searchMovies(w http.ResponseWriter, r *http.Request) {
 func (s *CatalogServer) ready(w http.ResponseWriter, r *http.Request) bool {
 	ok, err := s.Catalog.LiveReady(r.Context())
 	if err != nil {
-		if gone(r) {
-			return false
-		}
-		s.Logger.Error("readiness", "err", err)
-		writeError(w, http.StatusServiceUnavailable, "the catalog is unavailable")
+		s.failed(w, r, http.StatusServiceUnavailable, "the catalog is unavailable", slog.LevelError, err, "readiness")
 		return false
 	}
 	if !ok {
@@ -239,18 +207,53 @@ func gone(r *http.Request) bool {
 	return errors.Is(r.Context().Err(), context.Canceled)
 }
 
-// validTConst is IMDb's title id: "tt" and at least seven digits, though
-// the length has grown over the years and is not assumed here.
-func validTConst(id string) bool {
-	if len(id) < 3 || len(id) > 20 || !strings.HasPrefix(id, "tt") {
-		return false
+// failed answers a request whose read failed with err: with nothing when
+// the reader has gone, and otherwise with status and msg, err going to
+// the log at level as what, with args. The error itself is never the
+// reader's: it may name the database, or a service and what it said.
+func (s *CatalogServer) failed(w http.ResponseWriter, r *http.Request, status int, msg string, level slog.Level, err error, what string, args ...any) {
+	if gone(r) {
+		return
 	}
-	for i := 2; i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
-			return false
+	s.log(level, what, err, args...)
+	writeError(w, status, msg)
+}
+
+// log records err at level as what, with args. A server built without a
+// logger, as the tests build one, logs nothing.
+func (s *CatalogServer) log(level slog.Level, what string, err error, args ...any) {
+	if s.Logger != nil {
+		s.Logger.Log(context.Background(), level, what, append(args, "err", err)...)
+	}
+}
+
+// idsParam reads the ids query parameter: a comma-separated list of at
+// most max ids, each one valid, returned once each in the order given.
+// A list that is missing, too long or holds anything else is answered
+// with a 400, badShape saying what the ids must be, and ok is false.
+func idsParam(w http.ResponseWriter, r *http.Request, max int, valid func(string) bool, badShape string) (ids []string, ok bool) {
+	raw := r.URL.Query().Get("ids")
+	if raw == "" {
+		writeError(w, http.StatusBadRequest, "ids is required")
+		return nil, false
+	}
+	asked := strings.Split(raw, ",")
+	if len(asked) > max {
+		writeError(w, http.StatusBadRequest, "too many ids")
+		return nil, false
+	}
+	seen := make(map[string]bool, len(asked))
+	for _, id := range asked {
+		if !valid(id) {
+			writeError(w, http.StatusBadRequest, badShape)
+			return nil, false
+		}
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
-	return true
+	return ids, true
 }
 
 // noStore keeps a map out of caches. It is built from a catalog that is

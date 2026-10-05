@@ -19,8 +19,8 @@ func TestInitOutsideProductionDoesNotReport(t *testing.T) {
 	if err := Init(cfg, logger); err != nil {
 		t.Fatalf("Init() = %v, want nil", err)
 	}
-	if Client() != nil {
-		t.Fatal("Client() != nil: development must not send events")
+	if client != nil {
+		t.Fatal("client != nil: development must not send events")
 	}
 	if got := Logger(logger, "cinedikt-api"); got != logger {
 		t.Fatal("Logger() wrapped a client that should not exist")
@@ -48,8 +48,8 @@ func TestInitWithoutConfigIsNeverFatal(t *testing.T) {
 			if err := Init(tc.cfg, discardLogger()); err != nil {
 				t.Fatalf("Init() = %v, want nil", err)
 			}
-			if Client() != nil {
-				t.Fatal("Client() != nil without full configuration")
+			if client != nil {
+				t.Fatal("client != nil without full configuration")
 			}
 		})
 	}
@@ -82,8 +82,8 @@ func TestInitInProductionCreatesAClient(t *testing.T) {
 	if err := Init(cfg, discardLogger()); err != nil {
 		t.Fatalf("Init() = %v, want nil", err)
 	}
-	if Client() == nil {
-		t.Fatal("Client() = nil, want a configured client")
+	if client == nil {
+		t.Fatal("client = nil, want a configured client")
 	}
 	logger := discardLogger()
 	if got := Logger(logger, "cinedikt-api"); got == logger {
@@ -102,8 +102,8 @@ func TestInitSwitchedOffDoesNotReport(t *testing.T) {
 	if err := Init(cfg, discardLogger()); err != nil {
 		t.Fatalf("Init() = %v, want nil", err)
 	}
-	if Client() != nil {
-		t.Fatal("Client() is configured with analytics switched off")
+	if client != nil {
+		t.Fatal("client is configured with analytics switched off")
 	}
 	logger := discardLogger()
 	if got := Logger(logger, "cinedikt-api"); got != logger {

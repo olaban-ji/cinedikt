@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { stillNow } from './motion';
 
 /** A layer arrives in three steps: it mounts off-screen, a moment later
  *  it is let in, and on the way out it is given its exit before anything
  *  else happens. The moment is a timer rather than a frame, so a layer
  *  raised on a page that is not being painted still opens. */
 export const ENTER_MS = 20;
+
+/** Whether something that has just mounted is let in yet: not for the
+ *  first ENTER_MS, so its entrance has somewhere to run from, and at
+ *  once for a reader who has asked for nothing to move. A timer, as the
+ *  layers use, rather than a frame. */
+export function useEntered(): boolean {
+  const [shown, setShown] = useState(stillNow);
+  useEffect(() => {
+    const t = window.setTimeout(() => setShown(true), ENTER_MS);
+    return () => window.clearTimeout(t);
+  }, []);
+  return shown;
+}
 
 /** How long each layer's exit is given before it leaves the tree, and
  *  before whatever it was asked to do is done: the length of the exit
@@ -21,16 +35,6 @@ export function exitDelay(ms: number, still: boolean): number {
   return still ? 0 : ms;
 }
 
-/** Read when the exit starts rather than watched, so a setting changed
- *  while a layer is open is the one its exit obeys. */
-function stillNow(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
-}
-
 /** Let a phone sheet go further down than this and it closes; anything
  *  less and it springs back. */
 export const CLOSE_AT = 90;
@@ -45,9 +49,9 @@ export function closesOn(offset: number): boolean {
   return offset > CLOSE_AT;
 }
 
-export type Phase = 'mounted' | 'in' | 'out';
+type Phase = 'mounted' | 'in' | 'out';
 
-export interface Glide {
+interface Glide {
   phase: Phase;
   /** Start the exit. `then` runs once the layer is gone, so nothing
    *  happens underneath a sheet that is still leaving. */
@@ -71,6 +75,8 @@ export function useGlide(onGone: () => void, exitMs: number): Glide {
   const leave = useCallback((then?: () => void) => {
     window.clearTimeout(timer.current);
     setPhase('out');
+    // Read now rather than watched, so a setting changed while the layer
+    // is open is the one its exit obeys.
     const wait = exitDelay(exitMs, stillNow());
     timer.current = window.setTimeout(() => {
       gone.current();
@@ -135,7 +141,7 @@ export function useFocusTrapped(ref: { current: HTMLElement | null }): void {
   }, []);
 }
 
-export interface Drag {
+interface Drag {
   /** How far down the sheet is being held, in pixels. */
   y: number;
   /** Held right now, so the sheet follows the finger with no transition. */

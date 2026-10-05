@@ -124,12 +124,9 @@ type Server struct {
 	lastModified string
 }
 
-// PermalinkPath and LegacyPath are where the stand-in answers, in place
-// of MaxMind's two addresses.
-const (
-	PermalinkPath = "/geoip/databases/GeoLite2-Country/download"
-	LegacyPath    = "/app/geoip_download"
-)
+// PermalinkPath is where the stand-in answers, in place of MaxMind's
+// address.
+const PermalinkPath = "/geoip/databases/GeoLite2-Country/download"
 
 // NewServer serves body as the newest database, built at built.
 func NewServer(tb testing.TB, body []byte, built time.Time) *Server {
@@ -149,32 +146,20 @@ func (s *Server) Set(body []byte, built time.Time) {
 	s.lastModified = built.UTC().Format(http.TimeFormat)
 }
 
-// PermalinkURL and LegacyURL are the stand-in's two addresses, shaped
-// like MaxMind's.
+// PermalinkURL is the stand-in's address, shaped like MaxMind's.
 func (s *Server) PermalinkURL() string { return s.URL + PermalinkPath + "?suffix=tar.gz" }
-func (s *Server) LegacyURL() string {
-	return s.URL + LegacyPath + "?edition_id=GeoLite2-Country&suffix=tar.gz"
-}
 
 // Heads and Gets are how many of each the stand-in has answered.
 func (s *Server) Heads() int { return int(s.heads.Load()) }
 func (s *Server) Gets() int  { return int(s.gets.Load()) }
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case PermalinkPath:
-		user, pass, ok := r.BasicAuth()
-		if !ok || user != Account || pass != License {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-	case LegacyPath:
-		if r.URL.Query().Get("license_key") != License {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-	default:
+	if r.URL.Path != PermalinkPath {
 		http.NotFound(w, r)
+		return
+	}
+	if user, pass, ok := r.BasicAuth(); !ok || user != Account || pass != License {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	s.mu.Lock()

@@ -27,9 +27,9 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=api /out/api /app/api
 COPY --from=web /web/dist /app/web/dist
-# A deployed image is production by construction, so analytics is never
-# off because someone forgot a variable. Railway injects PORT; see
-# internal/config.listenAddr.
+# A deployed image is production by construction: it logs JSON to
+# stdout, and its trackers answer to ANALYTICS_ENABLED alone, off until
+# that is "true". Railway injects PORT; see internal/config.listenAddr.
 ENV APP_ENV=production \
     WEB_DIR=/app/web/dist
 USER nobody

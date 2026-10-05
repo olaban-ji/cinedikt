@@ -16,7 +16,7 @@ import (
 )
 
 func TestSearchUsesTheCatalogWhenItHasAMatch(t *testing.T) {
-	out := &tmdbStub{results: []tmdb.Movie{{ID: 1, Title: "Elsewhere"}}}
+	out := &tmdbStub{results: []tmdb.Movie{{ID: 1}}}
 	body := searchBody(t, catalogStub{
 		hits: []catalog.Hit{{ID: "tt0133093", Title: "The Matrix", Year: 1999}},
 	}, out, "matrix")
@@ -30,10 +30,10 @@ func TestSearchUsesTheCatalogWhenItHasAMatch(t *testing.T) {
 
 func TestSearchFallsBackToTMDbWhenTheCatalogIsEmpty(t *testing.T) {
 	out := &tmdbStub{results: []tmdb.Movie{
-		{ID: 11, Title: "Not in the catalog"},
-		{ID: 603, Title: "The Matrix"},
-		{ID: 604, Title: "Also missing"},
-		{ID: 278, Title: "The Shawshank Redemption"},
+		{ID: 11},  // not in the catalog
+		{ID: 603}, // The Matrix
+		{ID: 604}, // not in the catalog
+		{ID: 278}, // The Shawshank Redemption
 	}}
 	cat := catalogStub{byTMDB: map[int]catalog.Hit{
 		278: {ID: "tt0111161", Title: "The Shawshank Redemption", Year: 1994},
@@ -156,9 +156,8 @@ func (c catalogStub) ByTMDB(_ context.Context, ids []int) ([]catalog.Hit, error)
 	}
 	return out, nil
 }
-func (catalogStub) FirstRun(context.Context, int) ([]catalog.Hit, error) { return nil, nil }
-func (catalogStub) LiveReady(context.Context) (bool, error)              { return true, nil }
-func (catalogStub) Ping(context.Context) error                           { return nil }
+func (catalogStub) FirstRun(context.Context) ([]catalog.Hit, error) { return nil, nil }
+func (catalogStub) LiveReady(context.Context) (bool, error)         { return true, nil }
 
 type tmdbStub struct {
 	results   []tmdb.Movie

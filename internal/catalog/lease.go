@@ -25,8 +25,9 @@ import (
 
 // LeaseKey is the advisory lock the runner holds for its whole life.
 // Deliberately not importLockKey: the import keeps its own short lock
-// around the download and the swap, so a one-off `-once` still cannot
-// publish beside anything else.
+// around the download and the swap, so an import still unwinding in a
+// process that has just lost the lease cannot publish beside the one
+// the new holder starts.
 const LeaseKey int64 = 0x6369_6e6a // "cinj"
 
 // LeaseRetry is how often a process that did not get the lease tries
@@ -339,5 +340,24 @@ func waitFor(ctx context.Context, wake <-chan struct{}, backstop time.Duration) 
 		return true
 	case <-timer.C:
 		return true
+	}
+}
+
+// waitForEither is waitFor with two wakes: a new generation and a
+// reader's mark, for the jobs that have both. byWake says it was the
+// first. A nil channel never fires, so a job with one wake passes nil
+// for the other.
+func waitForEither(ctx context.Context, wake, wanted <-chan struct{}, backstop time.Duration) (woke, byWake bool) {
+	timer := time.NewTimer(backstop)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false, false
+	case <-wake:
+		return true, true
+	case <-wanted:
+		return true, false
+	case <-timer.C:
+		return true, false
 	}
 }

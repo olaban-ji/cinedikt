@@ -57,7 +57,7 @@ const SWITCHES: {
  *  Hiding the empty years is not one of them: it keeps the searched
  *  film where it is on the glass and moves the rest around it, so
  *  recentring would undo the one thing that makes it readable. */
-export function movesTheMap(key: keyof GridSettings): boolean {
+function movesTheMap(key: keyof GridSettings): boolean {
   return (
     key === 'yearOrder' ||
     key === 'showUnrated' ||

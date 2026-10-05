@@ -3,6 +3,7 @@ import {
   settingsFrom,
   type GridSettings,
 } from './grid';
+import { isImdbId } from './movieParam';
 
 /** What narrows one map: who is selected, the rating floor, the year
  *  window, the genres picked, and whether empty years are hidden.
@@ -34,13 +35,10 @@ export function freshFilters(): MapFilters {
 
 /** The history entry for a movie opened forward: search, a card, home.
  *  Back through that entry is what restores the filters, so a forward
- *  step stores a clear map rather than copying the one being left. */
-export function forwardEntry(
-  movie: string | null,
-  depth: number,
-): { depth: number; movie?: string; filters: MapFilters } {
-  const filters = freshFilters();
-  return movie === null ? { depth, filters } : { movie, depth, filters };
+ *  step stores a clear map rather than copying the one being left. The
+ *  movie is not stored: the address names it. */
+export function forwardEntry(depth: number): { depth: number; filters: MapFilters } {
+  return { depth, filters: freshFilters() };
 }
 
 /** Filters saved on the entry being returned to. Missing or nonsense
@@ -61,8 +59,8 @@ export function filtersFromState(state: unknown): MapFilters {
   };
 }
 
-/** Write filters onto the entry the reader is on, keeping the movie
- *  and the depth already stored there. */
+/** Write filters onto the entry the reader is on, keeping the depth
+ *  already stored there. */
 export function stampFilters(state: unknown, filters: MapFilters): Record<string, unknown> {
   const base: Record<string, unknown> =
     state !== null && typeof state === 'object' ? { ...(state as Record<string, unknown>) } : {};
@@ -148,7 +146,7 @@ function peopleOf(v: unknown): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const id of v) {
-    if (typeof id !== 'string' || !/^nm\d{1,12}$/.test(id) || seen.has(id)) continue;
+    if (typeof id !== 'string' || !isImdbId(id, 'nm') || seen.has(id)) continue;
     seen.add(id);
     out.push(id);
     if (out.length === 80) break;

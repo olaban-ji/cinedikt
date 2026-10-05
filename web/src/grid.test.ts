@@ -113,7 +113,6 @@ function castOf(n: number): GridPerson[] {
     id: `nm${String(i).padStart(7, '0')}`,
     name: `Person ${i}`,
     role: 'cast' as const,
-    order: i,
   }));
 }
 
@@ -450,8 +449,8 @@ describe('initials', () => {
     // Both Wachowskis are L + Wachowski, which is exactly the case the
     // spec's own rule cannot separate.
     const codes = initialsFor([
-      { id: 'nm0000001', name: 'Lana Wachowski', role: 'director', order: -1 },
-      { id: 'nm0000002', name: 'Lilly Wachowski', role: 'director', order: -1 },
+      { id: 'nm0000001', name: 'Lana Wachowski', role: 'director' },
+      { id: 'nm0000002', name: 'Lilly Wachowski', role: 'director' },
     ]);
     expect(codes.get('nm0000001')).toBe('LaW');
     expect(codes.get('nm0000002')).toBe('LiW');
@@ -464,7 +463,7 @@ describe('initials', () => {
   });
 
   it('copes with a single name', () => {
-    const codes = initialsFor([{ id: 'nm0000001', name: 'Cher', role: 'cast', order: 0 }]);
+    const codes = initialsFor([{ id: 'nm0000001', name: 'Cher', role: 'cast' }]);
     expect(codes.get('nm0000001')).toBe('C');
   });
 });
@@ -656,16 +655,6 @@ describe('the card, now that Compact is gone', () => {
     const large = layoutGrid(real, 844, settings());
     expect(compact.metrics.cardW).toBe(132);
     expect(large.metrics.cardW).toBe(168);
-  });
-
-  it('has no density setting left to read', () => {
-    expect('density' in DEFAULT_SETTINGS).toBe(false);
-  });
-
-  it('drops the stored density of an install from before it went', () => {
-    const s = settingsFrom(JSON.stringify({ density: 'compact', yearOrder: 'newest' }));
-    expect('density' in s).toBe(false);
-    expect(s.yearOrder).toBe('newest');
   });
 
   it('falls back to the defaults for nothing stored, or nonsense', () => {
@@ -1332,7 +1321,7 @@ describe('the spine', () => {
     expect(spineOf(p).map((f) => f.genres)).toEqual([65537, 0, 0]);
     // 65537 is Action and Sci-Fi, as the server's test has it.
     expect(bitsOf('Action', 'Sci-Fi')).toBe(65537);
-    // The graph path's spine is five long with no legend, or shorter.
+    // A spine with no legend, like the fixture's, is five long or shorter.
     expect(spineOf(real).every((f) => f.genres === 0)).toBe(true);
   });
 

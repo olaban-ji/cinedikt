@@ -17,11 +17,13 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"cinedikt/internal/httpretry"
+	"cinedikt/internal/imdbid"
 )
 
 // DefaultBaseURL is version 4 of the API on Movie of the Night's own
@@ -76,11 +78,6 @@ type Option func(*Client)
 // tests stand in for the API.
 func WithBaseURL(u string) Option { return func(c *Client) { c.baseURL = strings.TrimRight(u, "/") } }
 
-// WithHTTPClient replaces the default HTTP client. That one follows no
-// redirect, and one given here should not either, or the key goes with
-// the redirect wherever it points.
-func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
-
 // WithRate sets how many requests a second the client may make. Zero or
 // less, or a number that is not one, takes DefaultRatePerSecond.
 func WithRate(perSecond float64) Option {
@@ -100,7 +97,7 @@ func New(key string, opts ...Option) *Client {
 		baseURL: DefaultBaseURL,
 		key:     key,
 		limiter: newLimiter(DefaultRatePerSecond),
-		sleep:   sleepCtx,
+		sleep:   httpretry.SleepCtx,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -123,7 +120,7 @@ func newLimiter(perSecond float64) *rate.Limiter {
 // ErrNotFound means the API has no such show: the movie is on nothing,
 // which is as definite as an empty list.
 func (c *Client) Show(ctx context.Context, imdbID, country string) ([]StreamingOption, error) {
-	if !validIMDbID(imdbID) {
+	if !imdbid.Title(imdbID) {
 		return nil, fmt.Errorf("streaming: %q is not an IMDb title id", imdbID)
 	}
 	if !ValidCountry(country) {
@@ -186,19 +183,6 @@ func ValidCountry(cc string) bool {
 	return len(cc) == 2 && cc[0] >= 'a' && cc[0] <= 'z' && cc[1] >= 'a' && cc[1] <= 'z'
 }
 
-// validIMDbID is IMDb's title id: "tt" and digits.
-func validIMDbID(id string) bool {
-	if len(id) < 3 || len(id) > 20 || !strings.HasPrefix(id, "tt") {
-		return false
-	}
-	for i := 2; i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
 // maxAttempts is one request and two retries. A reader is waiting on the
 // first ask, so there is no budget for more.
 const maxAttempts = 3
@@ -210,81 +194,49 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 	if len(q) > 0 {
 		target += "?" + q.Encode()
 	}
-	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if err := c.limiter.Wait(ctx); err != nil {
-			return err
-		}
-		body, retryAfter, err := c.do(ctx, path, target)
-		if err == nil {
-			if err := json.Unmarshal(body, out); err != nil {
-				return fmt.Errorf("streaming: decode %s: %w", path, err)
-			}
-			return nil
-		}
-		var re *retryable
-		if !errors.As(err, &re) {
-			return err
-		}
-		lastErr = re.err
-		if attempt == maxAttempts-1 {
-			break
-		}
-		wait := retryAfter
-		if wait <= 0 {
-			wait = time.Duration(1<<attempt) * 500 * time.Millisecond
-		}
-		// A wait that outlasts the caller's deadline is no wait at all:
-		// whoever asked has gone by the time it ends.
-		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < wait {
-			return lastErr
-		}
-		if err := c.sleep(ctx, wait); err != nil {
-			return err
-		}
+	retry := httpretry.Policy{Name: "streaming", Attempts: maxAttempts, Limiter: c.limiter, Sleep: c.sleep}
+	body, err := retry.Do(ctx, func() ([]byte, error) { return c.do(ctx, path, target) })
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("streaming: giving up after %d attempts: %w", maxAttempts, lastErr)
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("streaming: decode %s: %w", path, err)
+	}
+	return nil
 }
 
 // do is one request. The key goes in a header, never the address, so no
 // error that quotes the address can carry it.
-func (c *Client) do(ctx context.Context, path, target string) ([]byte, time.Duration, error) {
+func (c *Client) do(ctx context.Context, path, target string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-API-Key", c.key)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, 0, ctx.Err()
-		}
-		return nil, 0, &retryable{err: fmt.Errorf("streaming: GET %s: %w", path, err)}
+		return nil, &httpretry.Retryable{Err: fmt.Errorf("streaming: GET %s: %w", path, err)}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, 0, &retryable{err: fmt.Errorf("streaming: read %s: %w", path, err)}
+		return nil, &httpretry.Retryable{Err: fmt.Errorf("streaming: read %s: %w", path, err)}
 	}
 	switch {
 	case resp.StatusCode == http.StatusOK:
-		return body, 0, nil
+		return body, nil
 	case resp.StatusCode == http.StatusNotFound:
-		return nil, 0, ErrNotFound
+		return nil, ErrNotFound
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, 0, fmt.Errorf("%w (HTTP %d)", ErrKey, resp.StatusCode)
-	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
-		return nil, parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()), &retryable{err: statusError(resp.StatusCode, body)}
+		return nil, fmt.Errorf("%w (HTTP %d)", ErrKey, resp.StatusCode)
+	case httpretry.RetryStatus(resp.StatusCode):
+		return nil, &httpretry.Retryable{Err: statusError(resp.StatusCode, body),
+			After: httpretry.ParseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	default:
-		return nil, 0, statusError(resp.StatusCode, body)
+		return nil, statusError(resp.StatusCode, body)
 	}
 }
-
-type retryable struct{ err error }
-
-func (e *retryable) Error() string { return e.err.Error() }
-func (e *retryable) Unwrap() error { return e.err }
 
 func statusError(status int, body []byte) error {
 	var msg struct {
@@ -296,34 +248,4 @@ func statusError(status int, body []byte) error {
 		m = m[:200]
 	}
 	return &StatusError{Status: status, Message: m}
-}
-
-// parseRetryAfter reads either form the header takes: a number of
-// seconds, or a date.
-func parseRetryAfter(v string, now time.Time) time.Duration {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.Atoi(v); err == nil {
-		if secs <= 0 {
-			return 0
-		}
-		return time.Duration(secs) * time.Second
-	}
-	if at, err := http.ParseTime(v); err == nil && at.After(now) {
-		return at.Sub(now)
-	}
-	return 0
-}
-
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
 }

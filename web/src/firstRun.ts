@@ -40,12 +40,6 @@ const GEOMETRY: Record<ScreenClass, ColdGeometry> = {
 const SIDE = 20;
 const COLUMN_GAP = 12;
 
-/** Columns in `.cd-tiles`: two on a phone, all eight in one row on a
- *  landscape phone, four everywhere else. */
-export function coldColumns(vw: number, vh: number): number {
-  return GEOMETRY[screenOf(vw, vh).cls].columns;
-}
-
 /** The padding `.cd-cold` takes off the top: 36 on a phone, 18 on a
  *  landscape phone, and otherwise `clamp(28px, 6vh, 110px)`, or 9vh on a
  *  window 860px tall or more. */
@@ -93,15 +87,12 @@ export function coldScreenCount(vw: number, vh: number, gridTop?: number): numbe
   return Math.min(COLD_MAX, columns * rows);
 }
 
-/** Every film on the shelves, for anything that needs the whole set. */
 /** The films the cold screen can actually show, out of what the API
  *  sent: one tile per film, each with a picture and a year.
  *
- *  A long title is kept and left to the ellipsis. It used to be dropped,
- *  because the forty-eight films were hand-picked to be short and an
- *  odd one out made the screen look wrong. The catalog picks them now,
- *  and "Indiana Jones and the Temple of Doom" is an ordinary answer —
- *  refusing it emptied the whole screen over one film. */
+ *  A long title is kept and left to the ellipsis. The catalog picks the
+ *  movies, and "Indiana Jones and the Temple of Doom" is an ordinary
+ *  answer: refusing it would empty the whole screen over one movie. */
 export function tilesFrom(hits: FirstRunHit[], want = 8): FirstRunFilm[] {
   const seen = new Set<string>();
   const out: FirstRunFilm[] = [];

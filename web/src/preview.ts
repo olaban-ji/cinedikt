@@ -276,7 +276,7 @@ export const pageClock: PreviewClock = {
   cancel: (timer) => window.clearTimeout(timer),
 };
 
-export interface PreviewScheduler {
+interface PreviewScheduler {
   /** The pointer has come to rest on a card that can be opened. */
   rest: (id: string) => void;
   /** The pointer has left a card, or the preview. */

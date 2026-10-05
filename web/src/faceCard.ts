@@ -13,7 +13,7 @@ import { canHover } from './tap';
 
 /** What asked for the card: a chip in the row, or a face in the hover
  *  preview. */
-export type FaceFrom = 'chip' | 'peek';
+type FaceFrom = 'chip' | 'peek';
 
 /** The card on show. */
 export interface FaceCard {
@@ -33,10 +33,10 @@ export interface FaceCard {
 /** How wide the card is. */
 export const FACE_CARD_W = 148;
 /** How far it keeps from what asked for it, and from the window's edges. */
-export const FACE_CARD_GAP = 8;
+const FACE_CARD_GAP = 8;
 /** A preview face whose top is nearer the window's top than this has
  *  its card below it; any lower, the card goes above. */
-export const FACE_CARD_ROOM = 300;
+const FACE_CARD_ROOM = 300;
 /** The width the card draws the photo at: its 148px less its own 6px
  *  padding and the frame's 4px, on each side. At twice that for a sharp
  *  screen it is TMDb's w342; the payload's w185 is too soft this big. */
@@ -70,7 +70,7 @@ export type ImageLoad = (url: string, done: (ok: boolean) => void) => () => void
 
 /** The page's own image loading: an Image the browser keeps, so the card
  *  drawing the same address finds it in hand. */
-export const loadImage: ImageLoad = (url, done) => {
+const loadImage: ImageLoad = (url, done) => {
   let live = true;
   const img = new Image();
   img.onload = () => live && done(true);
@@ -145,7 +145,7 @@ export interface FaceHold {
   menu: () => boolean;
 }
 
-export interface FaceCardController extends FaceCardEvents, FaceHold {
+interface FaceCardController extends FaceCardEvents, FaceHold {
   /** Close it now, and forget any on its way: the map scrolling, a move
    *  to another map. */
   shut: () => void;

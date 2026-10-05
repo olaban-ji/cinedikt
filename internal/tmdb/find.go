@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"cinedikt/internal/imdbid"
 )
 
 // ImageBase is where TMDb serves artwork. It needs no key, and the
@@ -52,7 +54,8 @@ type Found struct {
 // ErrNotFound means TMDb has no movie for that id — an answer, not a
 // failure, and the caller should stop asking.
 func (c *Client) FindByIMDb(ctx context.Context, imdbID string) (Found, error) {
-	if !validIMDbID(imdbID) {
+	// A malformed id is kept out of the URL path.
+	if !imdbid.Title(imdbID) {
 		return Found{}, fmt.Errorf("tmdb: %q is not an IMDb title id", imdbID)
 	}
 	var payload struct {
@@ -102,7 +105,9 @@ type FoundPerson struct {
 // ErrNotFound means TMDb has no person for that id: an answer, not a
 // failure, and the caller should stop asking.
 func (c *Client) FindPersonByIMDb(ctx context.Context, nconst string) (FoundPerson, error) {
-	if !validIMDbName(nconst) {
+	// A title id sent here would find a movie's results and none of a
+	// person's, and read as "no such person".
+	if !imdbid.Name(nconst) {
 		return FoundPerson{}, fmt.Errorf("tmdb: %q is not an IMDb name id", nconst)
 	}
 	var payload struct {
@@ -137,26 +142,4 @@ func PosterURL(path, width string) string {
 		path = "/" + path
 	}
 	return ImageBase + "/" + width + path
-}
-
-// validIMDbID keeps a malformed title id out of a URL path.
-func validIMDbID(id string) bool { return imdbKey(id, "tt") }
-
-// validIMDbName does the same for a name id, "nm" and digits. A title
-// id sent to the person lookup would find a movie's results and none of
-// a person's, and read as "no such person".
-func validIMDbName(id string) bool { return imdbKey(id, "nm") }
-
-// imdbKey is IMDb's shape for an id: a two-letter prefix and digits,
-// seven of them or more these days, though the length is not assumed.
-func imdbKey(id, prefix string) bool {
-	if len(id) < 3 || len(id) > 20 || !strings.HasPrefix(id, prefix) {
-		return false
-	}
-	for i := len(prefix); i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
-			return false
-		}
-	}
-	return true
 }

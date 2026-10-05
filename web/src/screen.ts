@@ -38,10 +38,10 @@ export interface Screen {
   touch: boolean;
 }
 
-export const PHONE_MAX = 640;
-export const SHORT_MAX = 500;
+const PHONE_MAX = 640;
+const SHORT_MAX = 500;
 /** The width the header first has room for everything at once. */
-export const RUNGS_MIN = 1024;
+const RUNGS_MIN = 1024;
 
 /** The header row's height in each class, as `.cd-header-row` sets it.
  *  The opening screen has no chip row, so this is its whole header. */

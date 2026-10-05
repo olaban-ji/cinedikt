@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 )
@@ -188,15 +187,6 @@ func TestAnErrorAnswerStillSaysWhatItSays(t *testing.T) {
 		if _, err := parseTitle([]byte(c.body), "tt0000001"); !errors.Is(err, c.want) {
 			t.Errorf("title %q gave %v, want %v", c.body, err, c.want)
 		}
-		if _, err := parse([]byte(c.body), "tt0000001"); !errors.Is(err, c.want) {
-			t.Errorf("rating %q gave %v, want %v", c.body, err, c.want)
-		}
-		if c.want == ErrKey {
-			continue // search does not tell a refused key apart
-		}
-		if _, err := parseSearch([]byte(c.body)); !errors.Is(err, c.want) {
-			t.Errorf("search %q gave %v, want %v", c.body, err, c.want)
-		}
 	}
 }
 
@@ -224,12 +214,8 @@ func TestAPlotKeepsNoControlCharacters(t *testing.T) {
 }
 
 func TestTheClientReadsARepairedAnswer(t *testing.T) {
-	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("s") != "" {
-			w.Write([]byte("{\"Response\":\"True\",\"Search\":[{\"Title\":\"The\tLong\\Road\",\"Year\":\"1999\",\"imdbID\":\"tt0000001\",\"Type\":\"movie\",\"Poster\":\"N/A\"}]}"))
-			return
-		}
-		w.Write([]byte(`{"Response":"True","imdbRating":"7.5","imdbVotes":"1,234","Poster":"https://x/p.jpg","Released":"02 Jan 2001","Plot":"Two\sisters walk."}`))
+	c := clientFor(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"Response":"True","Poster":"https://x/p.jpg","Released":"02 Jan 2001","Plot":"Two\sisters walk."}`))
 	})
 	title, err := c.Lookup(context.Background(), "tt0000001")
 	if err != nil {
@@ -238,39 +224,17 @@ func TestTheClientReadsARepairedAnswer(t *testing.T) {
 	if title.Plot != `Two\sisters walk.` || title.Poster != "https://x/p.jpg" || title.Released.IsZero() {
 		t.Errorf("title = %+v", title)
 	}
-	rating, err := c.IMDbRating(context.Background(), "tt0000001")
-	if err != nil || rating != (Rating{Value: 7.5, Votes: 1234}) {
-		t.Errorf("rating = %+v, %v", rating, err)
-	}
-	hits, err := c.Search(context.Background(), "long road")
-	if err != nil || len(hits) != 1 || hits[0].Title != `The Long\Road` {
-		t.Errorf("hits = %+v, %v", hits, err)
-	}
 }
 
-// TestTheClientTreatsAnUnreadableAnswerAsAnAnswer: the rating is cached
-// like OMDb's "not found", so it is not asked again, and a search that
-// cannot be read is no hits, as one with nothing in it is.
+// TestTheClientTreatsAnUnreadableAnswerAsAnAnswer: a lookup that cannot
+// be read is ErrUnreadable, which a caller records like OMDb's "not
+// found".
 func TestTheClientTreatsAnUnreadableAnswerAsAnAnswer(t *testing.T) {
-	var hits atomic.Int32
 	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.Write([]byte(`{"Response":"True","imdbRating":"7.5","Plot":"cut off`))
-	}, WithCache(newMemCache()))
+		w.Write([]byte(`{"Response":"True","Plot":"cut off`))
+	})
 	if _, err := c.Lookup(context.Background(), "tt0000001"); !errors.Is(err, ErrUnreadable) {
 		t.Errorf("Lookup gave %v, want ErrUnreadable", err)
-	}
-	for i := 0; i < 2; i++ {
-		if _, err := c.IMDbRating(context.Background(), "tt0000001"); !errors.Is(err, ErrUnreadable) {
-			t.Errorf("IMDbRating gave %v, want ErrUnreadable", err)
-		}
-	}
-	if hits.Load() != 2 {
-		t.Errorf("OMDb was asked %d times, want 2: the rating's answer should be cached", hits.Load())
-	}
-	found, err := c.Search(context.Background(), "anything")
-	if err != nil || len(found) != 0 {
-		t.Errorf("search = %v, %v, want no hits and no error", found, err)
 	}
 }
 

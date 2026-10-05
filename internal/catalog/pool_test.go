@@ -46,7 +46,7 @@ func TestTheJobsPoolReallyTurnsParallelWorkersOff(t *testing.T) {
 	}
 	defer s.Close()
 	var got string
-	if err := s.Pool().QueryRow(context.Background(), "SHOW max_parallel_workers_per_gather").Scan(&got); err != nil {
+	if err := s.pool.QueryRow(context.Background(), "SHOW max_parallel_workers_per_gather").Scan(&got); err != nil {
 		t.Fatal(err)
 	}
 	if got != "0" {

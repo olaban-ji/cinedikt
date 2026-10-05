@@ -53,37 +53,14 @@ func request(headers map[string]string, remote string) *http.Request {
 	return r
 }
 
-// TestTheCountryComesFromTheTrustedGeoHeaderFirst: the header a CDN in
-// front of the app sets wins over the lookup, unless it says it does not
-// know. Only that one header is read.
-func TestTheCountryComesFromTheTrustedGeoHeaderFirst(t *testing.T) {
-	for _, c := range []struct {
-		name    string
-		headers map[string]string
-		want    string
-	}{
-		{"Cloudflare's country", map[string]string{"CF-IPCountry": "GB", "X-Real-IP": "216.160.83.56"}, "gb"},
-		{"lowercased whatever it sends", map[string]string{"CF-IPCountry": " de "}, "de"},
-		{"another CDN's header is not trusted", map[string]string{"CloudFront-Viewer-Country": "FR", "X-Real-IP": "216.160.83.56"}, "us"},
-		{"unknown falls through to the address", map[string]string{"CF-IPCountry": "XX", "X-Real-IP": "216.160.83.56"}, "us"},
-		{"Tor falls through to the address", map[string]string{"CF-IPCountry": "T1", "X-Real-IP": "81.2.69.142"}, "gb"},
-		{"nonsense falls through", map[string]string{"CF-IPCountry": "Germany", "X-Real-IP": "81.2.69.142"}, "gb"},
-	} {
-		if got := countryOf(request(c.headers, "203.0.113.9:443"), geo, "CF-IPCountry"); got != c.want {
-			t.Errorf("%s: %q, want %q", c.name, got, c.want)
-		}
-	}
-}
-
-// TestNoGeoHeaderIsTrustedUnlessOneIsConfigured: Railway's edge sets no
-// country header, so by default a reader who sends one is placed by their
-// address all the same, and cannot pick a country to have the metered API
-// asked about.
-func TestNoGeoHeaderIsTrustedUnlessOneIsConfigured(t *testing.T) {
+// TestNoGeoHeaderIsTrusted: Railway's edge sets no country header, so a
+// reader who sends one is placed by their address all the same, and
+// cannot pick a country to have the metered API asked about.
+func TestNoGeoHeaderIsTrusted(t *testing.T) {
 	for _, h := range []string{"CF-IPCountry", "CloudFront-Viewer-Country", "X-Vercel-IP-Country"} {
 		r := request(map[string]string{h: "FR", "X-Real-IP": "81.2.69.142"}, "")
-		if got := countryOf(r, geo, ""); got != "gb" {
-			t.Errorf("%s was trusted with no header configured: %q", h, got)
+		if got := countryOf(r, geo); got != "gb" {
+			t.Errorf("%s was trusted: %q", h, got)
 		}
 	}
 }
@@ -107,7 +84,7 @@ func TestTheCountryComesFromTheClientsAddress(t *testing.T) {
 		{"IPv6 in a header", map[string]string{"X-Real-IP": "2001:480::1"}, "", "us"},
 		{"IPv4 mapped into IPv6", map[string]string{"X-Real-IP": "::ffff:81.2.69.142"}, "", "gb"},
 	} {
-		if got := countryOf(request(c.headers, c.remote), geo, ""); got != c.want {
+		if got := countryOf(request(c.headers, c.remote), geo); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -128,19 +105,16 @@ func TestAnAddressThatCannotBePlacedHasNoCountry(t *testing.T) {
 		{"unknown to the database", map[string]string{"X-Real-IP": "8.8.8.8"}, ""},
 		{"nothing readable", map[string]string{"X-Real-IP": "nope", "X-Forwarded-For": "also nope"}, "garbage"},
 	} {
-		if got := countryOf(request(c.headers, c.remote), geo, ""); got != "" {
+		if got := countryOf(request(c.headers, c.remote), geo); got != "" {
 			t.Errorf("%s: %q, want none", c.name, got)
 		}
 	}
-	// Without a database only the trusted header places anyone.
-	if got := countryOf(request(map[string]string{"X-Real-IP": "81.2.69.142"}, ""), nil, ""); got != "" {
+	// Without a database nobody is placed, whatever header they send.
+	if got := countryOf(request(map[string]string{"X-Real-IP": "81.2.69.142"}, ""), nil); got != "" {
 		t.Errorf("no database placed an address in %q", got)
 	}
-	if got := countryOf(request(map[string]string{"CF-IPCountry": "GB"}, ""), nil, "CF-IPCountry"); got != "gb" {
-		t.Errorf("no database, the trusted header: %q", got)
-	}
-	if got := countryOf(request(map[string]string{"CF-IPCountry": "GB"}, ""), nil, ""); got != "" {
-		t.Errorf("no database, an untrusted header placed a reader in %q", got)
+	if got := countryOf(request(map[string]string{"CF-IPCountry": "GB"}, ""), nil); got != "" {
+		t.Errorf("no database, a header placed a reader in %q", got)
 	}
 }
 
@@ -267,7 +241,7 @@ func TestWhereToWatchFailuresAreNeverCachedOrExplained(t *testing.T) {
 // TestAReaderIsNotToldThereIsNoCoverageBeforeGeoLite2Loads: with a
 // license key set and no database in yet, a reader the lookup would have
 // placed is answered 503, kept by nobody, rather than a country without
-// coverage kept for an hour. The configured CDN header still places them.
+// coverage kept for an hour.
 func TestAReaderIsNotToldThereIsNoCoverageBeforeGeoLite2Loads(t *testing.T) {
 	watch := &fakeWatch{reply: catalog.WatchReply{Country: "gb", CountryName: "United Kingdom", Covered: true, Answer: &streaming.Answer{}}}
 	s := watchServer(watch, unloadedGeo{})
@@ -285,15 +259,10 @@ func TestAReaderIsNotToldThereIsNoCoverageBeforeGeoLite2Loads(t *testing.T) {
 		t.Errorf("the service was asked: %v", watch.asked)
 	}
 
-	// A header placing them counts only when it is the configured one.
+	// Nor does a header naming their country place them.
 	rec = askWatch(t, s, "tt0133093", request(map[string]string{"CF-IPCountry": "GB"}, ""))
 	if rec.Code != http.StatusServiceUnavailable || len(watch.asked) != 0 {
-		t.Errorf("an untrusted header: status = %d, asked = %v", rec.Code, watch.asked)
-	}
-	s.WithGeoHeader("CF-IPCountry")
-	rec = askWatch(t, s, "tt0133093", request(map[string]string{"CF-IPCountry": "GB"}, ""))
-	if rec.Code != http.StatusOK || len(watch.asked) != 1 || watch.asked[0] != "tt0133093/gb" {
-		t.Errorf("the trusted header: status = %d, asked = %v", rec.Code, watch.asked)
+		t.Errorf("a country header: status = %d, asked = %v", rec.Code, watch.asked)
 	}
 
 	// Without a license key there is no lookup to wait for.
@@ -306,8 +275,7 @@ func TestAReaderIsNotToldThereIsNoCoverageBeforeGeoLite2Loads(t *testing.T) {
 // TestTheRouteIsMounted: the catalog's routes include it, and with no
 // service behind it it says so rather than claiming no coverage.
 func TestTheRouteIsMounted(t *testing.T) {
-	srv := NewWithLimits(nil, nil, nil, testLimits(), discardLogger())
-	srv.WithCatalog(NewCatalogServer(nil, discardLogger()))
+	srv := New(NewCatalogServer(nil, discardLogger()), discardLogger())
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/where-to-watch/tt0133093", nil))
 	if rec.Code != http.StatusServiceUnavailable {

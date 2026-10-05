@@ -19,10 +19,6 @@ const (
 	CategoryDirector = "director"
 )
 
-// Documentary is left off a map. It is a genre rather than a title type,
-// so unlike television it is stored and filtered when the map is built.
-const Documentary = "Documentary"
-
 // Title is a kept row of title.basics.
 type Title struct {
 	TConst    string
@@ -30,7 +26,6 @@ type Title struct {
 	Original  string
 	IsAdult   bool
 	StartYear int // 0 when IMDb has none
-	Runtime   int
 	Genres    []string
 }
 
@@ -46,14 +41,12 @@ func ReadTitle(r *Reader) (Title, bool) {
 		return Title{}, false
 	}
 	year, _ := r.Int("startYear")
-	runtime, _ := r.Int("runtimeMinutes")
 	return Title{
 		TConst:    id,
 		Primary:   r.Text("primaryTitle"),
 		Original:  r.Text("originalTitle"),
 		IsAdult:   r.Bool("isAdult"),
 		StartYear: year,
-		Runtime:   runtime,
 		Genres:    r.List("genres"),
 	}, true
 }
@@ -220,8 +213,6 @@ func ParseRating(field string) (float64, bool) {
 type Name struct {
 	NConst  string
 	Primary string
-	Born    int
-	Died    int
 }
 
 // ReadName reads the current row, and reports false for anyone whose id
@@ -233,7 +224,5 @@ func ReadName(r *Reader, credited func(nconst string) bool) (Name, bool) {
 	if id == "" || !credited(id) {
 		return Name{}, false
 	}
-	born, _ := r.Int("birthYear")
-	died, _ := r.Int("deathYear")
-	return Name{NConst: id, Primary: r.Text("primaryName"), Born: born, Died: died}, true
+	return Name{NConst: id, Primary: r.Text("primaryName")}, true
 }

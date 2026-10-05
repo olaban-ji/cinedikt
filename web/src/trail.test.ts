@@ -43,22 +43,21 @@ describe('freshFilters', () => {
 
 describe('opening another movie', () => {
   it('stores a clear map and leaves the one behind untouched', () => {
-    const left = { movie: 'tt0133093', depth: 1, filters: narrowed };
-    const opened = forwardEntry('tt0137523', 2);
-    expect(opened).toEqual({ movie: 'tt0137523', depth: 2, filters: freshFilters() });
+    const left = { depth: 1, filters: narrowed };
+    const opened = forwardEntry(2);
+    expect(opened).toEqual({ depth: 2, filters: freshFilters() });
     expect(filtersFromState(left)).toEqual(narrowed);
-    expect(forwardEntry(null, 3)).toEqual({ depth: 3, filters: freshFilters() });
   });
 });
 
 describe('filtersFromState', () => {
   it('reads the filters the entry was left with', () => {
-    expect(filtersFromState({ depth: 2, movie: 'tt0133093', filters: narrowed })).toEqual(narrowed);
+    expect(filtersFromState({ depth: 2, filters: narrowed })).toEqual(narrowed);
   });
 
   it('is clear when the entry never stored any', () => {
     expect(filtersFromState(null)).toEqual(freshFilters());
-    expect(filtersFromState({ depth: 1, movie: 'tt0133093' })).toEqual(freshFilters());
+    expect(filtersFromState({ depth: 1 })).toEqual(freshFilters());
     expect(filtersFromState({ filters: null })).toEqual(freshFilters());
   });
 
@@ -88,9 +87,9 @@ describe('the genres', () => {
     // Genres picked on The Matrix, stamped on its entry as they changed.
     const prefs = preferencesFrom(null);
     const picked = applyFilters(prefs, { ...freshFilters(), genres: ['Sci-Fi', 'Action'] });
-    const left = stampFilters({ movie: 'tt0133093', depth: 1 }, filtersOf(picked, []));
+    const left = stampFilters({ depth: 1 }, filtersOf(picked, []));
     // Another movie opens clear.
-    const opened = forwardEntry('tt0137523', 2);
+    const opened = forwardEntry(2);
     expect(applyFilters(picked, filtersFromState(opened)).genres).toEqual([]);
     // Back to The Matrix puts them back, in the order they were picked.
     expect(applyFilters(prefs, filtersFromState(left)).genres).toEqual(['Sci-Fi', 'Action']);
@@ -111,9 +110,8 @@ describe('the genres', () => {
 });
 
 describe('stampFilters', () => {
-  it('keeps the movie and the depth already on the entry', () => {
-    expect(stampFilters({ movie: 'tt0133093', depth: 4 }, narrowed)).toEqual({
-      movie: 'tt0133093',
+  it('keeps the depth already on the entry', () => {
+    expect(stampFilters({ depth: 4 }, narrowed)).toEqual({
       depth: 4,
       filters: narrowed,
     });
@@ -142,7 +140,6 @@ describe('preferences', () => {
         yearTo: 2010,
         minRating: 8,
         hideEmptyYears: true,
-        density: 'compact',
       }),
     );
     expect(prefs.yearOrder).toBe('newest');
@@ -152,7 +149,6 @@ describe('preferences', () => {
     expect(prefs.yearTo).toBeNull();
     expect(prefs.minRating).toBeNull();
     expect(prefs.hideEmptyYears).toBe(false);
-    expect('density' in prefs).toBe(false);
   });
 
   it('is the defaults when nothing is stored', () => {

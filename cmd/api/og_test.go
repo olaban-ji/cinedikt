@@ -410,6 +410,12 @@ func TestShareCardHueMatchesTheClient(t *testing.T) {
 	}
 }
 
+// oklch is one CSS oklch(L C h) colour as 8-bit sRGB, the oracle the
+// card's colours are checked against.
+func oklch(l, c, hue float64) color.NRGBA {
+	return okLabToNRGBA(okLCh(l, c, hue))
+}
+
 func TestOKLCHMatchesTheBrowser(t *testing.T) {
 	// Each colour as Chrome paints it: a canvas filled with the oklch()
 	// value, read back. The browser rounds a little differently, so

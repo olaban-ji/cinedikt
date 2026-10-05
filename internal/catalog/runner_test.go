@@ -34,13 +34,11 @@ func lazyStore(t *testing.T) *Store {
 // canceled" in the chat at every deploy that lands during an import.
 func TestAStoppedImportSaysNothing(t *testing.T) {
 	var sink recordingSink
-	r := &Runner{Store: lazyStore(t), Logger: quietLogger(), Notify: &sink}
+	r := &Runner{store: lazyStore(t), Logger: quietLogger(), Notify: &sink}
 	im, _, _ := r.build()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if r.attempt(ctx, im) {
-		t.Fatal("a stopped attempt reported success")
-	}
+	r.attempt(ctx, im)
 	if got := sink.all(); len(got) != 0 {
 		t.Fatalf("a stopped import said %+v, want nothing", got)
 	}
@@ -50,12 +48,10 @@ func TestAStoppedImportSaysNothing(t *testing.T) {
 // the notifier as a cause, with the next try and the raw text.
 func TestAFailedImportSaysWhy(t *testing.T) {
 	var sink recordingSink
-	r := &Runner{Store: lazyStore(t), Logger: quietLogger(), Notify: &sink}
+	r := &Runner{store: lazyStore(t), Logger: quietLogger(), Notify: &sink}
 	im, _, _ := r.build()
 	before := time.Now()
-	if r.attempt(context.Background(), im) {
-		t.Fatal("an attempt against no database reported success")
-	}
+	r.attempt(context.Background(), im)
 	failed := sink.of(notify.Failed)
 	if len(failed) != 1 {
 		t.Fatalf("events = %+v, want one Failed", sink.all())
@@ -149,7 +145,7 @@ func TestAJobThatWasStoppedSaysNothing(t *testing.T) {
 func TestTakingOverNamesTheQueuesJobs(t *testing.T) {
 	for _, queued := range [][]string{nil, {notify.JobGeoIP}} {
 		var sink recordingSink
-		r := &Runner{Store: lazyStore(t), Logger: quietLogger(), Notify: &sink, Queued: queued}
+		r := &Runner{store: lazyStore(t), Logger: quietLogger(), Notify: &sink, Queued: queued}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		r.run(ctx, newWakes())

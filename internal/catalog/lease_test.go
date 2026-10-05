@@ -279,3 +279,57 @@ func TestAReaderOpeningAMapWithoutPhotosWakesThePeopleJob(t *testing.T) {
 		}
 	}
 }
+
+// TestTheTrailerAndPeopleLoopsWakeOnAMarkAndRefillOnAPublish: between
+// passes each of the two jobs a reader waits on listens for both of its
+// wakes, and only a new generation, which brings names to queue, is the
+// wake that asks for a refill. The wakes and the refill come from the
+// loops the runner starts, so the test fails if those are miswired.
+func TestTheTrailerAndPeopleLoopsWakeOnAMarkAndRefillOnAPublish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trailers := &TrailerJob{refilled: time.Now()}
+	people := &PersonPhotoJob{refilled: time.Now()}
+	for _, job := range []struct {
+		name     string
+		mark     string
+		loop     func(*Wakes) jobLoop
+		refilled func() time.Time
+	}{
+		{"trailers", NotifyTrailerWanted,
+			func(w *Wakes) jobLoop { return trailerLoop(trailers, w) },
+			func() time.Time { return trailers.refilled }},
+		{"people", NotifyPersonWanted,
+			func(w *Wakes) jobLoop { return peopleLoop(people, w) },
+			func() time.Time { return people.refilled }},
+	} {
+		// Wakes of its own, so a publish poked for the other job is not
+		// left pending here.
+		wakes := newWakes()
+		loop := job.loop(wakes)
+		wakes.signal(job.mark)
+		if woke, byWake := waitForEither(ctx, loop.wake, loop.wanted, time.Hour); !woke || byWake {
+			t.Errorf("%s, a mark: woke %v, refill %v", job.name, woke, byWake)
+		}
+		wakes.signal(NotifyPublished)
+		if woke, byWake := waitForEither(ctx, loop.wake, loop.wanted, time.Hour); !woke || !byWake {
+			t.Errorf("%s, a publish: woke %v, refill %v", job.name, woke, byWake)
+		}
+		if woke, byWake := waitForEither(ctx, loop.wake, loop.wanted, time.Millisecond); !woke || byWake {
+			t.Errorf("%s, the backstop: woke %v, refill %v", job.name, woke, byWake)
+		}
+		if loop.refill == nil {
+			t.Fatalf("%s: the loop has no refill", job.name)
+		}
+		loop.refill()
+		if !job.refilled().IsZero() {
+			t.Errorf("%s: the refill left the queue's refill time at %v, want zero", job.name, job.refilled())
+		}
+	}
+	cancel()
+	loop := trailerLoop(trailers, newWakes())
+	if woke, _ := waitForEither(ctx, loop.wake, loop.wanted, time.Hour); woke {
+		t.Error("woke after the end")
+	}
+}

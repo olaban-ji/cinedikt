@@ -365,22 +365,19 @@ type WatchRow struct {
 	Stored    bool
 	Answer    streaming.Answer
 	FetchedAt time.Time
-	// ExpiresAt is when the first of its options leaves; zero when none
-	// is leaving.
-	ExpiresAt time.Time
 }
 
 // WhereToWatch reads what is kept about tconst in country.
 func (s *Store) WhereToWatch(ctx context.Context, tconst, country string) (WatchRow, error) {
 	var row WatchRow
 	var raw []byte
-	var fetched, expires *time.Time
+	var fetched *time.Time
 	err := s.pool.QueryRow(ctx, `
-		SELECT t.tconst IS NOT NULL, w.answer, w.fetched_at, w.expires_at
+		SELECT t.tconst IS NOT NULL, w.answer, w.fetched_at
 		FROM (SELECT $1::text AS tconst) q
 		LEFT JOIN `+Live+`.titles t ON t.tconst = q.tconst
 		LEFT JOIN meta.where_to_watch w ON w.tconst = q.tconst AND w.country = $2`, tconst, country).
-		Scan(&row.Title, &raw, &fetched, &expires)
+		Scan(&row.Title, &raw, &fetched)
 	if err != nil {
 		return WatchRow{}, fmt.Errorf("catalog: where to watch %s/%s: %w", tconst, country, err)
 	}
@@ -393,9 +390,6 @@ func (s *Store) WhereToWatch(ctx context.Context, tconst, country string) (Watch
 	}
 	if fetched != nil {
 		row.FetchedAt = *fetched
-	}
-	if expires != nil {
-		row.ExpiresAt = *expires
 	}
 	return row, nil
 }

@@ -4,25 +4,18 @@ import { useEffect } from 'react';
  *  the slug is there so a pasted link says what it opens. A map nobody
  *  can link is a map nobody shares. */
 
-/** An IMDb title id: "tt" and at least one digit. Ids have grown over
- *  the years, so the length is not assumed. */
-const TCONST = /^tt\d{1,17}$/;
-
-export function movieIdFrom(raw: string | null): string | null {
-  if (!raw) return null;
-  return TCONST.test(raw) ? raw : null;
-}
-
-export function movieIdFromState(state: unknown): string | null {
-  if (!state || typeof state !== 'object' || !('movie' in state)) return null;
-  const id = (state as { movie: unknown }).movie;
-  return typeof id === 'string' ? movieIdFrom(id) : null;
+/** An IMDb id: "tt" and at least one digit for a title, "nm" and at
+ *  least one digit for a person. Ids have grown over the years, so the
+ *  length is not assumed. The server takes no other kind of id, and
+ *  refuses a request that names one. */
+export function isImdbId(id: string, kind: 'tt' | 'nm'): boolean {
+  return id.startsWith(kind) && /^\d{1,17}$/.test(id.slice(kind.length));
 }
 
 /** The id in /movie/<tconst>[-slug]. Anything else is not a route. */
 export function movieIdFromPath(pathname: string): string | null {
-  const m = /^\/movie\/(tt\d{1,17})(?:-[^/]*)?\/?$/.exec(pathname);
-  return m ? movieIdFrom(m[1]) : null;
+  const m = /^\/movie\/([^/-]+)(?:-[^/]*)?\/?$/.exec(pathname);
+  return m && isImdbId(m[1], 'tt') ? m[1] : null;
 }
 
 /** Lower-case, hyphenated, ASCII-ish: a slug that survives being pasted
@@ -67,21 +60,6 @@ export function routeAt(pathname: string): { movieId: string | null; about: bool
   return { movieId: movieIdFromPath(pathname), about: isAboutPath(pathname) };
 }
 
-/** Where the app should be, given any URL it can be reached by: a movie
- *  route, or a page with no movie (the cold start at /, or /about).
- *
- *  There is no legacy `?movie=` any more. It carried a TMDb id, and TMDb
- *  ids are not addresses in this catalog — keeping it would have turned
- *  an old link into a route that looks valid and opens nothing. */
-export function routeFrom(href: string): { movieId: string | null; path: string } {
-  const url = new URL(href);
-  const fromPath = movieIdFromPath(url.pathname);
-  if (fromPath !== null) {
-    return { movieId: fromPath, path: url.pathname + url.search + url.hash };
-  }
-  return { movieId: null, path: url.pathname + url.search + url.hash };
-}
-
 /** What the tab says. Naming the movie is the point: a reader with half
  *  a dozen maps open should be able to tell them apart, and a link
  *  previewed in a chat should say what it opens.
@@ -91,7 +69,7 @@ export const HOME_TITLE = 'Cinedikt — a movie’s cast and directors, and ever
 
 /** The About page's tab. The server writes the same title, and the same
  *  og:title, into the page it serves at /about. */
-export const ABOUT_TITLE = 'About · Cinedikt';
+const ABOUT_TITLE = 'About · Cinedikt';
 
 export function pageTitle(title?: string, about = false): string {
   if (about) return ABOUT_TITLE;
@@ -105,10 +83,4 @@ export function usePageTitle(title: string | undefined, about = false): void {
   useEffect(() => {
     document.title = pageTitle(title, about);
   }, [title, about]);
-}
-
-/** Keep pins like ?device= while moving to a movie's own path. */
-export function filmHref(id: string, title: string | undefined, href: string): string {
-  const url = new URL(href);
-  return filmPath(id, title) + url.search + url.hash;
 }

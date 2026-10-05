@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,7 +117,10 @@ func TestShareImageIsAbsolute(t *testing.T) {
 	}
 }
 
-func TestOldFilmLinksMoveToMovie(t *testing.T) {
+// TestEveryPageAddressIsServedTheApp: a map's own address, and anything
+// that is not one, get the page itself, which decides what to show. Not
+// a redirect, not a 404: the app's own URLs have to work on reload.
+func TestEveryPageAddressIsServedTheApp(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
 		t.Fatal(err)
@@ -130,33 +134,15 @@ func TestOldFilmLinksMoveToMovie(t *testing.T) {
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	for _, c := range []struct{ from, to string }{
-		{"/film/tt0133093-the-matrix", "/movie/tt0133093-the-matrix"},
-		{"/film/tt0133093", "/movie/tt0133093"},
-		{"/film/tt0133093-the-matrix?device=phone", "/movie/tt0133093-the-matrix?device=phone"},
-	} {
-		resp, err := client.Get(srv.URL + c.from)
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusMovedPermanently {
-			t.Errorf("GET %s = %d, want %d", c.from, resp.StatusCode, http.StatusMovedPermanently)
-		}
-		if got := resp.Header.Get("Location"); got != c.to {
-			t.Errorf("GET %s went to %q, want %q", c.from, got, c.to)
-		}
-	}
-
-	// A map's own address, and anything that is not one, are served.
-	for _, path := range []string{"/movie/tt0133093-the-matrix", "/film/", "/"} {
+	for _, path := range []string{"/movie/tt0133093-the-matrix", "/film/tt0133093", "/about", "/"} {
 		resp, err := client.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("GET %s = %d, want %d", path, resp.StatusCode, http.StatusOK)
+		if resp.StatusCode != http.StatusOK || string(body) != "<html></html>" {
+			t.Errorf("GET %s = %d %q, want 200 and the page", path, resp.StatusCode, body)
 		}
 	}
 }
@@ -454,18 +440,47 @@ func TestTheAboutPageIsNamed(t *testing.T) {
 func TestTheRequestPathWaitsOnTheProcessLimiter(t *testing.T) {
 	limiter := tmdb.NewLimiter(20)
 	cfg := config.Config{TMDBAPIKey: "k"}
-	client, closer, err := searchFallback(context.Background(), cfg, limiter, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if closer != nil {
-		t.Cleanup(func() { closer.Close() })
-	}
-	if client == nil || client.Limiter() != limiter {
+	if client := searchFallback(cfg, limiter); client == nil || client.Limiter() != limiter {
 		t.Error("the request-path TMDb client has a limiter of its own")
 	}
-	if c, _, _ := searchFallback(context.Background(), config.Config{}, limiter, slog.New(slog.NewTextHandler(io.Discard, nil))); c != nil {
+	if c := searchFallback(config.Config{}, limiter); c != nil {
 		t.Error("a client was built without credentials")
+	}
+}
+
+// TestGeoIPTakesBothMaxMindCredentials: MaxMind's download takes the
+// account id with the license key, so readers are placed only with both.
+// A key on its own leaves the lookup off, and the log says which variable
+// is missing rather than leaving it to the first check to fail.
+func TestGeoIPTakesBothMaxMindCredentials(t *testing.T) {
+	var log bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&log, nil))
+
+	if u := geoIPFor(config.Config{}, nil, logger); u != nil {
+		t.Errorf("without a key: an updater %+v", u)
+	}
+	if strings.Contains(log.String(), "level=WARN") {
+		t.Errorf("without a key: a warning, when nothing was set wrong: %s", log.String())
+	}
+
+	log.Reset()
+	if u := geoIPFor(config.Config{MaxMindLicenseKey: "key"}, nil, logger); u != nil {
+		t.Errorf("with a key alone: an updater %+v", u)
+	}
+	if got := log.String(); !strings.Contains(got, "level=WARN") || !strings.Contains(got, "MAXMIND_ACCOUNT_ID") {
+		t.Errorf("with a key alone: log = %q, want a warning naming MAXMIND_ACCOUNT_ID", got)
+	}
+
+	log.Reset()
+	u := geoIPFor(config.Config{MaxMindLicenseKey: "key", MaxMindAccountID: "42"}, nil, logger)
+	if u == nil {
+		t.Fatal("with both credentials: no updater")
+	}
+	if u.LicenseKey != "key" || u.AccountID != "42" || u.Lookup == nil {
+		t.Errorf("with both credentials: updater %+v, want both credentials and a lookup to fill", u)
+	}
+	if strings.Contains(log.String(), "geoip is off") {
+		t.Errorf("with both credentials: log = %q, want nothing saying the lookup is off", log.String())
 	}
 }
 
@@ -674,23 +689,18 @@ func TestTheTrackersTagDoesNotWaitOnAKnownOrigin(t *testing.T) {
 	servedAnalytics(t, string(body))
 }
 
-// The page is handed its settings, so nothing answers for them any more,
-// whichever API the process serves.
+// The page is handed its settings, so nothing answers for them any more.
 func TestTheAnalyticsConfigRouteIsGone(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	graphAPI := api.NewWithLimits(nil, nil, nil, api.DefaultLimits, logger)
-	catalogAPI := api.NewWithLimits(nil, nil, nil, api.DefaultLimits, logger)
-	catalogAPI.WithCatalog(api.NewCatalogServer(nil, logger))
-	for name, server := range map[string]*api.Server{"graph": graphAPI, "catalog": catalogAPI} {
-		srv := httptest.NewServer(routes(server.Handler(), plainIndexDir(t), nil, nil, pageAnalyticsFor(trackersOn), logger))
-		resp, err := http.Get(srv.URL + "/api/analytics-config")
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp.Body.Close()
-		srv.Close()
-		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("%s: GET /api/analytics-config = %d, want 404", name, resp.StatusCode)
-		}
+	server := api.New(api.NewCatalogServer(nil, logger), logger)
+	srv := httptest.NewServer(routes(server.Handler(), plainIndexDir(t), nil, nil, pageAnalyticsFor(trackersOn), logger))
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/api/analytics-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /api/analytics-config = %d, want 404", resp.StatusCode)
 	}
 }

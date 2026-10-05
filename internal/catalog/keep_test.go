@@ -31,7 +31,7 @@ func TestOnlyMoviesAreKept(t *testing.T) {
 	if !ok {
 		t.Fatal("a movie was dropped")
 	}
-	if got.TConst != "tt0133093" || got.Primary != "The Matrix" || got.StartYear != 1999 || got.Runtime != 136 {
+	if got.TConst != "tt0133093" || got.Primary != "The Matrix" || got.StartYear != 1999 {
 		t.Errorf("title = %+v", got)
 	}
 	if len(got.Genres) != 2 {
@@ -47,7 +47,7 @@ func TestAdultAndDocumentaryAreStoredNotDropped(t *testing.T) {
 	if !ok {
 		t.Fatal("a documentary was dropped at load")
 	}
-	if len(doc.Genres) != 1 || doc.Genres[0] != Documentary {
+	if len(doc.Genres) != 1 || doc.Genres[0] != "Documentary" {
 		t.Errorf("genres = %v", doc.Genres)
 	}
 	r = row(t, basicsHeader, "tt3\tmovie\tAdult Film\tAdult Film\t1\t2011\t\\N\t88\tAdult")
@@ -64,7 +64,7 @@ func TestATitleWithNoYearIsStillKept(t *testing.T) {
 	if !ok {
 		t.Fatal("a movie with no year was dropped at load")
 	}
-	if got.StartYear != 0 || got.Runtime != 0 || got.Genres != nil {
+	if got.StartYear != 0 || got.Genres != nil {
 		t.Errorf("title = %+v", got)
 	}
 }
@@ -184,7 +184,7 @@ func TestNamesAreKeptOnlyWhenCredited(t *testing.T) {
 
 	r := row(t, header, "nm0000206\tKeanu Reeves\t1964\t\\N\tactor\ttt0133093")
 	got, ok := ReadName(r, credited)
-	if !ok || got.Primary != "Keanu Reeves" || got.Born != 1964 || got.Died != 0 {
+	if !ok || got.Primary != "Keanu Reeves" {
 		t.Errorf("name = %+v, ok=%v", got, ok)
 	}
 	// Someone known only from television never had a credit survive.

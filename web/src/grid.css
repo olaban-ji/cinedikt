@@ -3606,7 +3606,8 @@ button {
   text-align: center;
 }
 
-.cd-cold p {
+.cd-cold p,
+.cd-about p {
   margin: 0;
 }
 
@@ -3682,19 +3683,20 @@ button {
 
 /* While a map loads from here, the screen steps back behind the
    progress line: it stays, so there is something to look at, but it is
-   no longer the thing being looked at. */
+   no longer the thing being looked at. The About page does the same. */
 .cd-cold {
   transition: opacity 0.25s ease;
 }
 
-.cd-cold-dim {
+.cd-cold-dim,
+.cd-about-dim {
   opacity: 0.35;
 }
 
 /* The film's own colour, with its poster inside it. Once the mark has
    lifted off, each comes into focus in reading order: from blurred and
    a little large to sharp and in place, over .64s on the settle curve,
-   20ms + 70ms a tile behind the one before (motion.ts, tileFillDelay). */
+   20ms + 70ms a tile behind the one before. */
 .cd-cold-fill {
   position: absolute;
   inset: 0;
@@ -3743,8 +3745,8 @@ button {
   gap: 2px;
   padding: 0 2px;
   /* The words sharpen into a space already reserved for them, so the
-     grid never changes height: .4s, 110ms + 70ms a tile in (motion.ts,
-     tileCaptionDelay), just behind their poster. */
+     grid never changes height: .4s, 110ms + 70ms a tile in, just behind
+     their poster. */
   opacity: 0;
   filter: blur(3px);
   transition:
@@ -4731,11 +4733,11 @@ button {
 /* ---- first run copy ---- */
 
 /* The headline, the sub-line and the theme picker fade in, each over
-   .6s and each 120ms behind the one before (motion.ts, COPY_FADE_MS).
-   Linear: an eased fade holds near nothing and then jumps, which on
-   type reads as a pop. Nothing here moves: a transform would leave the
-   glyphs soft until the last frame. A class, not a keyframe, so the
-   fade can wait until the from-state has painted. */
+   .6s and each 120ms behind the one before. Linear: an eased fade holds
+   near nothing and then jumps, which on type reads as a pop. Nothing
+   here moves: a transform would leave the glyphs soft until the last
+   frame. A class, not a keyframe, so the fade can wait until the
+   from-state has painted. */
 .cd-cold-head,
 .cd-cold-sub {
   /* Grayscale smoothing so a partial opacity does not redraw the
@@ -4747,8 +4749,11 @@ button {
   transition: opacity 600ms linear;
 }
 
-.cd-cold-head {
-  /* A <strong>, which is bold by default; Young Serif has no bold. */
+/* The opening screen's headline, and the About page's heading set the
+   same. A <strong> and an <h1>, both bold by default; Young Serif has no
+   bold. */
+.cd-cold-head,
+.cd-about-head {
   font-family: 'Young Serif', serif;
   font-weight: 400;
   font-size: 46px;
@@ -5076,7 +5081,8 @@ button {
    one centred column under the header, scrolling on its own as the
    opening screen does. The top padding is that screen's, so the heading
    lands where its headline does; the bottom keeps clear of a phone's
-   home indicator. */
+   home indicator. Its dimming, its paragraphs and its heading's type are
+   the opening screen's, and are set with them above. */
 .cd-about {
   flex: 1;
   min-height: 0;
@@ -5091,14 +5097,6 @@ button {
   transition: opacity 0.25s ease;
 }
 
-.cd-about-dim {
-  opacity: 0.35;
-}
-
-.cd-about p {
-  margin: 0;
-}
-
 .cd-about-intro {
   display: flex;
   flex-direction: column;
@@ -5108,15 +5106,8 @@ button {
   max-width: 560px;
 }
 
-/* An <h1>, which is bold by default; Young Serif has no bold. */
 .cd-about-head {
   margin: 0;
-  font-family: 'Young Serif', serif;
-  font-weight: 400;
-  font-size: 46px;
-  line-height: 1.08;
-  color: var(--t);
-  text-wrap: balance;
 }
 
 .cd-about-lead {

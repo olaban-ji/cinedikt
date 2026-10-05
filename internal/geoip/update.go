@@ -14,14 +14,10 @@ import (
 	"time"
 )
 
-// MaxMind's two addresses for the newest GeoLite2 Country. The permalink
+// permalinkURL is MaxMind's address for the newest GeoLite2 Country. It
 // takes the account id and the license key as Basic auth and redirects to
-// the file on MaxMind's storage; the older address takes the key alone,
-// in the query.
-const (
-	permalinkURL = "https://download.maxmind.com/geoip/databases/GeoLite2-Country/download?suffix=tar.gz"
-	legacyURL    = "https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country&suffix=tar.gz"
-)
+// the file on MaxMind's storage.
+const permalinkURL = "https://download.maxmind.com/geoip/databases/GeoLite2-Country/download?suffix=tar.gz"
 
 // Bounds on a download. GeoLite2 Country is a few megabytes packed and
 // under ten unpacked; these are far above that and far below what would
@@ -39,8 +35,6 @@ var ErrKey = errors.New("geoip: MaxMind refused the license key")
 // is not about the key. Status is zero when no answer came back at all: a
 // refused connection, a timeout. It is typed so the notifier can tell
 // MaxMind being down, which fixes itself, from a fault in the download.
-// Its text never quotes the address, since the older one carries the
-// license key in its query.
 type DownloadError struct {
 	Method string
 	Status int
@@ -87,8 +81,8 @@ type Store interface {
 
 // Updater keeps a Lookup's database current from MaxMind.
 type Updater struct {
-	// AccountID and LicenseKey are MaxMind's credentials. Without an
-	// account id the older address is used, which takes the key alone.
+	// AccountID and LicenseKey are MaxMind's credentials, which it takes
+	// together.
 	AccountID  string
 	LicenseKey string
 	Store      Store
@@ -97,10 +91,9 @@ type Updater struct {
 	// timeout long enough for the file on a slow day.
 	HTTP   *http.Client
 	Logger *slog.Logger
-	// PermalinkURL and LegacyURL replace MaxMind's addresses, for the
-	// tests. Empty takes the real ones.
+	// PermalinkURL replaces MaxMind's address, for the tests. Empty takes
+	// the real one.
 	PermalinkURL string
-	LegacyURL    string
 }
 
 // Check asks MaxMind when the newest database was built and downloads it
@@ -202,32 +195,20 @@ func (u *Updater) Follow(ctx context.Context, every time.Duration) {
 	}
 }
 
-// fetch makes one request for the database, by whichever address the
-// credentials allow. An error never quotes the address: the older one
-// carries the license key in its query.
+// fetch makes one request for the database. The credentials go only in
+// the Authorization header, never in the address.
 func (u *Updater) fetch(ctx context.Context, method string) (*http.Response, error) {
-	var target string
-	if u.AccountID != "" {
-		target = u.PermalinkURL
-		if target == "" {
-			target = permalinkURL
-		}
-	} else {
-		target = u.LegacyURL
-		if target == "" {
-			target = legacyURL
-		}
-		target += "&license_key=" + url.QueryEscape(u.LicenseKey)
+	target := u.PermalinkURL
+	if target == "" {
+		target = permalinkURL
 	}
 	req, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
 		return nil, errors.New("geoip: build the download request")
 	}
-	if u.AccountID != "" {
-		// Go drops this header when the redirect leaves MaxMind's host,
-		// so the storage the file is served from never sees it.
-		req.SetBasicAuth(u.AccountID, u.LicenseKey)
-	}
+	// Go drops this header when the redirect leaves MaxMind's host, so
+	// the storage the file is served from never sees it.
+	req.SetBasicAuth(u.AccountID, u.LicenseKey)
 	client := u.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 2 * time.Minute}

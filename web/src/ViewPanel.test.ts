@@ -35,7 +35,7 @@ function mapped(): GridPayload {
   ];
   return {
     anchor: { id: 'tt0133093', title: 'The Matrix', year: 1999, rating: 8.7, md: 331, people: [], isAnchor: true },
-    people: [{ id: 'nm0000206', name: 'Keanu Reeves', role: 'cast', order: 0 }],
+    people: [{ id: 'nm0000206', name: 'Keanu Reeves', role: 'cast' }],
     films,
     genres: LEGEND,
   };
@@ -147,8 +147,8 @@ describe('the Genres section', () => {
   });
 
   it('is not drawn for a map without a legend', () => {
-    const graph = matrix as unknown as GridPayload;
-    expect(section(settings(), graph)).toBe('');
+    const noLegend = matrix as unknown as GridPayload;
+    expect(section(settings(), noLegend)).toBe('');
     expect(section(settings(), { ...mapped(), genres: undefined })).toBe('');
   });
 });

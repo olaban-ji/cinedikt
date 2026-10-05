@@ -15,7 +15,7 @@ export const TOAST_MS = 3600;
 /** How long the exit takes, after which it leaves the tree. */
 export const LEAVE_MS = 260;
 
-export interface Toaster {
+interface Toaster {
   spec: ToastSpec | null;
   visible: boolean;
   show: (spec: ToastSpec) => void;

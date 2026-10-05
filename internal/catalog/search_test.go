@@ -163,7 +163,7 @@ func TestFirstRunOffersOneMovieAnEra(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.FirstRun(ctx, 0)
+	got, err := s.FirstRun(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,8 +181,9 @@ func TestFirstRunOffersOneMovieAnEra(t *testing.T) {
 			t.Errorf("%s was offered with no poster", h.ID)
 		}
 	}
-	if len(got) > FirstRunCount {
-		t.Errorf("offered %d, want at most %d", len(got), FirstRunCount)
+	// firstrun.sql has eight eras.
+	if len(got) > 8 {
+		t.Errorf("offered %d, want at most one for each of the 8 eras", len(got))
 	}
 }
 
@@ -211,7 +212,7 @@ func TestFirstRunDoesNotAlwaysOpenOnTheOldest(t *testing.T) {
 	firsts := map[string]int{}
 	rounds := 0
 	for i := 0; i < 60; i++ {
-		got, err := s.FirstRun(ctx, 0)
+		got, err := s.FirstRun(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -236,7 +237,7 @@ func TestFirstRunOffersNothingBeforeThePostersArrive(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.posters`); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.FirstRun(ctx, 0)
+	got, err := s.FirstRun(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +277,7 @@ func TestFirstRunSkipsABlankOrMissingPoster(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := s.FirstRun(ctx, 0)
+	got, err := s.FirstRun(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

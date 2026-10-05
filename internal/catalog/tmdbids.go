@@ -160,7 +160,7 @@ func (j *TMDbIDJob) Run(ctx context.Context) error {
 				return nil
 			case errors.Is(err, tmdb.ErrNotFound):
 				got = tmdb.Found{}
-			case refused(err):
+			case errors.Is(err, tmdb.ErrKey):
 				return &KeyError{Provider: "TMDb", Err: err}
 			case err != nil:
 				failed++
@@ -393,37 +393,4 @@ func (s *Store) rememberTMDB(ctx context.Context, tconst string, tmdbID int) err
 		return fmt.Errorf("catalog: tmdb queue %s: %w", tconst, err)
 	}
 	return nil
-}
-
-// fillTMDbIDs keeps the matcher running for as long as the process
-// does. It shares the runner's TMDb client, and with it the process's
-// one limiter, so it and every other TMDb caller stay inside one budget
-// instead of each spending a full one.
-func fillTMDbIDs(ctx context.Context, job *TMDbIDJob, logger *slog.Logger, wakes *Wakes) {
-	waited := false
-	for {
-		ready, err := job.Store.LiveReady(ctx)
-		wait := TMDbRest
-		switch {
-		case err != nil || !ready:
-			if !waited {
-				logger.Info("tmdb ids waiting for a catalog")
-				waited = true
-			}
-			wait = PosterWaitForCatalog
-		default:
-			waited = false
-			err := job.Run(ctx)
-			if err != nil && ctx.Err() == nil {
-				logger.Warn("tmdb ids", "err", err)
-			}
-			reportRun(ctx, job.Notify, notify.JobTMDbIDs, err, time.Now().Add(wait))
-		}
-		// A new generation is the only thing that brings new titles.
-		// Its own channel, not the poster backfill's: sharing one
-		// would give a publish to whichever of the two took it first.
-		if !waitFor(ctx, wakes.PublishedIDs, wait) {
-			return
-		}
-	}
 }

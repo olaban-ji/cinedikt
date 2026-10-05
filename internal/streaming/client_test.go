@@ -67,7 +67,7 @@ func TestShowAsksForOneCountryWithTheKeyInAHeader(t *testing.T) {
 	}
 	n := options[0]
 	if n.Type != "subscription" || n.Service.ID != "netflix" || n.Service.ImageSet.DarkThemeImage != "https://img/netflix-dark.svg" ||
-		n.Link != "https://www.netflix.com/title/20557937" || n.ExpiresOn != 1793491200 || !n.ExpiresSoon {
+		n.Link != "https://www.netflix.com/title/20557937" || n.ExpiresOn != 1793491200 {
 		t.Errorf("netflix = %+v", n)
 	}
 	p := options[1]
@@ -268,21 +268,6 @@ func TestCountriesAreLowercasedAndNamed(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("countries[%d] = %+v, want %+v", i, got[i], want[i])
-		}
-	}
-}
-
-func TestRetryAfterReadsSecondsOrADate(t *testing.T) {
-	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
-	if got := parseRetryAfter("3", now); got != 3*time.Second {
-		t.Errorf("3 = %v", got)
-	}
-	if got := parseRetryAfter(now.Add(10*time.Second).Format(http.TimeFormat), now); got != 10*time.Second {
-		t.Errorf("date = %v", got)
-	}
-	for _, v := range []string{"", "0", "-1", "soon", now.Add(-time.Minute).Format(http.TimeFormat)} {
-		if got := parseRetryAfter(v, now); got != 0 {
-			t.Errorf("%q = %v", v, got)
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/time/rate"
 
+	"cinedikt/internal/config"
 	"cinedikt/internal/notify"
 	"cinedikt/internal/tmdb"
 )
@@ -233,7 +234,7 @@ func TestThePeopleSweepReachesEveryoneAMapCanShow(t *testing.T) {
 		t.Fatalf("at a floor of 10, asked %v, want %v", got, sweepOrder)
 	}
 
-	job = &PersonPhotoJob{Store: s, TMDb: faces, Logger: quietLogger(), MinVotes: PeopleSweepMinVotes}
+	job = &PersonPhotoJob{Store: s, TMDb: faces, Logger: quietLogger(), MinVotes: config.DefaultPeopleSweepMinVotes}
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -514,31 +515,6 @@ func TestAMapsMarkIsWrittenAndWakesThePeopleJob(t *testing.T) {
 	}
 	if got := wantedPeople(t, s); len(got) != 2 {
 		t.Errorf("wanted %v, want %s and %s", got, keanu, moss)
-	}
-}
-
-// TestThePeopleLoopWakesOnAMarkAndRefillsOnAPublish: between passes the
-// loop waits on both of its wakes, and only a new generation, which
-// brings people to queue, asks for a refill.
-func TestThePeopleLoopWakesOnAMarkAndRefillsOnAPublish(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	wakes := newWakes()
-
-	wakes.signal(NotifyPersonWanted)
-	if woke, published := waitForPeople(ctx, wakes, time.Hour); !woke || published {
-		t.Errorf("a mark: woke %v, published %v", woke, published)
-	}
-	wakes.signal(NotifyPublished)
-	if woke, published := waitForPeople(ctx, wakes, time.Hour); !woke || !published {
-		t.Errorf("a publish: woke %v, published %v", woke, published)
-	}
-	if woke, published := waitForPeople(ctx, wakes, time.Millisecond); !woke || published {
-		t.Errorf("the backstop: woke %v, published %v", woke, published)
-	}
-	cancel()
-	if woke, _ := waitForPeople(ctx, wakes, time.Hour); woke {
-		t.Error("woke after the end")
 	}
 }
 

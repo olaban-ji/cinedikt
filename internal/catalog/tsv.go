@@ -86,10 +86,6 @@ func (r *Reader) Next() bool {
 	return true
 }
 
-// Line is the 1-based line number of the current row, for an error that
-// has to be found in a file of millions.
-func (r *Reader) Line() int { return r.line }
-
 // Err is the read error, if the walk stopped for a reason other than the
 // end of the file. A gzip cut short lands here, which is what makes a
 // truncated download fail the load instead of publishing a short table.

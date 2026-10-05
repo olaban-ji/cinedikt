@@ -44,22 +44,6 @@ type PosterFinder interface {
 	FindByIMDb(ctx context.Context, imdbID string) (tmdb.Found, error)
 }
 
-// TMDbSweepMinVotes is how well known a title has to be for the sweep
-// to fetch a picture nobody has asked for yet.
-//
-// A hundred votes takes the sweep from 310,000 titles to about 1,300 —
-// half a minute of work instead of a couple of hours — and everything
-// below it is still repaired the moment a reader opens it. The floor is
-// a statement about what is worth pre-fetching, not about what is worth
-// having.
-//
-// Zero sweeps the whole catalog, which is a defensible thing to want:
-// it is a few hours of a rate-limited API, and after it every title
-// TMDb has a picture for has one. Nothing else changes — a title TMDb
-// has nothing for is stamped either way, and asked again only when
-// that answer comes due, like every other.
-const TMDbSweepMinVotes = 100
-
 // TMDbBatch is how many titles are claimed per round.
 //
 // Small, now that the queue has an index that returns a page in its
@@ -186,7 +170,7 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 				// until the answer comes due.
 				got = tmdb.Found{}
 				none = true
-			case refused(err):
+			case errors.Is(err, tmdb.ErrKey):
 				// The key itself. Every title after this one would be
 				// told the same, so the pass ends here.
 				return &KeyError{Provider: "TMDb", Err: err}
@@ -228,12 +212,6 @@ func (j *TMDbJob) Run(ctx context.Context) error {
 			track.step(found + blank + failed)
 		}
 	}
-}
-
-// refused reports whether TMDb turned the credentials down.
-func refused(err error) bool {
-	var se *tmdb.StatusError
-	return errors.As(err, &se) && (se.Status == 401 || se.Status == 403)
 }
 
 // tmdbOutstanding is how many titles this pass has to ask about. It is
@@ -408,36 +386,3 @@ func (s *Store) saveTMDbPoster(ctx context.Context, tconst string, got tmdb.Foun
 // than the OMDb backfill's: what it is waiting for is a reader to meet
 // a film with no picture, which is not a thing that happens in bursts.
 const TMDbRest = 10 * time.Minute
-
-// fillFromTMDb keeps the fallback running for as long as the process
-// does, beside the OMDb backfill rather than inside it: the two answer
-// to different rate limits, and chaining them would drop the faster one
-// to the pace of the slower.
-func fillFromTMDb(ctx context.Context, job *TMDbJob, logger *slog.Logger, wakes *Wakes) {
-	waited := false
-	for {
-		ready, err := job.Store.LiveReady(ctx)
-		wait := TMDbRest
-		switch {
-		case err != nil || !ready:
-			if !waited {
-				logger.Info("tmdb posters waiting for a catalog")
-				waited = true
-			}
-			wait = PosterWaitForCatalog
-		default:
-			waited = false
-			err := job.Run(ctx)
-			if err != nil && ctx.Err() == nil {
-				logger.Warn("tmdb posters", "err", err)
-			}
-			reportRun(ctx, job.Notify, notify.JobTMDbPosters, err, time.Now().Add(wait))
-		}
-		// A reader who opens a film with no picture is the best reason
-		// there is to ask TMDb about it, and they should not have to
-		// wait out a ten minute sleep for the asking.
-		if !waitFor(ctx, wakes.Wanted, wait) {
-			return
-		}
-	}
-}
