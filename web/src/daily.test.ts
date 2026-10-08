@@ -12,8 +12,11 @@ import {
   DAILY_START,
   END_STAGGER_MAX_MS,
   FLIP_EASE,
+  FLIP_MAX,
+  FLIP_MIN,
   FLIP_MS,
   FRESH_HOLD_MS,
+  GAME_NAME,
   INTRO_IN_MS,
   INTRO_OUT_MS,
   INTRO_PART_MS,
@@ -31,6 +34,8 @@ import {
   SHAKE_MS,
   SPEND_FLOAT_MS,
   STAGGER_MS,
+  STEPS_WIDE_MIN,
+  STEPS_WIDE_QUERY,
   TWINKLE_EASE,
   TWINKLE_EVERY_MS,
   TWINKLE_MS,
@@ -52,6 +57,7 @@ import {
   cardsMarked,
   clockOffset,
   clueButtons,
+  costSpan,
   countdown,
   dailyDateText,
   dailyDayText,
@@ -105,6 +111,7 @@ import {
   staleGame,
   standingText,
   statsOf,
+  stepColumns,
   streakAfter,
   usedList,
   watchMidnight,
@@ -279,6 +286,9 @@ describe('what turning a card over costs', () => {
   it('never goes under 20 or over 80, however low or high the rating', () => {
     expect(flipCost(1.2)).toBe(20);
     expect(flipCost(10)).toBe(80);
+    // The ends the title screen's "Card 20–80" is written from.
+    expect([FLIP_MIN, FLIP_MAX]).toEqual([20, 80]);
+    expect([flipCost(0), flipCost(10)]).toEqual([FLIP_MIN, FLIP_MAX]);
   });
 });
 
@@ -289,6 +299,31 @@ describe('the rules’ prices', () => {
     expect(DAILY_START).toBe(1000);
     expect(CLUE_COST).toEqual({ director: 150, actor: 150, genres: 80, year: 200 });
     expect([WRONG_BASE, WRONG_STEP]).toEqual([100, 50]);
+  });
+});
+
+describe('the title screen', () => {
+  it('names the game Point Blank', () => {
+    expect(GAME_NAME).toBe('Point Blank');
+  });
+
+  it('writes a price that runs between two numbers as a range, and one that does not as the number', () => {
+    expect(costSpan(FLIP_MIN, FLIP_MAX)).toBe('20–80');
+    expect(costSpan(80, 20)).toBe('20–80');
+    expect(costSpan(CLUE_COST.director, CLUE_COST.actor)).toBe('150');
+    expect(costSpan(150, 200)).toBe('150–200');
+  });
+
+  it('lays its steps four across from a 760px window, and two by two below it', () => {
+    for (const w of [320, 375, 390, 639, 660, 759, 759.5]) expect(stepColumns(w), `${w}`).toBe(2);
+    for (const w of [760, 768, 1024, 1440]) expect(stepColumns(w), `${w}`).toBe(4);
+    expect(STEPS_WIDE_MIN).toBe(760);
+    // What DailyIntro watches the window with: the same edge, written as
+    // a query, so the two cannot turn at different widths.
+    expect(STEPS_WIDE_QUERY).toBe('(min-width: 760px)');
+    // And not a query in the stylesheet, which keeps to its screen
+    // classes (screen.test.ts).
+    expect(css).not.toContain(STEPS_WIDE_QUERY);
   });
 });
 
@@ -1753,6 +1788,193 @@ describe('the year’s marks in the stylesheet', () => {
     expect([own.get('color'), own.get('font-variant-numeric')]).toEqual(['var(--t)', 'tabular-nums']);
     expect(declsIn('.cd-daily-streak svg', null).get('color')).toBe('var(--acc)');
     expect(css).not.toContain('.cd-daily-quote');
+  });
+});
+
+describe('the title screen in the stylesheet', () => {
+  const PHONE = '(max-width: 639.98px)';
+  /** What a declaration list sets, of these properties. */
+  const of = (decls: Map<string, string>, names: string[]) => names.map((n) => decls.get(n));
+
+  it('sets the name at 46px, 34 on a phone, and the goal line under it at 17px, 15.5 on a phone', () => {
+    const title = declsIn('.cd-daily-intro-title', null);
+    expect(of(title, ['font-family', 'font-weight', 'font-size', 'line-height'])).toEqual([
+      "'Young Serif', serif",
+      '400',
+      '46px',
+      '1.05',
+    ]);
+    expect(declsIn('.cd-daily-intro-title', PHONE).get('font-size')).toBe('34px');
+    const goal = declsIn('.cd-daily-goal', null);
+    expect(of(goal, ['max-width', 'font-size', 'line-height', 'color', 'text-wrap'])).toEqual([
+      '520px',
+      '17px',
+      '1.5',
+      'var(--t2)',
+      'balance',
+    ]);
+    expect(declsIn('.cd-daily-goal', PHONE).get('font-size')).toBe('15.5px');
+  });
+
+  it('lays the steps four across in at most 880px, 10px apart, or two by two', () => {
+    const list = declsIn('.cd-daily-steps', null);
+    expect(of(list, ['display', 'grid-template-columns', 'gap', 'width', 'max-width', 'list-style'])).toEqual([
+      'grid',
+      'repeat(4, minmax(0, 1fr))',
+      '10px',
+      '100%',
+      '880px',
+      'none',
+    ]);
+    expect(declsIn('.cd-daily-steps-pairs', null).get('grid-template-columns')).toBe('repeat(2, minmax(0, 1fr))');
+    // The grid's own stretch keeps a row of steps one height: nothing
+    // may set it otherwise.
+    expect(list.get('align-items')).toBeUndefined();
+    expect(declsIn('.cd-daily-step', null).get('align-self')).toBeUndefined();
+  });
+
+  it('boxes each step with 14px corners, 12px in, on the surface with its ring, 9px between its parts', () => {
+    const step = declsIn('.cd-daily-step', null);
+    expect(
+      of(step, ['display', 'flex-direction', 'gap', 'min-width', 'padding', 'box-sizing', 'border-radius', 'background', 'box-shadow']),
+    ).toEqual(['flex', 'column', '9px', '0', '12px', 'border-box', '14px', 'var(--s)', 'inset 0 0 0 1px var(--ln2)']);
+  });
+
+  it('numbers each step in a 20px accent circle and names it at 14px bold', () => {
+    const n = declsIn('.cd-daily-step-n', null);
+    expect(of(n, ['width', 'height', 'border-radius', 'background', 'color', 'font-size', 'font-weight', 'line-height'])).toEqual([
+      '20px',
+      '20px',
+      '50%',
+      'var(--accSoft)',
+      'var(--accText)',
+      '11px',
+      '700',
+      '20px',
+    ]);
+    expect(of(declsIn('.cd-daily-step-head', null), ['display', 'align-items', 'gap'])).toEqual(['flex', 'center', '8px']);
+    expect(of(declsIn('.cd-daily-step-name', null), ['font-size', 'font-weight'])).toEqual(['14px', '700']);
+  });
+
+  it('draws each picture on the ground with 10px corners, at least 80px tall, and Look at exactly 80', () => {
+    const pic = declsIn('.cd-daily-step-pic', null);
+    expect(of(pic, ['min-height', 'box-sizing', 'border-radius', 'background', 'padding', 'gap'])).toEqual([
+      '80px',
+      'border-box',
+      '10px',
+      'var(--g)',
+      '8px',
+      '7px',
+    ]);
+    // A floor, not a height, so a picture whose chips wrap grows.
+    expect(pic.get('height')).toBeUndefined();
+    const look = declsIn('.cd-daily-step-look', null);
+    expect(of(look, ['height', 'padding', 'position'])).toEqual(['80px', '20px 8px 7px', 'relative']);
+    expect(of(declsIn('.cd-daily-step-board', null), ['grid-template-columns', 'grid-template-rows', 'gap', 'height'])).toEqual([
+      'repeat(5, minmax(0, 1fr))',
+      'repeat(3, minmax(0, 1fr))',
+      '4px',
+      '100%',
+    ]);
+    expect(of(declsIn('.cd-daily-step-axis', null), ['top', 'font-size', 'font-weight', 'color'])).toEqual([
+      '4px',
+      '10px',
+      '600',
+      'var(--t3)',
+    ]);
+    expect(of(declsIn('.cd-daily-step-score', null), ['gap', 'padding'])).toEqual(['9px', '8px 10px']);
+  });
+
+  it('draws the hidden card dashed in the accent, and the face-up ones with a poster in a token', () => {
+    const hidden = declsIn('.cd-daily-step-card-hidden', null);
+    expect(of(hidden, ['border', 'background', 'font-family', 'font-size', 'color'])).toEqual([
+      '1.5px dashed var(--acc)',
+      'var(--ancBg)',
+      "'Young Serif', serif",
+      '10px',
+      'var(--accText)',
+    ]);
+    expect(declsIn('.cd-daily-step-card-up', null).get('background')).toBe(
+      'linear-gradient(90deg, var(--miniPoster) 0 34%, var(--c2) 34%)',
+    );
+    expect(declsIn(':root', null).get('--miniPoster')).toBe('oklch(0.56 0.09 230)');
+    expect(declsIn('.cd-daily-step-card-blank', null).get('box-shadow')).toBe('inset 0 0 0 1px var(--ln3)');
+    // The person is in their own colour, set inline.
+    expect(declsIn('.cd-daily-step-dot', null).get('background')).toBe('var(--tone)');
+  });
+
+  it('makes every chip 18px tall, 0 6px in, with 6px corners, at 10.5px bold', () => {
+    const chip = declsIn('.cd-daily-step-chip', null);
+    expect(of(chip, ['height', 'padding', 'border-radius', 'font-size', 'font-weight', 'line-height'])).toEqual([
+      '18px',
+      '0 6px',
+      '6px',
+      '10.5px',
+      '700',
+      '18px',
+    ]);
+    expect(of(chip, ['background', 'color'])).toEqual(['var(--accSoft)', 'var(--accText)']);
+    expect(of(declsIn('.cd-daily-step-chip-down', null), ['background', 'color'])).toEqual([
+      'color-mix(in oklch, var(--down) 18%, transparent)',
+      'var(--down)',
+    ]);
+    expect(of(declsIn('.cd-daily-step-chip-plain', null), ['background', 'box-shadow', 'color'])).toEqual([
+      'var(--c)',
+      'inset 0 0 0 1px var(--ln3)',
+      'var(--t2)',
+    ]);
+  });
+
+  it('keeps everything inside its picture however narrow the column', () => {
+    // At 320px a step is 135px wide and its picture's inside 95: the
+    // chips wrap, a chip is cut at the picture's edge rather than run
+    // past it, the guessed title gives way to an ellipsis, and "points
+    // left" goes under the number.
+    expect(declsIn('.cd-daily-step', null).get('min-width')).toBe('0');
+    expect(declsIn('.cd-daily-step-chips', null).get('flex-wrap')).toBe('wrap');
+    expect(of(declsIn('.cd-daily-step-chip', null), ['max-width', 'overflow', 'white-space'])).toEqual(['100%', 'hidden', 'nowrap']);
+    expect(of(declsIn('.cd-daily-step-typed', null), ['flex', 'min-width', 'overflow', 'text-overflow', 'white-space'])).toEqual([
+      '1',
+      '0',
+      'hidden',
+      'ellipsis',
+      'nowrap',
+    ]);
+    expect(declsIn('.cd-daily-step-chip-down', null).get('flex-shrink')).toBe('0');
+    expect(declsIn('.cd-daily-step-kept', null).get('flex-wrap')).toBe('wrap');
+    expect(declsIn('.cd-daily-step-axis', null).get('white-space')).toBe('nowrap');
+  });
+
+  it('captions each step at 12.5px on 1.4, in the second ink', () => {
+    expect(of(declsIn('.cd-daily-step-caption', null), ['font-size', 'line-height', 'color'])).toEqual([
+      '12.5px',
+      '1.4',
+      'var(--t2)',
+    ]);
+  });
+
+  it('moves none of the steps itself, so stillness leaves them simply there', () => {
+    // They arrive with the screen's entrance, played from script, which
+    // plays nothing for a reader who has asked for stillness. A
+    // transition here would be one the Daily's reduced-motion rules at
+    // the end of its section would have to undo, and none of them does.
+    const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const m of text.matchAll(/([^{}]*\.cd-daily-step[^{}]*)\{([^{}]*)\}/g)) {
+      expect(m[2], m[1].trim()).not.toMatch(/\b(transition|animation)\s*:/);
+    }
+    const still = /@media \(prefers-reduced-motion: reduce\) \{\s*\.cd-daily,[\s\S]*?\n\}/.exec(text)?.[0] ?? '';
+    expect(still).toContain('.cd-daily-play-button');
+    expect(still).not.toContain('.cd-daily-step');
+  });
+
+  it('keeps each step’s edge in forced colours, where its ring is dropped', () => {
+    expect(declsIn('.cd-daily-step', '(forced-colors: active)').get('outline')).toBe('1px solid ButtonText');
+  });
+
+  it('keeps nothing of the cost tiles, the rules paragraph or the lead', () => {
+    for (const gone of ['.cd-daily-costs', '.cd-daily-cost-item', '.cd-daily-cost-label', '.cd-daily-rules', '.cd-daily-lead', '.cd-daily-tag-down']) {
+      expect(css).not.toMatch(new RegExp(`${gone.replace('.', '\\.')}\\b(?!-)`));
+    }
   });
 });
 

@@ -44,11 +44,11 @@ const CAPTION_SHORT = 9 + 12 * 1.2 + 2 + 11 * 1.2;
 const BANNER = 24 + 44 + 18 + COLUMN_GAP;
 
 /** On a phone: 10px of padding top and bottom, the pill's 20px row, 2px,
- *  and the question at 17px and a line-height of 1.15 — two lines of
- *  it, which is what it takes beside "Keep going" — then a 10px margin
- *  and the gap. Beside "Play" it fits on one, and the grid is measured
- *  anyway; where in doubt the extra line is counted, as introHeight
- *  counts it. */
+ *  and the game's name at 17px and a line-height of 1.15 — two lines of
+ *  it, which it can take beside "Keep going" on a narrow phone — then a
+ *  10px margin and the gap. Beside "Play" it fits on one, and the grid
+ *  is measured anyway; where in doubt the extra line is counted, as
+ *  introHeight counts it. */
 const BANNER_PHONE = 20 + 20 + 2 + 2 * 17 * 1.15 + 10 + COLUMN_GAP;
 
 const GEOMETRY: Record<ScreenClass, ColdGeometry> = {

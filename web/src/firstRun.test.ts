@@ -123,7 +123,7 @@ describe('coldScreenCount', () => {
   });
 
   it('counts a phone’s banner at two lines, so a reader in the middle of a game loses no row', () => {
-    // Beside "Keep going" the question wraps; beside "Play" it does not.
+    // Beside "Keep going" the name can wrap; beside "Play" it does not.
     // The stand-in assumes the taller, and a measurement settles it.
     const oneLine = 64 + 36 + 61.55 + 10 + 12 + 69.12 + 12 + 48 + 12 + 28;
     const twoLines = oneLine + 17 * 1.15;

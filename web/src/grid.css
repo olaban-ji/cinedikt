@@ -233,6 +233,10 @@
   --knob: #ffffff;
   /* A trailer's letterbox is black on either ground, as a player's is. */
   --letterbox: #000000;
+  /* The poster on the face-up cards in the Daily title screen's Look
+     step: a cool mid-tone, one value as the design gives it, since it
+     reads on either ground. */
+  --miniPoster: oklch(0.56 0.09 230);
 }
 
 html,
@@ -5098,11 +5102,11 @@ button {
 /* Cinedikt Daily's way in (DailyBanner.tsx), first on the opening
    screen: one link, the whole of it. A fan of cards with the hidden one
    standing over them, the Daily pill and the puzzle's number, the
-   question, a line about today where there is room, and a button at the
-   end that is drawn rather than a control of its own. Its box is the
-   same before the server answers as after, so the grid of films under
-   it is measured once and stays put. It keeps 18px of its own under it,
-   on top of .cd-cold's 12px gap, above the headline. */
+   game's name, a line about today where there is room, and a button at
+   the end that is drawn rather than a control of its own. Its box is
+   the same before the server answers as after, so the grid of films
+   under it is measured once and stays put. It keeps 18px of its own
+   under it, on top of .cd-cold's 12px gap, above the headline. */
 .cd-daily-banner {
   display: flex;
   flex-shrink: 0;
@@ -5119,8 +5123,8 @@ button {
   text-align: left;
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
-  /* It fades in with the copy, on the copy's class: its question is set
-     in the headline's face, which the fade waits for. */
+  /* It fades in with the copy, on the copy's class: its name is set in
+     the headline's face, which the fade waits for. */
   opacity: 0;
   transition:
     opacity 600ms linear,
@@ -5309,7 +5313,7 @@ button {
 }
 
 /* A phone tightens it all round and keeps to the number: the day and
-   the line about today have no room beside the question. */
+   the line about today have no room beside the name. */
 @media (max-width: 639.98px) {
   .cd-daily-banner {
     gap: 12px;
@@ -6676,7 +6680,7 @@ button {
   white-space: nowrap;
 }
 
-/* A price, or a note in its place. The intro's costs wear it too. */
+/* A price, or a note in its place. */
 .cd-daily-tag {
   flex-shrink: 0;
   box-sizing: border-box;
@@ -6695,12 +6699,6 @@ button {
 .cd-daily-tag-muted {
   background: var(--ln2);
   color: var(--t3);
-}
-
-/* A wrong guess is the one cost that is a penalty. */
-.cd-daily-tag-down {
-  background: color-mix(in oklch, var(--down) 18%, transparent);
-  color: var(--down);
 }
 
 .cd-daily-options {
@@ -7521,52 +7519,298 @@ button {
   text-wrap: balance;
 }
 
-.cd-daily-lead {
+/* What the game asks, in one line under its name. */
+.cd-daily-goal {
   margin: 0;
-  max-width: 480px;
+  max-width: 520px;
   font-size: 17px;
   line-height: 1.5;
   color: var(--t2);
   text-wrap: balance;
 }
 
-.cd-daily-costs {
+/* How to play: four steps, each a name, a picture and a line, so the
+   whole game reads in one look. Four across, or two by two in a window
+   under 760px (.cd-daily-steps-pairs), which DailyIntro works out from
+   the window: 760 is not one of the screen classes, so it cannot be a
+   query here. The grid stretches every step to its row's height, so a
+   row stays one height whatever its captions and chips do. None of it
+   transitions: it arrives with the screen's entrance, played from
+   script, which a reader who asks for stillness is spared. */
+.cd-daily-steps {
   margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
   width: 100%;
-  max-width: 540px;
-}
-
-.cd-daily-cost-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 46px;
-  padding: 8px 8px 8px 12px;
-  box-sizing: border-box;
-  border-radius: 12px;
-  background: var(--s);
-  box-shadow: inset 0 0 0 1px var(--ln2);
+  max-width: 880px;
   text-align: left;
 }
 
-.cd-daily-cost-label {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.3;
+.cd-daily-steps-pairs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.cd-daily-rules {
-  margin: 0;
-  max-width: 500px;
-  font-size: 13.5px;
-  line-height: 1.5;
+/* Never wider than its column, at 320px or anywhere: what is in it
+   wraps, clips or shortens instead. */
+.cd-daily-step {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+  box-sizing: border-box;
+  border-radius: 14px;
+  background: var(--s);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+}
+
+.cd-daily-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cd-daily-step-n {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accSoft);
+  color: var(--accText);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+}
+
+.cd-daily-step-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* The picture: at least 80px, and taller when its chips wrap, with its
+   parts stacked in the middle. */
+.cd-daily-step-pic {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  min-height: 80px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: var(--g);
+}
+
+/* Look's board divides its height into three rows, so it needs one: it
+   is exactly 80px, its labels over the top of it. */
+.cd-daily-step-look {
+  position: relative;
+  display: block;
+  height: 80px;
+  padding: 20px 8px 7px;
+}
+
+.cd-daily-step-axis {
+  position: absolute;
+  top: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t3);
+  white-space: nowrap;
+}
+
+.cd-daily-step-axis-year {
+  left: 8px;
+}
+
+.cd-daily-step-axis-rating {
+  right: 8px;
+}
+
+.cd-daily-step-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  height: 100%;
+}
+
+.cd-daily-step-card {
+  border-radius: 3px;
+}
+
+.cd-daily-step-card-blank {
+  box-shadow: inset 0 0 0 1px var(--ln3);
+}
+
+/* Face up: a poster down its left third, as a card on the board has. */
+.cd-daily-step-card-up {
+  background: linear-gradient(90deg, var(--miniPoster) 0 34%, var(--c2) 34%);
+}
+
+/* The hidden one, dashed in the accent as the fan's is. */
+.cd-daily-step-card-hidden {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--acc);
+  background: var(--ancBg);
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--accText);
+}
+
+.cd-daily-step-points {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cd-daily-step-total {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 14px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* All the points, before any are spent. */
+.cd-daily-step-full {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--acc);
+}
+
+.cd-daily-step-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* A chip never runs past its picture's edge: one too long for a narrow
+   column is cut there rather than spilling out of it. */
+.cd-daily-step-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  max-width: 100%;
+  height: 18px;
+  padding: 0 6px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--accSoft);
+  color: var(--accText);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 18px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* What a wrong guess costs, the one price that is a penalty. */
+.cd-daily-step-chip-down {
+  flex-shrink: 0;
+  background: color-mix(in oklch, var(--down) 18%, transparent);
+  color: var(--down);
+}
+
+/* What a wrong guess tells: who it shares, and which way to go. */
+.cd-daily-step-chip-plain {
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t2);
+}
+
+/* The person's own colour, set inline as --tone (personColour.ts). */
+.cd-daily-step-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--tone);
+}
+
+/* The guess field, as the panel's looks with a wrong guess in it. The
+   title gives way first, to an ellipsis. */
+.cd-daily-step-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  border-radius: 8px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+}
+
+.cd-daily-step-typed {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.cd-daily-step-score {
+  gap: 9px;
+  padding: 8px 10px;
+}
+
+/* "640 points left": the words go under the number in a column too
+   narrow for both, rather than out of the picture. */
+.cd-daily-step-kept {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.cd-daily-step-kept-n {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-step-kept-words {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--t3);
+  white-space: nowrap;
+}
+
+/* Filled to the example's share of the start, set inline. */
+.cd-daily-step-bar {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--ln3);
+}
+
+.cd-daily-step-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--acc);
+}
+
+.cd-daily-step-caption {
+  font-size: 12.5px;
+  line-height: 1.4;
   color: var(--t2);
   text-wrap: pretty;
 }
@@ -7822,12 +8066,8 @@ button {
     font-size: 34px;
   }
 
-  .cd-daily-lead {
+  .cd-daily-goal {
     font-size: 15.5px;
-  }
-
-  .cd-daily-costs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -7842,7 +8082,7 @@ button {
   .cd-daily-soft,
   .cd-daily-field,
   .cd-daily-options,
-  .cd-daily-cost-item,
+  .cd-daily-step,
   .cd-daily-player {
     outline: 1px solid ButtonText;
     outline-offset: -1px;

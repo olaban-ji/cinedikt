@@ -863,6 +863,7 @@ export function DailyGameView({ today, week, offset, say, reload, again, rulesSi
           onGo={() => void play()}
           onReroll={reroll}
           onClose={closeRules}
+          theme={theme}
         />
       )}
       {burst && (

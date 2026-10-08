@@ -1,4 +1,4 @@
-// Cinedikt Daily: "whose map is it?"
+// Cinedikt Daily, and its game, Point Blank.
 //
 // One hidden movie a day. The board is its map with it taken off: every
 // card shares an actor or director with it, and every card but three
@@ -44,15 +44,21 @@ import {
 } from './grid';
 import type { Theme } from './theme';
 
+/** The game's name: the title screen's heading and the banner's title.
+ *  Named for what it is played with, points and a board of blank cards.
+ *  cmd/api's dailyShareTitle says it to a scraper, and the two must
+ *  agree. */
+export const GAME_NAME = 'Point Blank';
+
 // ---- the rules, as far as the page shows them ----
 
 /** Every game starts with this many points. The meter, the share card's
  *  bar and a week's cells are all drawn as a share of it (pointsShare),
- *  and the intro says it. */
+ *  and the title screen's goal line and Spend step say it. */
 export const DAILY_START = 1000;
 
 /** What each clue costs. The server charges; these are what the buttons
- *  and the rules say.
+ *  and the title screen's Spend step say.
  *
  *  The rule for any clue added here, as for the server's: none may give
  *  the answer away in a single search. So no plot, no tagline, no quote
@@ -71,9 +77,15 @@ export const CLUE_COST: Record<DailyClue, number> = {
 /** The first wrong guess, and how much more each one after it costs, so
  *  fishing for clues by guessing gets dear fast. The server charges, and
  *  sends what the next one costs with the game (`nextCost`); these are
- *  what the intro's rules say. */
+ *  what the title screen's Guess step says. */
 export const WRONG_BASE = 100;
 export const WRONG_STEP = 50;
+
+/** The least and the most a card costs to turn over, whatever its
+ *  rating: the ends of flipCost's clamp, as the server's FlipCost clamps,
+ *  and the title screen's "Card 20–80". */
+export const FLIP_MIN = 20;
+export const FLIP_MAX = 80;
 
 /** What turning a card over costs: 20 to 80, in fives, by its rating.
  *  Better-rated movies tend to be better known, so they give more away.
@@ -82,7 +94,7 @@ export const WRONG_STEP = 50;
  *  float arithmetic agrees to the last bit: 7.0 is 52.5 before rounding,
  *  and both sides make that 55. */
 export function flipCost(rating: number): number {
-  return Math.max(20, Math.min(80, Math.round((20 + (rating - 4.5) * 13) / 5) * 5));
+  return Math.max(FLIP_MIN, Math.min(FLIP_MAX, Math.round((20 + (rating - 4.5) * 13) / 5) * 5));
 }
 
 /** How much of the starting points are left, in percent, from 0 to 100:
@@ -1071,6 +1083,27 @@ export function introButton(no: number, game: DailyGame | null): string {
 export function playedText(n: number): { count: string; rest: string } | null {
   if (n <= 0) return null;
   return { count: fmtN(n), rest: n === 1 ? ' person has played today.' : ' people have played today.' };
+}
+
+/** A price that can run between two numbers, as the title screen writes
+ *  it: "20–80", or the one number when both ends are the same, as a
+ *  director and an actor are today ("Person 150"). Either order. */
+export function costSpan(a: number, b: number): string {
+  const [lo, hi] = a <= b ? [a, b] : [b, a];
+  return lo === hi ? String(lo) : `${lo}–${hi}`;
+}
+
+/** The title screen's four steps go four across from this window width,
+ *  and two by two below it. The width is the window's, as the design
+ *  measures it: DailyIntro watches STEPS_WIDE_QUERY for it, since 760 is
+ *  not one of the stylesheet's screen classes (screen.ts) and so cannot
+ *  be a media query there. */
+export const STEPS_WIDE_MIN = 760;
+export const STEPS_WIDE_QUERY = `(min-width: ${STEPS_WIDE_MIN}px)`;
+
+/** How many columns the steps take in a window this wide. */
+export function stepColumns(width: number): 2 | 4 {
+  return width < STEPS_WIDE_MIN ? 2 : 4;
 }
 
 // ---- time ----

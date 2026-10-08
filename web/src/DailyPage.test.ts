@@ -12,10 +12,21 @@ import {
   type DailyWeek,
 } from './api';
 import { BoardCard } from './DailyBoard';
-import { DailyIntro, nextStop } from './DailyIntro';
+import { DailyIntro, enterIntro, nextStop } from './DailyIntro';
 import { DailyGameView, DailyHeaderTail, DailyPage, askForStanding, fetchDailyPage, playAgain } from './DailyPage';
 import { DailyPanel } from './DailyPanel';
-import { YEAR_PLACEHOLDER, boardPayload } from './daily';
+import {
+  CLUE_COST,
+  DAILY_START,
+  FLIP_MAX,
+  FLIP_MIN,
+  STEPS_WIDE_QUERY,
+  WRONG_BASE,
+  WRONG_STEP,
+  YEAR_PLACEHOLDER,
+  boardPayload,
+  introDelay,
+} from './daily';
 import { layoutGrid } from './grid';
 
 // ---- a small puzzle: The Matrix, on a board of six ----
@@ -150,9 +161,9 @@ describe('the page before Play', () => {
     const html = drawn(null);
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="true"');
-    expect(html).toContain('Whose map is it?');
+    expect(html).toContain('<h1 id="cd-daily-title" class="cd-daily-intro-title">Point Blank</h1>');
     expect(html).toContain(
-      'One hidden movie. Every movie on its map shares an actor or director with it. Find it with as many of your 1,000 points left as you can.',
+      '<p class="cd-daily-goal">Name today’s hidden movie. Keep as many of your 1,000 points as you can.</p>',
     );
     expect(html).toContain('Hidden movie from 1971. Turn it over for 35 points');
     // The starting three turn over when the clock starts, not before.
@@ -162,22 +173,6 @@ describe('the page before Play', () => {
 
   it('keeps the board out of reach behind it', () => {
     expect(drawn(null)).toMatch(/aria-label="Today’s map" aria-hidden="true" inert=""/);
-  });
-
-  it('lists what everything costs', () => {
-    const html = drawn(null);
-    for (const [label, tag] of [
-      ['Turn over a card', '20–80'],
-      ['See a director', '150'],
-      ['See an actor', '150'],
-      ['See its genres', '80'],
-      ['See its year', '200'],
-      ['A wrong guess', '100+'],
-    ]) {
-      expect(html).toMatch(new RegExp(`${label}</span><span class="cd-daily-tag[^"]*">${tag.replace('+', '\\+')}<`));
-    }
-    expect(html).toContain('You start with three movies showing.');
-    expect(html).toContain('Each wrong guess costs 50 more than the last.');
   });
 
   it('says who the reader is playing as, the day, the streak, and how many have played', () => {
@@ -202,6 +197,220 @@ describe('the page before Play', () => {
   });
 });
 
+describe('how to play, on the title screen', () => {
+  const props = (over: Partial<ComponentProps<typeof DailyIntro>> = {}): ComponentProps<typeof DailyIntro> => ({
+    today: todayOf(null),
+    game: null,
+    name: 'Trinity Kimble',
+    spinning: false,
+    streak: 3,
+    rank: '1,204th this week',
+    rules: false,
+    busy: false,
+    dialogRef: { current: null },
+    nameRef: { current: null },
+    onGo: () => {},
+    onReroll: () => {},
+    onClose: () => {},
+    theme: 'dark',
+    ...over,
+  });
+  const intro = (over: Partial<ComponentProps<typeof DailyIntro>> = {}) =>
+    renderToStaticMarkup(createElement(DailyIntro, props(over)));
+  /** The list, and each of its items. */
+  const list = (html: string) => /<ol class="cd-daily-steps[^"]*" aria-label="How to play">[\s\S]*?<\/ol>/.exec(html)?.[0] ?? '';
+  const steps = (html: string) => [...list(html).matchAll(/<li class="cd-daily-step" data-in="1">([\s\S]*?)<\/li>/g)].map((m) => m[1]);
+  /** What a screen reader is given of a step: the pictures and the
+   *  numbers are hidden, which leaves its name and its line. */
+  const heard = (step: string) =>
+    step
+      .replace(/<div class="cd-daily-step-pic[^"]*" aria-hidden="true">[\s\S]*?<\/div>/g, '')
+      .replace(/<span class="cd-daily-step-n" aria-hidden="true">\d<\/span>/g, '')
+      .replace(/<span class="cd-daily-step-name">([^<]*)<\/span>/, '$1. ')
+      .replace(/<[^>]*>/g, '');
+  const texts = (html: string, cls: string) =>
+    [...html.matchAll(new RegExp(`<span class="${cls}"[^>]*>(?:<span[^>]*></span>)?([^<]*)</span>`, 'g'))].map((m) => m[1]);
+  const CAPTIONS = [
+    'Every movie here shares an actor or director with the hidden one. Three start face up.',
+    'Turn over cards and buy clues. Higher-rated cards cost more.',
+    'Wrong guesses cost 100, then 150, 200… Each shows who it shares and narrows the year and rating.',
+    'The points you keep are your score. Time breaks ties.',
+  ];
+
+  it('is a list of four steps a screen reader hears in order, each its name and its line', () => {
+    const got = steps(intro());
+    expect(got).toHaveLength(4);
+    expect(got.map(heard)).toEqual(['Look', 'Spend', 'Guess', 'Score'].map((name, i) => `${name}. ${CAPTIONS[i]}`));
+    // Numbered by the list itself; the circles say it again for the eye.
+    expect(got.map((s) => /<span class="cd-daily-step-n" aria-hidden="true">(\d)<\/span>/.exec(s)?.[1])).toEqual(['1', '2', '3', '4']);
+  });
+
+  it('hides every picture from a screen reader', () => {
+    const pics = [...list(intro()).matchAll(/<div class="cd-daily-step-pic ([^"]*)"([^>]*)>/g)];
+    expect(pics.map((m) => m[1])).toEqual(['cd-daily-step-look', 'cd-daily-step-spend', 'cd-daily-step-guess', 'cd-daily-step-score']);
+    for (const m of pics) expect(m[2]).toBe(' aria-hidden="true"');
+  });
+
+  it('draws Look as a board of fifteen, three face up and the hidden one dashed in the middle, under its axes', () => {
+    const [look] = steps(intro());
+    expect(look).toContain('<span class="cd-daily-step-axis cd-daily-step-axis-year">Year ↓</span>');
+    expect(look).toContain('<span class="cd-daily-step-axis cd-daily-step-axis-rating">Rating →</span>');
+    const cards = [...look.matchAll(/<span class="cd-daily-step-card cd-daily-step-card-(\w+)">([^<]*)<\/span>/g)];
+    expect(cards.map((m) => m[1])).toEqual([
+      ...['blank', 'up', 'blank', 'blank', 'blank'],
+      ...['blank', 'blank', 'hidden', 'blank', 'up'],
+      ...['blank', 'up', 'blank', 'blank', 'blank'],
+    ]);
+    expect(cards.filter((m) => m[2]).map((m) => m[2])).toEqual(['?']);
+  });
+
+  it('draws Spend as the thousand, full, and what each thing costs', () => {
+    const spend = steps(intro())[1];
+    expect(spend).toContain('<span class="cd-daily-step-total">1,000</span><span class="cd-daily-step-full"></span>');
+    expect(texts(spend, 'cd-daily-step-chip')).toEqual(['Card 20–80', 'Person 150', 'Genres 80', 'Year 200']);
+    // Each read from the rules, so a new price cannot leave this saying
+    // the old one.
+    expect(texts(spend, 'cd-daily-step-chip')).toEqual([
+      `Card ${FLIP_MIN}–${FLIP_MAX}`,
+      `Person ${CLUE_COST.director}`,
+      `Genres ${CLUE_COST.genres}`,
+      `Year ${CLUE_COST.year}`,
+    ]);
+    expect(CLUE_COST.actor).toBe(CLUE_COST.director);
+  });
+
+  it('draws Guess as a wrong guess and what it told: who it shares, in their colour, and which way to go', () => {
+    const guess = steps(intro())[2];
+    expect(guess).toContain(
+      '<span class="cd-daily-step-field"><span class="cd-daily-step-typed">John Wick</span><span class="cd-daily-step-chip cd-daily-step-chip-down">−100</span></span>',
+    );
+    expect(texts(guess, 'cd-daily-step-chip cd-daily-step-chip-plain')).toEqual(['Keanu Reeves', 'Older', 'Rated higher']);
+    // The first person on a board's colour, worked out for the theme and
+    // set inline, as every person's is.
+    expect(guess).toContain('<span class="cd-daily-step-dot" style="--tone:oklch(0.78 0.12 205)"></span>Keanu Reeves');
+    expect(steps(intro({ theme: 'light' }))[2]).toContain('style="--tone:oklch(0.55 0.15 205)"');
+    expect(heard(guess)).toContain(
+      `cost ${WRONG_BASE}, then ${WRONG_BASE + WRONG_STEP}, ${WRONG_BASE + 2 * WRONG_STEP}…`,
+    );
+  });
+
+  it('draws Score as the points kept over a bar filled to their share of the start', () => {
+    const score = steps(intro())[3];
+    expect(score).toContain(
+      '<span class="cd-daily-step-kept"><span class="cd-daily-step-kept-n">640</span><span class="cd-daily-step-kept-words">points left</span></span>',
+    );
+    expect(score).toContain('<span class="cd-daily-step-bar-fill" style="width:64%"></span>');
+    expect(DAILY_START).toBe(1000);
+  });
+
+  it('replaces the cost tiles and the paragraph of rules', () => {
+    for (const html of [intro(), intro({ game: gameOf([]), rules: true }), drawn(null)]) {
+      expect(html).not.toContain('What things cost');
+      expect(html).not.toContain('cd-daily-cost');
+      expect(html).not.toContain('cd-daily-tag');
+      expect(html).not.toContain('cd-daily-rules');
+      expect(html).not.toContain('cd-daily-lead');
+      expect(html).not.toContain('You start with three');
+      expect(html).not.toContain('Each wrong guess costs');
+    }
+  });
+
+  it('keeps the name row, Play, the count and both pills, the steps between the goal line and the name', () => {
+    const html = drawn(null, { rank: 1204, players: 83500 });
+    expect(html).toContain('<span class="cd-daily-player-kicker">Playing as</span>');
+    expect(html).toContain('New name');
+    expect(html).toContain('Play No. 142');
+    expect(html).toContain('people have played today. The clock starts when you press Play.');
+    expect(html).toContain('3-day streak');
+    expect(html).toContain('1,204th this week');
+    const at = (needle: string) => html.indexOf(needle);
+    expect(at('cd-daily-goal')).toBeLessThan(at('aria-label="How to play"'));
+    expect(at('aria-label="How to play"')).toBeLessThan(at('cd-daily-player'));
+    // The rules say the same, and lead back.
+    expect(steps(intro({ game: gameOf([]), rules: true }))).toHaveLength(4);
+  });
+
+  it('goes four across in a window 760px wide or more, and two by two below it', () => {
+    const cls = () => /<ol class="([^"]*)" aria-label="How to play">/.exec(intro())?.[1];
+    // As the window says through matchMedia, which measures it as the
+    // design's 760 does…
+    const media = (wide: boolean) => ({
+      innerWidth: wide ? 760 : 759,
+      innerHeight: 900,
+      matchMedia: (q: string) => ({ matches: q === STEPS_WIDE_QUERY && wide }),
+    });
+    vi.stubGlobal('window', media(true));
+    expect(cls()).toBe('cd-daily-steps');
+    vi.stubGlobal('window', media(false));
+    expect(cls()).toBe('cd-daily-steps cd-daily-steps-pairs');
+    // …or by its width alone where there is no matchMedia.
+    vi.stubGlobal('window', { innerWidth: 760, innerHeight: 900 });
+    expect(cls()).toBe('cd-daily-steps');
+    vi.stubGlobal('window', { innerWidth: 375, innerHeight: 812 });
+    expect(cls()).toBe('cd-daily-steps cd-daily-steps-pairs');
+  });
+
+  it('joins the screen’s entrance a step at a time, between the goal line and the name', () => {
+    const parts = [...intro().matchAll(/class="([^"]*)" data-in="1"/g)].map((m) => m[1]);
+    expect(parts).toEqual([
+      'cd-daily-fan',
+      'cd-daily-meta',
+      'cd-daily-intro-words',
+      'cd-daily-step',
+      'cd-daily-step',
+      'cd-daily-step',
+      'cd-daily-step',
+      'cd-daily-player',
+      'cd-daily-play',
+      'cd-daily-live',
+    ]);
+    // Played on stand-ins for the parts, as the dialog would find them.
+    const enter = (still: boolean) => {
+      vi.stubGlobal('window', {
+        innerWidth: 1366,
+        innerHeight: 768,
+        matchMedia: (q: string) => ({ matches: still && q === '(prefers-reduced-motion: reduce)' }),
+      });
+      const found = parts.map(() => ({ animate: vi.fn() }));
+      const dialog = { animate: vi.fn(), querySelectorAll: () => found };
+      enterIntro(dialog as unknown as Element);
+      return { dialog, found };
+    };
+    const { dialog, found } = enter(false);
+    expect(dialog.animate).toHaveBeenCalledTimes(1);
+    const waits = found.map((p) => (p.animate.mock.calls[0][1] as KeyframeAnimationOptions).delay);
+    expect(waits).toEqual(parts.map((_, i) => introDelay(i)));
+    // The steps rise in turn, 70ms apart.
+    expect(waits.slice(3, 7)).toEqual([290, 360, 430, 500]);
+    // Asked for stillness, nothing plays: everything is simply there.
+    const still = enter(true);
+    expect(still.dialog.animate).not.toHaveBeenCalled();
+    for (const p of still.found) expect(p.animate).not.toHaveBeenCalled();
+  });
+});
+
+describe('the game’s name', () => {
+  // Every source file and stylesheet in the app, and the page they load
+  // into. The old name is spelt out in pieces so this file is not one of
+  // the places it is found.
+  const sources = {
+    ...import.meta.glob('./**/*.{ts,tsx,css}', { query: '?raw', import: 'default', eager: true }),
+    ...import.meta.glob('../index.html', { query: '?raw', import: 'default', eager: true }),
+  } as Record<string, string>;
+  const OLD_NAME = new RegExp(['whose', 'map', 'is', 'it'].join('\\s+'), 'i');
+
+  it('reads the whole app', () => {
+    expect(Object.keys(sources).length).toBeGreaterThan(80);
+    expect(Object.keys(sources)).toContain('./DailyIntro.tsx');
+    expect(Object.keys(sources)).toContain('../index.html');
+  });
+
+  it('is Point Blank, and the old one is nowhere: not in the copy, the labels, the tests or the styles', () => {
+    expect([...Object.entries(sources)].filter(([, text]) => OLD_NAME.test(text)).map(([file]) => file)).toEqual([]);
+    expect(drawn(null)).toContain('>Point Blank</h1>');
+  });
+});
+
 describe('a new name on its way', () => {
   const props = (game: DailyGame | null, spinning: boolean): ComponentProps<typeof DailyIntro> => ({
     today: todayOf(game),
@@ -217,6 +426,7 @@ describe('a new name on its way', () => {
     onGo: () => {},
     onReroll: () => {},
     onClose: () => {},
+    theme: 'dark',
   });
   const playButton = (html: string) => html.match(/<button[^>]*class="cd-daily-play-button"[^>]*>/)?.[0] ?? '';
 
@@ -399,6 +609,7 @@ describe('the reader’s place on the title screen', () => {
     onGo: () => {},
     onReroll: () => {},
     onClose: () => {},
+    theme: 'dark',
   });
   const intro = (game: DailyGame | null, rank: string) =>
     renderToStaticMarkup(createElement(DailyIntro, props(game, rank)));
@@ -705,11 +916,13 @@ describe('the rules', () => {
     onGo: () => {},
     onReroll: () => {},
     onClose: () => {},
+    theme: 'dark',
   });
 
   it('are the intro again, leading back to the game', () => {
     const html = renderToStaticMarkup(createElement(DailyIntro, props(gameOf([]))));
-    expect(html).toContain('Whose map is it?');
+    expect(html).toContain('>Point Blank</h1>');
+    expect(html).toContain('aria-label="How to play"');
     expect(html).toContain('Back to the game');
     expect(html).not.toContain('people have played today');
     expect(html).not.toContain('-day streak');

@@ -435,8 +435,9 @@ func TestTheAboutPageIsNamed(t *testing.T) {
 }
 
 // Daily is named for a scraper at its one address, however it was
-// reached: its own title, and a preview that says what the game is. The
-// card stays the site's: a picture of the day's map would give it away.
+// reached: its own title, and a preview that names the game, Point
+// Blank, and says what it is. The card stays the site's: a picture of
+// the day's map would give it away.
 func TestTheDailyPageIsNamed(t *testing.T) {
 	var asked []string
 	var mu sync.Mutex
@@ -451,7 +452,7 @@ func TestTheDailyPageIsNamed(t *testing.T) {
 		head := fetchHead(t, srv, path)
 		for _, want := range []string{
 			`<title>Daily · Cinedikt</title>`,
-			`<meta property="og:title" content="Cinedikt Daily: whose map is it?" />`,
+			`<meta property="og:title" content="Cinedikt Daily: Point Blank" />`,
 			`content="One hidden movie a day. Every movie on its map shares an actor or director with it."`,
 			`<meta property="og:url" content="https://cinedikt.com/daily" />`,
 			// What stays the generic page's: the card, what the card is
@@ -463,6 +464,11 @@ func TestTheDailyPageIsNamed(t *testing.T) {
 			if !strings.Contains(head, want) {
 				t.Errorf("GET %s is missing %s", path, want)
 			}
+		}
+		// Nor does any preview still use the name the game had before,
+		// spelt out in pieces so that this file does not hold it either.
+		if old := strings.Join([]string{"whose", "map", "is", "it"}, " "); strings.Contains(strings.ToLower(head), old) {
+			t.Errorf("GET %s still names the game by its old name", path)
 		}
 		// Nothing else about the page changes.
 		for _, tag := range []*regexp.Regexp{titleTag, ogTitle, ogDesc, ogURL} {

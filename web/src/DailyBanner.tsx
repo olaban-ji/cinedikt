@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { fetchDaily, fetchDailyWeek, type DailyToday, type DailyWeek } from './api';
-import { clockOffset, dailyDayText, fmtN, standingText, watchMidnight } from './daily';
+import { GAME_NAME, clockOffset, dailyDayText, fmtN, standingText, watchMidnight } from './daily';
 import { DAILY_PATH } from './movieParam';
 import { animate } from './motion';
 import { useReducedMotion } from './theme';
@@ -38,8 +38,9 @@ export type BannerState =
   | { state: 'ready'; today: BannerToday }
   | { state: 'gone' };
 
-/** The question the game asks, which the banner asks too. */
-export const BANNER_TITLE = 'Whose map is it?';
+/** The banner's title: the game's name, as the title screen's heading
+ *  has it. */
+export const BANNER_TITLE = GAME_NAME;
 
 /** Everything the banner says, worked out from today's puzzle. */
 export interface BannerView {
@@ -56,12 +57,14 @@ export interface BannerView {
   go: string;
   /** The link's name for a screen reader. It holds every word the eye is
    *  given, the button's included, so a reader who says "click Results"
-   *  to their speech software is understood. */
+   *  to their speech software is understood. The name is a sentence of
+   *  its own, as the handoff writes it: "Cinedikt Daily, No. 142: Point
+   *  Blank. Play". */
   label: string;
 }
 
 /** What the banner says. Null is the puzzle still on its way: the box,
- *  the pill and the question are drawn, the number and the sub are not,
+ *  the pill and the name are drawn, the number and the sub are not,
  *  and the button keeps the room "Play" takes, with the word held back,
  *  so nothing guesses at a state it does not know yet. */
 export function bannerView(today: BannerToday | null): BannerView {
@@ -86,7 +89,7 @@ export function bannerView(today: BannerToday | null): BannerView {
     day: dailyDayText(today.date),
     sub,
     go,
-    label: `Cinedikt Daily, ${no}: ${BANNER_TITLE} ${sub ? `${sub}. ` : ''}${go}`,
+    label: `Cinedikt Daily, ${no}: ${BANNER_TITLE}. ${sub ? `${sub}. ` : ''}${go}`,
   };
 }
 

@@ -2334,7 +2334,7 @@ function ColdStart({
     const ro = new ResizeObserver(read);
     ro.observe(document.documentElement);
     // The window does not change size when the banner does: its
-    // question taking a second line on a phone, once the button says
+    // name taking a second line on a phone, once the button says
     // "Keep going", moves the grid down without moving anything this
     // would otherwise hear. And the banner going is measured again here,
     // with this run again for it.

@@ -17,6 +17,7 @@ import {
   type BannerState,
   type BannerToday,
 } from './DailyBanner';
+import { GAME_NAME } from './daily';
 import css from './grid.css?raw';
 
 /** A game as far as the banner reads one: its phase, points and outcome.
@@ -56,13 +57,35 @@ const render = (day: BannerState, onDaily = () => {}) =>
   renderToStaticMarkup(createElement(DailyBanner, { day, onDaily }));
 
 describe('what the banner says', () => {
+  it('is titled with the game’s name, Point Blank, as the title screen is', () => {
+    expect(BANNER_TITLE).toBe('Point Blank');
+    expect(BANNER_TITLE).toBe(GAME_NAME);
+    // The handoff's label: the name ends its own sentence before the
+    // button's word.
+    expect(bannerView(today(null, 0)).label).toBe('Cinedikt Daily, No. 142: Point Blank. Play');
+  });
+
+  it('sets the name in Young Serif at 19px, and 17px on a phone', () => {
+    const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const rule = (body: string) =>
+      [...body.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+        .filter((r) => r[1].split(',').map((x) => x.trim()).includes('.cd-daily-banner-title'))
+        .map((r) => r[2].replace(/\s+/g, ' ').trim());
+    const outside = text.replace(/@media[^{]*\{[\s\S]*?\n\}/g, '');
+    expect(rule(outside)).toEqual([
+      "font-family: 'Young Serif', serif; font-weight: 400; font-size: 19px; line-height: 1.15;",
+    ]);
+    const phone = [...text.matchAll(/@media \(max-width: 639\.98px\) \{([\s\S]*?)\n\}/g)].flatMap((m) => rule(m[1]));
+    expect(phone).toEqual(['font-size: 17px;']);
+  });
+
   it('asks to play, with how many are, before the reader has started', () => {
     expect(bannerView(today(null))).toEqual({
       no: 'No. 142',
       day: 'Thursday 8 October',
       sub: '61,240 playing today',
       go: 'Play',
-      label: 'Cinedikt Daily, No. 142: Whose map is it? 61,240 playing today. Play',
+      label: 'Cinedikt Daily, No. 142: Point Blank. 61,240 playing today. Play',
     });
   });
 
@@ -71,7 +94,7 @@ describe('what the banner says', () => {
     const v = bannerView(today(null, 0));
     expect(v.sub).toBe('');
     expect(v.go).toBe('Play');
-    expect(v.label).toBe('Cinedikt Daily, No. 142: Whose map is it? Play');
+    expect(v.label).toBe('Cinedikt Daily, No. 142: Point Blank. Play');
     expect(bannerView(today(null, 1)).sub).toBe('1 playing today');
   });
 
@@ -79,7 +102,7 @@ describe('what the banner says', () => {
     const v = bannerView(today(playing));
     expect(v.sub).toBe('640 points left');
     expect(v.go).toBe('Keep going');
-    expect(v.label).toBe('Cinedikt Daily, No. 142: Whose map is it? 640 points left. Keep going');
+    expect(v.label).toBe('Cinedikt Daily, No. 142: Point Blank. 640 points left. Keep going');
   });
 
   it('offers the result once today is over, with the points kept or the miss', () => {
@@ -106,7 +129,7 @@ describe('what the banner says', () => {
       sub: '',
       // The room "Play" takes, kept; the stylesheet holds the word back.
       go: 'Play',
-      label: 'Cinedikt Daily: Whose map is it?',
+      label: 'Cinedikt Daily: Point Blank',
     });
   });
 
@@ -126,7 +149,7 @@ describe('the banner’s line with a place this week', () => {
     expect(bannerView(ranked(null))).toMatchObject({
       sub: '1,204th this week',
       go: 'Play',
-      label: 'Cinedikt Daily, No. 142: Whose map is it? 1,204th this week. Play',
+      label: 'Cinedikt Daily, No. 142: Point Blank. 1,204th this week. Play',
     });
     // Even on a day nobody has played yet.
     expect(bannerView({ ...ranked(null), played: 0 }).sub).toBe('1,204th this week');
@@ -206,14 +229,14 @@ describe('the banner', () => {
   it('is one link to /daily, the whole of it, named for what it says', () => {
     const html = render({ state: 'ready', today: today(playing) });
     expect(html).toMatch(
-      /^<a class="cd-daily-banner" href="\/daily" aria-label="Cinedikt Daily, No. 142: Whose map is it\? 640 points left. Keep going">/,
+      /^<a class="cd-daily-banner" href="\/daily" aria-label="Cinedikt Daily, No. 142: Point Blank. 640 points left. Keep going">/,
     );
     // The button is drawn, not a control nested inside the link.
     expect(html).not.toContain('<button');
     expect(html.match(/<a /g)).toHaveLength(1);
   });
 
-  it('draws the fan, the pill, the number and day, the question, the sub and the button', () => {
+  it('draws the fan, the pill, the number and day, the name, the sub and the button', () => {
     const html = render({ state: 'ready', today: today(null) });
     expect(html).toContain(
       '<span class="cd-daily-banner-fan" aria-hidden="true"><span class="cd-daily-banner-card cd-daily-banner-card-l"></span><span class="cd-daily-banner-card cd-daily-banner-card-r"></span><span class="cd-daily-banner-q">?</span></span>',
@@ -221,7 +244,7 @@ describe('the banner', () => {
     expect(html).toContain(
       '<span class="cd-daily-pill">Daily</span><span class="cd-daily-banner-meta">No. 142<span class="cd-daily-banner-day"> · Thursday 8 October</span></span>',
     );
-    expect(html).toContain('<span class="cd-daily-banner-title">Whose map is it?</span>');
+    expect(html).toContain('<span class="cd-daily-banner-title">Point Blank</span>');
     expect(html).toContain('<span class="cd-daily-banner-sub">61,240 playing today</span>');
     expect(html).toMatch(
       /<span class="cd-daily-banner-go"><span class="cd-daily-banner-shine" aria-hidden="true"><\/span><span class="cd-daily-banner-label">Play<\/span><svg [^>]*aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"><\/path><\/svg><\/span>/,
@@ -235,7 +258,7 @@ describe('the banner', () => {
   it('is drawn while the puzzle is on its way, marked waiting and holding the number back', () => {
     const html = render({ state: 'waiting' });
     expect(html).toMatch(/^<a class="cd-daily-banner cd-daily-banner-waiting" href="\/daily"/);
-    expect(html).toContain('<span class="cd-daily-banner-title">Whose map is it?</span>');
+    expect(html).toContain('<span class="cd-daily-banner-title">Point Blank</span>');
     expect(html).not.toContain('cd-daily-banner-meta');
     expect(html).not.toContain('cd-daily-banner-sub');
   });
