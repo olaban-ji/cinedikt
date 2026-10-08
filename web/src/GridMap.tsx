@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from 'react';
 import {
+  bandClass,
   genreMask,
   hasGenres,
   inWarmSpan,
@@ -18,6 +19,7 @@ import {
   markersFor,
   passesFloor,
   railLabelTop,
+  railYearClass,
   ratingText,
   revealDelay,
   rowKey,
@@ -26,6 +28,8 @@ import {
   searchedTagAt,
   type GridFilm,
   warmSpan,
+  warmTop,
+  WARM_STEP,
   type GridLayout,
   type GridPayload,
   type GridPerson,
@@ -184,11 +188,6 @@ export function ringDelay(reduced: boolean): number {
 export function spreadDelays(delay: number): string {
   return `${delay}ms, ${delay}ms, 0s, 0s, 0s`;
 }
-
-/** How far the reader can scroll before a new band of cards is mounted.
- *  Well inside the screen that is already warm, so the mount happens
- *  before those cards reach the glass. */
-const WARM_STEP = 64;
 
 /** The grid: one card per film, year down, rating across.
  *
@@ -867,11 +866,7 @@ function YearBand({ row: r, leaving = false }: { row: Row; leaving?: boolean }) 
   const key = rowKey(r);
   return (
     <div
-      className={
-        r.isBreak
-          ? 'cd-band cd-band-break'
-          : `cd-band${r.index % 2 === 1 ? ' cd-band-odd' : ''}${r.anchorYear ? ' cd-band-anchor' : ''}${r.decade ? ' cd-band-decade' : ''}`
-      }
+      className={bandClass(r)}
       style={{ top: r.top, height: r.height }}
       data-band={leaving ? undefined : key}
       data-band-leaving={leaving ? key : undefined}
@@ -921,7 +916,7 @@ function YearLabel({
       {...tag}
     >
       <span
-        className={`cd-rail-year${r.decade ? ' cd-rail-decade' : ''}${r.anchorYear ? ' cd-rail-anchor' : ''}`}
+        className={railYearClass(r)}
         style={leaving && labelAt != null ? { top: labelAt } : undefined}
       >
         {r.year}
@@ -1094,12 +1089,6 @@ export function reflowPlan(
     rows: was.rows.filter((r) => !rowsNow.has(rowKey(r)) && inWarmSpan(r.top, r.height, reach)),
     keep: new Set(near.filter((c) => staying.has(c.film.id)).map((c) => c.film.id)),
   };
-}
-
-/** The top of the screen in the plot, `lift` being how far down the
- *  scroller the plot starts, in the steps the warm band moves by. */
-function warmTop(scrollTop: number, lift: number): number {
-  return Math.floor(Math.max(0, scrollTop - lift) / WARM_STEP) * WARM_STEP;
 }
 
 /** A card leaving the map in a reflow, and the opacity it was drawn at. */

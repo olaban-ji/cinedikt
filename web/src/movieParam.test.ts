@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   ABOUT_PATH,
+  DAILY_PATH,
+  DAILY_TITLE,
   filmPath,
   isAboutPath,
+  isDailyPath,
   isImdbId,
   movieIdFromPath,
   HOME_TITLE,
@@ -91,17 +94,43 @@ describe('isAboutPath', () => {
   });
 });
 
+describe('isDailyPath', () => {
+  it('is the Daily at /daily and /daily/, and only there', () => {
+    expect(DAILY_PATH).toBe('/daily');
+    expect(isDailyPath('/daily')).toBe(true);
+    expect(isDailyPath('/daily/')).toBe(true);
+  });
+
+  it('is not anything else', () => {
+    // The puzzle is always today's: a number under it names nothing.
+    for (const path of ['/', '', '/daily/142', '/daily//', '/dailys', '/Daily', '/about', '/x/daily']) {
+      expect(isDailyPath(path), path).toBe(false);
+    }
+  });
+
+  it('is not a movie route or the About page either', () => {
+    expect(movieIdFromPath('/daily')).toBeNull();
+    expect(isAboutPath('/daily')).toBe(false);
+  });
+});
+
 describe('routeAt', () => {
-  it('reads one of the three routes from a path', () => {
-    expect(routeAt('/')).toEqual({ movieId: null, about: false });
-    expect(routeAt('/about')).toEqual({ movieId: null, about: true });
-    expect(routeAt('/about/')).toEqual({ movieId: null, about: true });
-    expect(routeAt('/movie/tt0133093-the-matrix')).toEqual({ movieId: 'tt0133093', about: false });
+  it('reads one of the four routes from a path', () => {
+    expect(routeAt('/')).toEqual({ movieId: null, about: false, daily: false });
+    expect(routeAt('/about')).toEqual({ movieId: null, about: true, daily: false });
+    expect(routeAt('/about/')).toEqual({ movieId: null, about: true, daily: false });
+    expect(routeAt('/daily')).toEqual({ movieId: null, about: false, daily: true });
+    expect(routeAt('/daily/')).toEqual({ movieId: null, about: false, daily: true });
+    expect(routeAt('/movie/tt0133093-the-matrix')).toEqual({
+      movieId: 'tt0133093',
+      about: false,
+      daily: false,
+    });
   });
 
   it('takes anything else for the opening screen', () => {
-    for (const path of ['/about/team', '/movie/nope', '/film/tt0133093', '']) {
-      expect(routeAt(path), path).toEqual({ movieId: null, about: false });
+    for (const path of ['/about/team', '/daily/142', '/movie/nope', '/film/tt0133093', '']) {
+      expect(routeAt(path), path).toEqual({ movieId: null, about: false, daily: false });
     }
   });
 });
@@ -122,12 +151,21 @@ describe('pageTitle', () => {
   });
 
   it('is About · Cinedikt on the About page', () => {
-    expect(pageTitle(undefined, true)).toBe('About · Cinedikt');
+    expect(pageTitle(undefined, 'about')).toBe('About · Cinedikt');
     // Whatever map was last open: the About page names itself.
-    expect(pageTitle('The Matrix', true)).toBe('About · Cinedikt');
-    expect(pageTitle('The Matrix', false)).toBe(
+    expect(pageTitle('The Matrix', 'about')).toBe('About · Cinedikt');
+    expect(pageTitle('The Matrix', undefined)).toBe(
       'The Matrix — everything its cast and directors made · Cinedikt',
     );
+  });
+
+  it('is Daily · Cinedikt on the Daily, whatever map was last open', () => {
+    expect(DAILY_TITLE).toBe('Daily · Cinedikt');
+    expect(pageTitle(undefined, 'daily')).toBe('Daily · Cinedikt');
+    expect(pageTitle('The Matrix', 'daily')).toBe('Daily · Cinedikt');
+    // The tab says "movie" wherever it says anything of the kind, and
+    // this one says neither: it never names today's answer.
+    expect(pageTitle('The Matrix', 'daily')).not.toMatch(/film|Matrix/i);
   });
 
   it('matches the tagline the page is served with', () => {

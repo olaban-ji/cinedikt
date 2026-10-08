@@ -15,19 +15,61 @@ export interface SearchHit {
 
 const BASE = '/api';
 
+/** A request the server answered with a refusal. The message is the
+ *  server's sentence, written for us and never shown; `reason` is the
+ *  short code a page maps to its own words, and `body` the whole answer,
+ *  for the refusals that carry more than a reason (the Daily's "stale"
+ *  hands back the game as it stands). A request that never got an
+ *  answer at all — the network, an abort — is not one of these. */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly reason: string | null;
+  readonly body: unknown;
+
+  constructor(message: string, status: number, reason: string | null, body: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.reason = reason;
+    this.body = body;
+  }
+}
+
+/** The refusal in a response that is not ok, read once for every kind
+ *  of request. */
+async function refusal(res: Response): Promise<ApiError> {
+  let message = `${res.status} ${res.statusText}`;
+  let reason: string | null = null;
+  let body: unknown = null;
+  try {
+    body = await res.json();
+    const said = (body ?? {}) as { error?: unknown; reason?: unknown };
+    if (typeof said.error === 'string' && said.error) message = said.error;
+    if (typeof said.reason === 'string' && said.reason) reason = said.reason;
+  } catch {
+    // not JSON; keep the status line
+  }
+  return new ApiError(message, res.status, reason, body);
+}
+
 async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, init);
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) message = body.error;
-    } catch {
-      // not JSON; keep the status line
-    }
-    throw new Error(message);
-  }
+  if (!res.ok) throw await refusal(res);
   return (await res.json()) as T;
+}
+
+/** A write. Always JSON, and always said to be: the server refuses a
+ *  write that does not say so, which is half of what keeps another site
+ *  from making one in the reader's name (the cookie's SameSite is the
+ *  other half). Answers and refusals are read exactly as getJSON reads
+ *  them. */
+export function postJSON<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return getJSON<T>(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
 }
 
 /** Eight films to start a map from, a different eight each time, one per
@@ -351,4 +393,305 @@ export async function searchMovies(
     { signal },
   );
   return res.results;
+}
+
+// ---- the Daily ----
+//
+// One hidden movie a day, played against the server: the page sends what
+// the reader does and draws the game the server sends back. Nothing here
+// ever holds the answer before the game is over — the server does not
+// send it — so these shapes are what the page has to work with, and no
+// more.
+
+/** A movie as the Daily shows it: a card turned over, a starting movie,
+ *  a guess, or the answer at the end. `rating` is a number for every card
+ *  and for the answer; a guessed movie can be unrated (null), and its
+ *  year is 0 when the catalog has none. */
+export interface DailyFilm {
+  id: string;
+  title: string;
+  year: number;
+  rating: number | null;
+  /** Month and day as MMDD, 0 when the date says only a year. */
+  md: number;
+  /** Absent when the catalog has no picture for it. */
+  poster?: string;
+}
+
+/** One of the answer's people, once the reader knows them. */
+export interface DailyPerson {
+  /** An IMDb name id, such as nm0000206. */
+  id: string;
+  name: string;
+  role: 'director' | 'cast';
+  /** Their place in the puzzle's people: directors first, then the cast
+   *  in billing order. It is their colour, HUES[slot % 16], and it never
+   *  changes during a game. */
+  slot: number;
+  /** TMDb's 185px photo, when there is one to show. */
+  photo?: string;
+  /** The board cards they are on, so their dots can be drawn. */
+  cards: string[];
+}
+
+/** Which side of a wrong guess the answer is on. */
+export type DailyYearHint = 'older' | 'newer' | 'same';
+export type DailyRatingHint = 'higher' | 'lower' | 'same';
+
+/** One line of the game's record, as the panel's feed tells it. */
+export type DailyEntry =
+  | { type: 'start' }
+  | { type: 'flip'; card: string; cost: number; film: DailyFilm; relative?: undefined }
+  | { type: 'flip'; card: string; cost: number; relative: { shared: number }; film?: undefined }
+  | { type: 'person'; role: 'director' | 'actor'; cost: number; people: DailyPerson[] }
+  | { type: 'genres'; cost: number; genres: string[] }
+  | { type: 'story'; cost: number; opening: string }
+  | {
+      type: 'guess';
+      cost: number;
+      film: DailyFilm;
+      /** The board card the guessed movie is, which turns over; null
+       *  when it is not on the board. */
+      card: string | null;
+      shared: DailyPerson[];
+      /** Where the answer sits relative to the guess. Null when the
+       *  guess has no year, or no rating, to compare. */
+      year: DailyYearHint | null;
+      rating: DailyRatingHint | null;
+    }
+  | { type: 'win' }
+  | { type: 'gaveup' }
+  | { type: 'out' };
+
+/** Everything the game kept back, sent once it is over. */
+export interface DailyEnd {
+  answer: DailyFilm & { genres: string[] };
+  /** Every card, its people as slots. */
+  cards: { id: string; film: DailyFilm; people: number[] }[];
+  /** Every one of the answer's people, with their cards. */
+  people: DailyPerson[];
+}
+
+/** A game, as the server has recorded it. */
+export interface DailyGame {
+  phase: 'play' | 'done';
+  pts: number;
+  /** How many moves are recorded. Every move is sent with it, so a move
+   *  made from a point the game has already passed — an old tab, a
+   *  second one — is refused rather than applied twice. */
+  seq: number;
+  /** RFC 3339. */
+  startedAt: string;
+  finishedAt: string | null;
+  /** Whole seconds from Play to the end, once it is over. */
+  secs: number | null;
+  won: boolean;
+  gaveUp: boolean;
+  /** What the next wrong guess costs. */
+  nextCost: number;
+  /** "start" first, then one entry per move. A last wrong guess that
+   *  runs the points out logs "guess" and then "out". */
+  log: DailyEntry[];
+  /** The people bought and the people found, in slot order. */
+  known: DailyPerson[];
+  end: DailyEnd | null;
+}
+
+/** A card on the board before anything is known about it: where it goes,
+ *  and nothing else. The id is opaque, so its number says nothing. */
+export interface DailyCard {
+  id: string;
+  year: number;
+  rating: number;
+  md: number;
+}
+
+export interface DailyPlayer {
+  /** A generated name, never typed. */
+  name: string;
+  /** False while it is only a proposal: nobody has pressed Play yet. */
+  saved: boolean;
+}
+
+/** Today's puzzle, for the reader's own date, and their game in it if
+ *  they have one. */
+export interface DailyToday {
+  no: number;
+  /** The puzzle's calendar date, "2026-10-08": the reader's own date
+   *  when they asked, in the zone the page sent. A date with no zone of
+   *  its own, so it is written as it stands and never moved a day. */
+  date: string;
+  /** The server's clock, so the page can count down to `next` on the
+   *  server's time rather than the reader's. RFC 3339. */
+  now: string;
+  /** The reader's next midnight, in the zone the page sent, as an
+   *  instant: when their next map starts. RFC 3339. */
+  next: string;
+  cards: DailyCard[];
+  /** The three movies showing from the start, the only ones sent whole. */
+  start: { card: string; film: DailyFilm }[];
+  /** How many directors and cast the answer has, for the clue buttons. */
+  clues: { directors: number; cast: number };
+  player: DailyPlayer;
+  /** Games started on this puzzle, by anyone, from every zone that has
+   *  had its date: the count rolls on for as long as the puzzle is
+   *  someone's today. */
+  played: number;
+  streak: { now: number; before: number };
+  game: DailyGame | null;
+}
+
+/** The clues the panel sells. */
+export type DailyClue = 'director' | 'actor' | 'genres' | 'story';
+
+/** What the reader can do to a game in progress. */
+export type DailyMove =
+  | { kind: 'flip'; card: string }
+  | { kind: 'buy'; clue: DailyClue }
+  | { kind: 'guess'; film: string }
+  | { kind: 'reveal' };
+
+export type DailyTab = 'today' | 'week';
+
+/** A player on a leaderboard. On the week's board `pts` is the week's sum
+ *  and `days` its Monday-to-Sunday points, null for a day not played. */
+export interface DailyBoardRow {
+  rank: number;
+  name: string;
+  /** 0–359, for their avatar. */
+  hue: number;
+  pts: number;
+  /** Today's time, on today's board only: a week row never carries it.
+   *  The reader's own time for the week is `you.secs`. */
+  secs?: number;
+  you: boolean;
+  days?: (number | null)[];
+}
+
+/** Where the leaderboard skips ranks. */
+export interface DailyBoardGap {
+  gap: true;
+}
+
+export interface DailyBoard {
+  tab: DailyTab;
+  /** The players on this board, and the reader if they are not on it. */
+  total: number;
+  /** The reader's own place, which they see whether or not they are
+   *  listed; null without a game to place. */
+  you: null | {
+    rank: number;
+    pts: number;
+    secs: number;
+    /** On the board for everyone to see: false until they have played on
+     *  enough earlier days. */
+    listed: boolean;
+    days?: (number | null)[];
+  };
+  rows: (DailyBoardRow | DailyBoardGap)[];
+  /** Today's board only: the share of finished players who kept fewer
+   *  points, and the share of finished games that were won, in percent. */
+  beat: number | null;
+  solved: number | null;
+}
+
+// Every Daily request carries the reader's time zone, as `tz`: each
+// puzzle belongs to a calendar date, and the reader is given the one for
+// their own date, which changes at their own midnight. The server works
+// that date out from its own clock and this zone, never from the
+// device's clock, so a clock wound forward opens nothing early; picking
+// another zone moves a reader a day at most. It goes on in the two
+// helpers below, which every Daily call goes through, so no call can be
+// written without it.
+
+/** The reader's time zone as the browser names it, "Europe/London", or
+ *  null when it cannot say: an Intl that throws, or one that answers
+ *  with nothing. Without one the server keeps to UTC. Read afresh for
+ *  each request, so a reader who has travelled is asked about where they
+ *  are now; a game already started keeps the zone it was started in. */
+export function readerZone(): string | null {
+  try {
+    const zone: unknown = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof zone === 'string' && zone ? zone : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A Daily address with the reader's zone on the end of it. */
+function dailyPath(path: string): string {
+  const zone = readerZone();
+  if (!zone) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}tz=${encodeURIComponent(zone)}`;
+}
+
+function dailyGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return getJSON<T>(dailyPath(path), { signal });
+}
+
+function dailyPost<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return postJSON<T>(dailyPath(path), body, signal);
+}
+
+/** Today's puzzle, for the reader's date. 503 with reason "not-ready"
+ *  until that date's puzzle has been picked. It never writes, so the
+ *  opening screen can ask on every visit. */
+export function fetchDaily(signal?: AbortSignal): Promise<DailyToday> {
+  return dailyGet<DailyToday>('/daily', signal);
+}
+
+/** Another generated name. With a player already made it renames them;
+ *  without one it only proposes, and nothing is written until Play.
+ *  `shown` is the name on the screen, sent so the server never offers
+ *  it again: a reader who presses New name always sees it change, even
+ *  when the pool of names is small. */
+export function renameDaily(shown: string, signal?: AbortSignal): Promise<DailyPlayer> {
+  return dailyPost<DailyPlayer>('/daily/name', { name: shown }, signal);
+}
+
+/** Starts the reader's game on puzzle `no`, under the name they were
+ *  shown, making them a player first if they are not one yet. A game
+ *  already started comes back as it stands. The game keeps the zone it
+ *  is started in: its map ends at that zone's midnight, whatever zone a
+ *  later move says it is from. */
+export function playDaily(
+  no: number,
+  name: string,
+  signal?: AbortSignal,
+): Promise<{ game: DailyGame; player: DailyPlayer }> {
+  return dailyPost(`/daily/${no}/play`, { name }, signal);
+}
+
+/** One move in a game in progress. `key` names this move for good, so
+ *  sending it again after a lost answer is never charged twice; `seq` is
+ *  the number of moves the page has seen, so a move from a point the game
+ *  has passed is refused ("stale") with the game as it stands. */
+export function sendDailyMove(
+  no: number,
+  move: DailyMove,
+  key: string,
+  seq: number,
+  signal?: AbortSignal,
+): Promise<{ game: DailyGame }> {
+  const base = { key, seq };
+  switch (move.kind) {
+    case 'flip':
+      return dailyPost(`/daily/${no}/flip`, { ...base, card: move.card }, signal);
+    case 'buy':
+      return dailyPost(`/daily/${no}/buy`, { ...base, kind: move.clue }, signal);
+    case 'guess':
+      return dailyPost(`/daily/${no}/guess`, { ...base, film: move.film }, signal);
+    case 'reveal':
+      return dailyPost(`/daily/${no}/reveal`, base, signal);
+  }
+}
+
+/** A leaderboard for puzzle `no`: today's, which is everyone who has
+ *  finished that puzzle from any zone, or the week's so far. */
+export function fetchDailyBoard(
+  no: number,
+  tab: DailyTab,
+  signal?: AbortSignal,
+): Promise<DailyBoard> {
+  return dailyGet<DailyBoard>(`/daily/${no}/board?tab=${tab}`, signal);
 }

@@ -134,7 +134,7 @@ func TestEveryPageAddressIsServedTheApp(t *testing.T) {
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
-	for _, path := range []string{"/movie/tt0133093-the-matrix", "/film/tt0133093", "/about", "/"} {
+	for _, path := range []string{"/movie/tt0133093-the-matrix", "/film/tt0133093", "/about", "/daily", "/"} {
 		resp, err := client.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -431,6 +431,60 @@ func TestTheAboutPageIsNamed(t *testing.T) {
 	defer mu.Unlock()
 	if len(asked) != 0 {
 		t.Errorf("the catalog was read for %v on the About page", asked)
+	}
+}
+
+// Daily is named for a scraper at its one address, however it was
+// reached: its own title, and a preview that says what the game is. The
+// card stays the site's: a picture of the day's map would give it away.
+func TestTheDailyPageIsNamed(t *testing.T) {
+	var asked []string
+	var mu sync.Mutex
+	srv := previewServer(t, func(_ context.Context, tconst string) (string, int, string, error) {
+		mu.Lock()
+		asked = append(asked, tconst)
+		mu.Unlock()
+		return "The Matrix", 1999, matrixPoster, nil
+	})
+	generic := fetchHead(t, srv, "/")
+	for _, path := range []string{"/daily", "/daily/"} {
+		head := fetchHead(t, srv, path)
+		for _, want := range []string{
+			`<title>Daily · Cinedikt</title>`,
+			`<meta property="og:title" content="Cinedikt Daily: whose map is it?" />`,
+			`content="One hidden movie a day. Every movie on its map shares an actor or director with it."`,
+			`<meta property="og:url" content="https://cinedikt.com/daily" />`,
+			// What stays the generic page's: the card, what the card is
+			// said to be, and the description search engines read.
+			`<meta property="og:image" content="https://cinedikt.com` + ogGeneric + `" />`,
+			`<meta name="twitter:image" content="https://cinedikt.com` + ogGeneric + `" />`,
+			`<meta property="og:image:alt" content="Cinedikt — a movie’s cast and directors, and everything they made" />`,
+		} {
+			if !strings.Contains(head, want) {
+				t.Errorf("GET %s is missing %s", path, want)
+			}
+		}
+		// Nothing else about the page changes.
+		for _, tag := range []*regexp.Regexp{titleTag, ogTitle, ogDesc, ogURL} {
+			head = tag.ReplaceAllString(head, "")
+		}
+		want := generic
+		for _, tag := range []*regexp.Regexp{titleTag, ogTitle, ogDesc, ogURL} {
+			want = tag.ReplaceAllString(want, "")
+		}
+		if head != want {
+			t.Errorf("GET %s changed more than its title, description and address", path)
+		}
+	}
+	// Neither is a movie route, so nothing is looked up, and a path
+	// under it is not Daily.
+	if head := fetchHead(t, srv, "/daily/142"); strings.Contains(head, "Daily · Cinedikt") || strings.Contains(head, "cinedikt.com/daily") {
+		t.Error("a path under /daily was named as Daily")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(asked) != 0 {
+		t.Errorf("the catalog was read for %v on Daily", asked)
 	}
 }
 

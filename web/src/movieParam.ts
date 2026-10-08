@@ -43,21 +43,42 @@ export function filmPath(id: string, title?: string): string {
 export const ABOUT_PATH = '/about';
 
 /** Whether a path is the About page: /about, with or without the
- *  slash, and nothing under it. The route is one of three things — the
- *  opening screen, the About page, or a map — and a path that is
- *  neither of the others is the opening screen. cmd/api's serveIndex
- *  reads the address the same way when it names the page for a
- *  scraper. */
+ *  slash, and nothing under it. The route is one of four things — the
+ *  opening screen, the About page, the Daily, or a map — and a path
+ *  that is none of the others is the opening screen. cmd/api's
+ *  serveIndex reads the address the same way when it names the page
+ *  for a scraper. */
 export function isAboutPath(pathname: string): boolean {
   return pathname === ABOUT_PATH || pathname === `${ABOUT_PATH}/`;
 }
 
+/** Cinedikt Daily's address, which the opening screen's banner pushes. */
+export const DAILY_PATH = '/daily';
+
+/** Whether a path is the Daily: /daily, with or without the slash, and
+ *  nothing under it, held as strictly as the About page is. The puzzle
+ *  is always today's, so there is nothing for a deeper path to name; a
+ *  link to /daily/142 is the opening screen, as /about/team is. The
+ *  server names the page it serves at these two paths the same way. */
+export function isDailyPath(pathname: string): boolean {
+  return pathname === DAILY_PATH || pathname === `${DAILY_PATH}/`;
+}
+
 /** Where a path puts the reader: on a map (`movieId`), on the About page
- *  (`about`), or, with neither, on the opening screen. The router reads
- *  its route from the address with this after every move, so the two
- *  halves of it cannot disagree with each other or with the address. */
-export function routeAt(pathname: string): { movieId: string | null; about: boolean } {
-  return { movieId: movieIdFromPath(pathname), about: isAboutPath(pathname) };
+ *  (`about`), on the Daily (`daily`), or, with none of them, on the
+ *  opening screen. The router reads its route from the address with
+ *  this after every move, so the parts of it cannot disagree with each
+ *  other or with the address. */
+export function routeAt(pathname: string): {
+  movieId: string | null;
+  about: boolean;
+  daily: boolean;
+} {
+  return {
+    movieId: movieIdFromPath(pathname),
+    about: isAboutPath(pathname),
+    daily: isDailyPath(pathname),
+  };
 }
 
 /** What the tab says. Naming the movie is the point: a reader with half
@@ -71,16 +92,25 @@ export const HOME_TITLE = 'Cinedikt — a movie’s cast and directors, and ever
  *  og:title, into the page it serves at /about. */
 const ABOUT_TITLE = 'About · Cinedikt';
 
-export function pageTitle(title?: string, about = false): string {
-  if (about) return ABOUT_TITLE;
+/** The Daily's tab. The server writes the same title into the page it
+ *  serves at /daily (cmd/api's nameDaily), with an og:title of its own
+ *  for a link pasted into a chat. */
+export const DAILY_TITLE = 'Daily · Cinedikt';
+
+/** The pages that name themselves whatever map was last open. */
+export type NamedPage = 'about' | 'daily';
+
+export function pageTitle(title?: string, page?: NamedPage): string {
+  if (page === 'about') return ABOUT_TITLE;
+  if (page === 'daily') return DAILY_TITLE;
   const named = title?.trim();
   return named ? `${named} — everything its cast and directors made · Cinedikt` : HOME_TITLE;
 }
 
-/** Puts the movie's name in the tab, or the About page's, and takes it
- *  out again on the way back to first run. */
-export function usePageTitle(title: string | undefined, about = false): void {
+/** Puts the movie's name in the tab, or the About page's or the Daily's,
+ *  and takes it out again on the way back to first run. */
+export function usePageTitle(title: string | undefined, page?: NamedPage): void {
   useEffect(() => {
-    document.title = pageTitle(title, about);
-  }, [title, about]);
+    document.title = pageTitle(title, page);
+  }, [title, page]);
 }

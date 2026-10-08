@@ -16,10 +16,11 @@ type Dependency struct {
 	Ping func(ctx context.Context) error
 }
 
-// Server is the routed API: the catalog's handlers, the health check, and
-// one log line for every request served.
+// Server is the routed API: the catalog's handlers, Cinedikt Daily, the
+// health check, and one log line for every request served.
 type Server struct {
 	catalog *CatalogServer
+	daily   *dailyRoutes
 	logger  *slog.Logger
 	// health are the dependencies /healthz reports on.
 	health []Dependency
@@ -34,7 +35,7 @@ func New(c *CatalogServer, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{catalog: c, logger: logger}
+	return &Server{catalog: c, daily: newDailyRoutes(logger), logger: logger}
 }
 
 // WithHealth registers the dependencies /healthz reports on. Without it
@@ -58,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /trailers/{id}", s.catalog.trailerFor)
 	mux.HandleFunc("GET /people/photos", s.catalog.peoplePhotos)
 	mux.HandleFunc("GET /where-to-watch/{id}", s.catalog.whereToWatch)
+	s.daily.register(mux)
 	return s.logRequests(mux)
 }
 

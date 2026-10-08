@@ -20,7 +20,9 @@ import (
 
 // Runner keeps a catalog up to date: it imports one if there is none,
 // checks hourly for a new generation, and fills in posters, synopses,
-// trailers and people's photos continuously beside both.
+// trailers and people's photos continuously beside both. It also keeps
+// Cinedikt Daily's puzzles picked, from UTC yesterday to eight days
+// ahead.
 //
 // The API runs it beside the server, so starting the app on an empty
 // database leaves a working map rather than a 503.
@@ -120,7 +122,7 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	notify.Attach(r.Notify, r.store)
 	im, posters, synopses := r.build()
 	client := r.tmdbClient()
-	enabled := []string{notify.JobImport, notify.JobColours}
+	enabled := []string{notify.JobImport, notify.JobColours, notify.JobDaily}
 	if posters != nil {
 		enabled = append(enabled, notify.JobPosters, notify.JobSynopses)
 	}
@@ -239,6 +241,14 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	keep(jobLoop{name: "opening screen colours", job: notify.JobColours, rest: ColourRest,
 		run:  func(ctx context.Context) error { return colours.Run(ctx, Live) },
 		wake: wakes.Ready})
+	// And Cinedikt Daily's puzzles, for every reader's date and a week
+	// past it. It needs nothing but the catalog, so it runs wherever the
+	// catalog does. Every pass is a read once the days are picked; the
+	// one after midnight UTC picks the new last day, and a new generation
+	// wakes it in case a day it could not pick for has an answer now.
+	puzzles := &DailyJob{Store: r.store, Logger: r.Logger.With("job", "daily-puzzles")}
+	keep(jobLoop{name: "daily puzzles", job: notify.JobDaily, rest: DailyRest,
+		run: puzzles.Run, wake: wakes.Daily})
 	start(func() {
 		// The files are rebuilt once a day. The hourly check is not
 		// about catching the moment they land; it is about not waiting

@@ -1,0 +1,4 @@
+🔴 <b>Daily puzzles failing: unexpected error</b>
+<b>To fix:</b> tap Details below or check the Railway logs. Next try by 15:20.
+It failed twice in a row with an error the app doesn't recognise, so it may need a code fix. No new days of Cinedikt Daily are being picked; the days already picked, up to eight days ahead, still play.
+<blockquote expandable>Details: catalog: none of 1842 candidates can be the daily answer for 2026-10-04</blockquote>

@@ -109,6 +109,9 @@ type Wakes struct {
 	// or one that has come due, for the same job. Its own channel for
 	// the reasons TrailersWanted has one.
 	PeopleWanted chan struct{}
+	// A new generation, for the daily puzzles job: a day it could not
+	// pick for may have a fair answer in the new catalog.
+	Daily chan struct{}
 }
 
 func newWakes() *Wakes {
@@ -127,6 +130,7 @@ func newWakes() *Wakes {
 		TrailersWanted: make(chan struct{}, 1),
 		People:         make(chan struct{}, 1),
 		PeopleWanted:   make(chan struct{}, 1),
+		Daily:          make(chan struct{}, 1),
 	}
 }
 
@@ -139,12 +143,14 @@ func (w *Wakes) signal(channel string) {
 		// A new generation brings new titles, which need TMDb ids,
 		// posters and trailers, and new people, who need photos.
 		// Posters need colours, and synopses come with their posters.
+		// And the daily puzzles may find an answer they could not.
 		poke(w.Published)
 		poke(w.PublishedIDs)
 		poke(w.Wanted)
 		poke(w.Ready)
 		poke(w.Trailers)
 		poke(w.People)
+		poke(w.Daily)
 	case NotifyWanted:
 		poke(w.Wanted)
 	case NotifyReady:

@@ -119,6 +119,11 @@ func messages() map[string][]part {
 	trailersDown := failingJob(notify.AllFailed, 2, 70*time.Minute)
 	trailersDown.Provider, trailersDown.Lookups = "TMDb", 50
 	trailersDown.Detail = `catalog: all 50 lookups to TMDb failed; the last: tmdb: giving up after 4 attempts: tmdb: HTTP 503`
+	// A day with no movie that makes a fair puzzle, two hourly passes
+	// running.
+	dailyNone := failingJob(notify.Unknown, 2, 61*time.Minute)
+	dailyNone.NextTry = testNow.Add(time.Hour)
+	dailyNone.Detail = "catalog: none of 1842 candidates can be the daily answer for 2026-10-04"
 	peopleDown := failingJob(notify.AllFailed, 2, 70*time.Minute)
 	peopleDown.Provider, peopleDown.Lookups = "TMDb", 50
 	peopleDown.Detail = `catalog: all 50 lookups to TMDb failed; the last: tmdb: giving up after 4 attempts: tmdb: HTTP 503`
@@ -163,6 +168,7 @@ func messages() map[string][]part {
 		"p6-synopses-omdb-down":    {w.jobFailing(notify.JobSynopses, synopsesDown)},
 		"p6-trailers-tmdb-down":    {w.jobFailing(notify.JobTrailers, trailersDown)},
 		"p6-people-tmdb-down":      {w.jobFailing(notify.JobPeople, peopleDown)},
+		"p6-daily-unexpected":      {w.jobFailing(notify.JobDaily, dailyNone)},
 		"p7-tmdb-key":              {w.keyRejected("TMDb", &job{Detail: "tmdb: HTTP 401: Invalid API key: You must be granted a valid key."})},
 		"p7-omdb-key":              {w.keyRejected("OMDb", &job{Detail: "catalog: OMDb refused the key: omdb: invalid API key"})},
 		"p8-posters-working-again": {w.workingAgain(notify.JobPosters, testNow.Add(-(2*time.Hour + 10*time.Minute)), yesterday, false)},

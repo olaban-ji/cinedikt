@@ -214,9 +214,25 @@
   --shToast: inset 0 0 0 1px var(--ln2), 0 14px 36px rgba(0, 0, 0, 0.35);
   --shThumb: 0 2px 6px rgba(0, 0, 0, 0.22);
   --shKnob: 0 1px 3px rgba(0, 0, 0, 0.25);
+  /* The Daily's banner on the opening screen: an accent edge with a
+     soft ring outside it, and under the pointer the ring wider and the
+     shadow deeper. The light that crosses its button is white on either
+     ground. */
+  --shDaily: inset 0 0 0 1px var(--acc), 0 0 0 5px var(--accWash), 0 12px 30px rgba(0, 0, 0, 0.18);
+  --shDailyHi: inset 0 0 0 1px var(--acc), 0 0 0 7px var(--accSoft), 0 18px 40px rgba(0, 0, 0, 0.26);
+  --shine: rgba(255, 255, 255, 0.45);
+  /* The Daily's game, as the design draws it: a card just turned over,
+     or taken to from the feed, wears the searched card's ring
+     (--shAnchor) over a shallower shadow; a solve's score floats over
+     the answer; the intro's hidden card is ringed without the edge. */
+  --shHot: 0 0 0 2px var(--acc), 0 0 0 6px var(--accSoft), 0 10px 24px rgba(0, 0, 0, 0.3);
+  --shScore: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shFan: 0 0 0 6px var(--accSoft), 0 18px 40px rgba(0, 0, 0, 0.35);
 
   /* A switch's knob is white on either ground. */
   --knob: #ffffff;
+  /* A trailer's letterbox is black on either ground, as a player's is. */
+  --letterbox: #000000;
 }
 
 html,
@@ -3076,7 +3092,7 @@ button {
   top: var(--trailer-gap);
   width: var(--trailer-w);
   height: var(--trailer-vh);
-  background: #000;
+  background: var(--letterbox);
   transform-origin: var(--trailer-origin);
   transform: scale(0.04);
   opacity: 0;
@@ -3683,13 +3699,15 @@ button {
 
 /* While a map loads from here, the screen steps back behind the
    progress line: it stays, so there is something to look at, but it is
-   no longer the thing being looked at. The About page does the same. */
+   no longer the thing being looked at. The About page and the Daily do
+   the same. */
 .cd-cold {
   transition: opacity 0.25s ease;
 }
 
 .cd-cold-dim,
-.cd-about-dim {
+.cd-about-dim,
+.cd-daily-dim {
   opacity: 0.35;
 }
 
@@ -5075,6 +5093,291 @@ button {
   }
 }
 
+/* ---- daily banner ---- */
+
+/* Cinedikt Daily's way in (DailyBanner.tsx), first on the opening
+   screen: one link, the whole of it. A fan of cards with the hidden one
+   standing over them, the Daily pill and the puzzle's number, the
+   question, a line about today where there is room, and a button at the
+   end that is drawn rather than a control of its own. Its box is the
+   same before the server answers as after, so the grid of films under
+   it is measured once and stays put. It keeps 18px of its own under it,
+   on top of .cd-cold's 12px gap, above the headline. */
+.cd-daily-banner {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  width: min(640px, 100%);
+  margin-bottom: 18px;
+  padding: 12px 12px 12px 14px;
+  border-radius: 16px;
+  background: var(--s);
+  box-shadow: var(--shDaily);
+  color: var(--t);
+  text-align: left;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  /* It fades in with the copy, on the copy's class: its question is set
+     in the headline's face, which the fade waits for. */
+  opacity: 0;
+  transition:
+    opacity 600ms linear,
+    box-shadow 0.2s ease,
+    translate 0.25s var(--ease-glide);
+}
+
+.cd-cold-in .cd-daily-banner {
+  opacity: 1;
+}
+
+/* The page's links turn to the accent under the pointer. This one is a
+   panel, and its words keep their colour: outside the hover query, so
+   they keep it after a tap as well. */
+.cd-daily-banner:hover {
+  color: var(--t);
+}
+
+/* It rises to meet the pointer, its ring widening, only where there is
+   a pointer to rest: after a tap, a touch screen would leave it raised. */
+@media (hover: hover) {
+  .cd-daily-banner:hover {
+    translate: 0 -2px;
+    box-shadow: var(--shDailyHi);
+  }
+}
+
+.cd-daily-banner:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 3px;
+}
+
+/* The fan: two cards face down, leaning out from their bottom corners,
+   and the hidden one standing over them, last so it is drawn on top. */
+.cd-daily-banner-fan {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  width: 66px;
+  height: 44px;
+}
+
+.cd-daily-banner-card,
+.cd-daily-banner-q {
+  position: absolute;
+  box-sizing: border-box;
+  width: 38px;
+  height: 30px;
+}
+
+.cd-daily-banner-card {
+  bottom: 0;
+  border-radius: 7px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+}
+
+.cd-daily-banner-card-l {
+  left: 0;
+  rotate: -12deg;
+  transform-origin: 100% 100%;
+}
+
+.cd-daily-banner-card-r {
+  right: 0;
+  rotate: 12deg;
+  transform-origin: 0 100%;
+}
+
+/* Centred by a margin of half its width rather than by a transform: the
+   bob it plays from script is its transform, and would undo one. The
+   "?" stays 17px at every size. */
+.cd-daily-banner-q {
+  top: 0;
+  left: 50%;
+  margin-left: -19px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px dashed var(--acc);
+  border-radius: 8px;
+  background: var(--ancBg);
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--accText);
+}
+
+.cd-daily-banner-words {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cd-daily-banner-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+/* The header's Daily pill, a size down. */
+.cd-daily-banner .cd-daily-pill {
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+
+.cd-daily-banner-meta {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--t3);
+}
+
+.cd-daily-banner-title {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.cd-daily-banner-sub {
+  flex-shrink: 0;
+  max-width: 170px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--t2);
+  text-align: right;
+  text-wrap: balance;
+}
+
+/* The button at the end: the accent, its word and an arrow, with the
+   shine crossing under them, clipped to its corners. */
+.cd-daily-banner-go {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  box-sizing: border-box;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: 11px;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 14.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.cd-daily-banner-label,
+.cd-daily-banner-go > svg {
+  position: relative;
+}
+
+/* Until today's puzzle answers, the button keeps the room its word will
+   take and holds the word back, rather than guess which it is. */
+.cd-daily-banner-waiting .cd-daily-banner-label {
+  visibility: hidden;
+}
+
+/* At rest off to the left of the button, which is where it stays for a
+   reader who has asked for stillness: the crossing is played from
+   script (DailyBanner.tsx), which asks for itself. */
+.cd-daily-banner-shine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(100deg, transparent, var(--shine), transparent);
+  translate: -120% 0;
+}
+
+/* A landscape phone draws it as a desktop does, as wide as its row of
+   eight films. */
+@media (min-width: 640px) and (max-height: 499.98px) {
+  .cd-daily-banner {
+    width: min(820px, 100%);
+  }
+}
+
+/* A phone tightens it all round and keeps to the number: the day and
+   the line about today have no room beside the question. */
+@media (max-width: 639.98px) {
+  .cd-daily-banner {
+    gap: 12px;
+    margin-bottom: 10px;
+    padding: 10px 10px 10px 12px;
+  }
+
+  .cd-daily-banner-fan {
+    width: 58px;
+    height: 40px;
+  }
+
+  .cd-daily-banner-card,
+  .cd-daily-banner-q {
+    width: 34px;
+    height: 26px;
+  }
+
+  .cd-daily-banner-q {
+    margin-left: -17px;
+  }
+
+  .cd-daily-banner-title {
+    font-size: 17px;
+  }
+
+  .cd-daily-banner-day,
+  .cd-daily-banner-sub {
+    display: none;
+  }
+
+  .cd-daily-banner-go {
+    height: 40px;
+    padding: 0 14px;
+  }
+}
+
+/* Its edges are shadows, which forced colours drop, and the button's
+   fill goes with them. Borders bring back the panel, the cards and the
+   button; only the panel, whose height is its content's, grows by them,
+   by two pixels. */
+@media (forced-colors: active) {
+  .cd-daily-banner,
+  .cd-daily-banner-card {
+    border: 1px solid CanvasText;
+  }
+
+  .cd-daily-banner-go {
+    border: 1px solid ButtonText;
+  }
+}
+
+/* Stillness: the banner is simply there, and a pointer resting on it
+   still widens its ring, without lifting it. */
+@media (prefers-reduced-motion: reduce) {
+  .cd-daily-banner {
+    transition: none;
+  }
+
+  .cd-daily-banner {
+    opacity: 1;
+  }
+
+  .cd-daily-banner:hover {
+    translate: none;
+  }
+}
+
 /* ---- about ---- */
 
 /* What Cinedikt is, and the credit each source of its data asks for:
@@ -5671,6 +5974,1884 @@ button {
     bottom: 0;
     left: 0;
     right: -10px;
+  }
+}
+
+/* ---- daily ---- */
+
+/* Cinedikt Daily (DailyPage.tsx): the board, the panel, the intro that
+   is also the rules, and the end of the header on /daily. The board is
+   the map's own — its axis, bands, gridlines, card parts and year rail
+   are the classes above — and only what the Daily adds is here.
+
+   Everything sits in .cd-daily, which fills the app under its header and
+   is what the panel, the intro and the toast are placed against, so none
+   of them has to know how tall the header is. It steps back (.cd-daily-dim,
+   with .cd-cold-dim) while a map loads over it. */
+.cd-daily {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  transition: opacity 0.25s ease;
+}
+
+/* The end of the header: the Daily pill, the puzzle's number and day, and
+   "How it works". The intro's "Cinedikt Daily" is the same pill. */
+.cd-daily-pill {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 8px;
+  background: var(--accSoft);
+  color: var(--accText);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.cd-daily-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+.cd-daily-date {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t2);
+}
+
+.cd-daily-help {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--s);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+  color: var(--t2);
+  transition:
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+@media (hover: hover) {
+  .cd-daily-help:hover {
+    color: var(--t);
+    box-shadow: inset 0 0 0 1px var(--ln3);
+  }
+}
+
+/* The board's rows move: a year the guesses rule out fades, and at the
+   end the answer's row opens out of the seam between its neighbours and
+   everything below slides down to make room (DailyBoard's useSeams). The
+   curve is the rows' own. */
+.cd-daily-plot {
+  transition: height 0.5s var(--ease-row);
+}
+
+.cd-daily .cd-band {
+  transition:
+    top 0.5s var(--ease-row),
+    height 0.5s var(--ease-row),
+    background-color 0.3s ease,
+    opacity 0.4s ease;
+}
+
+.cd-daily .cd-rail-slot {
+  transition:
+    top 0.5s var(--ease-row),
+    height 0.5s var(--ease-row),
+    opacity 0.4s ease;
+}
+
+/* The header never lies over the board, so a pinned label never has to
+   follow it; only the answer's year changes colour. */
+.cd-daily .cd-rail-year {
+  transition: color 0.3s ease;
+}
+
+/* A card: a box at its year and rating holding a card that turns over in
+   3D. Blank side up it is a ghost of a card; turned over it is the map's
+   own card, drawn with the map's own parts. It moves with the rows, and
+   fades when the guesses rule it out. */
+.cd-daily-card {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  border-radius: 13px;
+  perspective: 900px;
+  outline: none;
+  transition:
+    left 0.5s var(--ease-row),
+    top 0.5s var(--ease-row),
+    opacity 0.4s ease;
+}
+
+.cd-daily-card-on {
+  z-index: 2;
+}
+
+.cd-daily-card-can {
+  cursor: pointer;
+}
+
+/* Still a button, which says so when pressed; it just costs more than
+   is left. */
+.cd-daily-card-poor {
+  cursor: not-allowed;
+}
+
+.cd-daily-card-hot {
+  z-index: 4;
+}
+
+.cd-daily-card:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 3px;
+}
+
+/* The turn: .62s, overshooting a little as it lands (FLIP_EASE in
+   daily.ts). Cards turning together each wait their turn, set inline. */
+.cd-daily-flip {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform: rotateY(0deg);
+  transition: transform 0.62s cubic-bezier(0.3, 0.75, 0.25, 1.18);
+}
+
+.cd-daily-card-on .cd-daily-flip {
+  transform: rotateY(180deg);
+}
+
+.cd-daily-front,
+.cd-daily-back {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border-radius: 13px;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* The blank side: the card's ground, see-through, with its edge and an
+   empty poster slot. */
+.cd-daily-front {
+  background: color-mix(in oklch, var(--c) 45%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.cd-daily-slot {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  bottom: 6px;
+  width: var(--poster-w);
+  border-radius: 8px;
+  background: var(--skel);
+}
+
+/* A dot for each known person on a blank card, in their colour and
+   shape. */
+.cd-daily-dots {
+  position: absolute;
+  left: calc(var(--poster-w) + 16px);
+  bottom: 10px;
+  display: flex;
+  gap: 4px;
+}
+
+.cd-daily-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--swatch-r, 50%);
+  background: var(--tone);
+}
+
+/* What turning it over costs: under the pointer, or on every blank card
+   on a touch screen, where nothing can rest on one. */
+.cd-daily-cost {
+  display: none;
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 7px;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The turned side: the map's card, with the map's padding and gap, which
+   markersFor measures the marks against. */
+.cd-daily-back {
+  display: flex;
+  gap: 9px;
+  padding: 6px;
+  transform: rotateY(180deg);
+  background: var(--c);
+  color: var(--t);
+  box-shadow: var(--sh);
+  overflow: hidden;
+  text-align: left;
+  transition: box-shadow 0.5s ease;
+}
+
+/* Just turned over, or just taken to from the feed. */
+.cd-daily-card-hot .cd-daily-back {
+  box-shadow: var(--shHot);
+}
+
+/* A close relative turned over: no poster, which would give it away. */
+.cd-daily-kin {
+  background: var(--accSoft);
+}
+
+@media (hover: hover) {
+  .cd-daily-card-can:hover {
+    z-index: 4;
+  }
+
+  .cd-daily-card-can:hover .cd-daily-front {
+    background: var(--accWash);
+    box-shadow: inset 0 0 0 1.5px var(--acc);
+  }
+
+  .cd-daily-card-can:hover .cd-daily-cost {
+    display: block;
+  }
+}
+
+/* The answer, at the end: in its own place, ringed as a searched movie
+   is, and tagged (.cd-searched-tag) "Today’s movie". */
+.cd-daily-answer {
+  position: absolute;
+  z-index: 6;
+  box-sizing: border-box;
+  display: flex;
+  gap: 9px;
+  padding: 6px;
+  border-radius: 13px;
+  background: var(--ancBg);
+  color: var(--t);
+  box-shadow: var(--shAnchor);
+}
+
+.cd-daily-answer .cd-card-body {
+  padding: 2px 0 1px;
+}
+
+.cd-daily-answer .cd-card-title {
+  line-height: 1.2;
+}
+
+/* A solve's score, risen over the answer for a moment. */
+.cd-daily-score {
+  position: absolute;
+  z-index: 8;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 13px;
+  display: flex;
+  align-items: center;
+  border-radius: 15px;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 14.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shScore);
+  font-variant-numeric: tabular-nums;
+  translate: -50% 0;
+}
+
+/* Where the guesses have narrowed the answer to: dashed accent lines,
+   across at a year bound and down at a rating bound, each with a pill
+   that says it. The rating pills sit in the pinned rating strip. */
+.cd-daily-bound-across,
+.cd-daily-bound-down {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.cd-daily-bound-across {
+  left: 0;
+  right: 0;
+  border-top: 1.5px dashed var(--acc);
+  transition: top 0.5s ease;
+}
+
+.cd-daily-bound-down {
+  top: 0;
+  bottom: 0;
+  border-left: 1.5px dashed var(--acc);
+  transition: left 0.5s ease;
+}
+
+.cd-daily-bound-pill {
+  position: absolute;
+  z-index: 5;
+  box-sizing: border-box;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 18px;
+  white-space: nowrap;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-bound-pill-axis {
+  top: 4px;
+}
+
+/* A ceiling's pill sits left of its line. */
+.cd-daily-bound-pill-before {
+  translate: -100% 0;
+}
+
+/* A year bound's pill, in the year rail, which keeps it in view however
+   far the map is panned; it moves with its line. */
+.cd-daily-bound-pill-year {
+  transition: top 0.5s ease;
+}
+
+/* The panel: a column on the right of a desktop or tablet, a sheet along
+   the bottom of a phone. Its height follows what is in it, up to most of
+   the screen; the feed and the result scroll inside it. */
+.cd-daily-panel {
+  position: absolute;
+  z-index: 30;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  width: 380px;
+  max-height: calc(100% - 32px);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  background: var(--s);
+  box-shadow:
+    inset 0 0 0 1px var(--ln2),
+    var(--pop);
+  color: var(--t);
+}
+
+.cd-daily-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  min-height: 54px;
+  padding: 10px 8px 6px 16px;
+  box-sizing: border-box;
+}
+
+.cd-daily-points {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.cd-daily-points-n {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 23px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-points-word {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--t3);
+}
+
+/* What was spent, floating up off the total. Unseen unless it is played
+   (SPEND_FLOAT_KEYFRAMES), so stillness shows only the total change. */
+.cd-daily-spent {
+  position: absolute;
+  left: 2px;
+  top: -12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--down);
+  white-space: nowrap;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+}
+
+/* The points left, as a share of the start (daily.ts's pointsShare): the
+   meter along the panel's top, and the share card's bar, which is the
+   same 6px track. */
+.cd-daily-meter,
+.cd-daily-bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ln3);
+  overflow: hidden;
+}
+
+.cd-daily-meter {
+  flex: 1;
+  min-width: 40px;
+}
+
+.cd-daily-meter-fill,
+.cd-daily-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--acc);
+}
+
+.cd-daily-meter-fill {
+  transition:
+    width 0.5s var(--ease-glide),
+    background-color 0.3s ease;
+}
+
+/* Under 250 points the meter warns. */
+.cd-daily-meter-low {
+  background: var(--down);
+}
+
+.cd-daily-clock {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-min {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  color: var(--t2);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.cd-daily-min-icon {
+  transition: rotate 0.2s ease;
+}
+
+.cd-daily-min-shut {
+  rotate: 180deg;
+}
+
+/* The game so far. */
+.cd-daily-feed {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px 10px;
+}
+
+.cd-daily-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 10px 11px;
+  border-radius: 12px;
+}
+
+.cd-daily-entry-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--t3);
+}
+
+/* The latest entry, while the game is on. */
+.cd-daily-entry-now {
+  background: var(--accWash);
+}
+
+.cd-daily-entry-now .cd-daily-entry-label {
+  color: var(--accText);
+}
+
+/* A wrong guess says so in its label, latest or not. */
+.cd-daily-entry-miss .cd-daily-entry-label {
+  color: var(--down);
+}
+
+.cd-daily-entry-win {
+  background: var(--accWash);
+}
+
+.cd-daily-entry-win .cd-daily-entry-label {
+  color: var(--accText);
+}
+
+.cd-daily-entry-end {
+  background: var(--ln);
+}
+
+.cd-daily-entry-end .cd-daily-entry-label {
+  color: var(--t2);
+}
+
+.cd-daily-entry-cost {
+  margin-left: auto;
+  color: var(--down);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-entry-text {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--t);
+  text-wrap: pretty;
+}
+
+.cd-daily-faces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.cd-daily-face {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cd-daily-face-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cd-daily-quote {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--t);
+  text-wrap: pretty;
+}
+
+.cd-daily-more {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--t2);
+  text-wrap: pretty;
+}
+
+.cd-daily-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cd-daily-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  height: 32px;
+  padding: 0 10px 0 4px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 9px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.cd-daily-chip-thumb {
+  display: block;
+  width: 16px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--poster-fill, var(--skel));
+}
+
+.cd-daily-chip-kin {
+  background: var(--accSoft);
+}
+
+.cd-daily-chip-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Everything the reader can do while the game is on. The guess list opens
+   upward from its top edge. */
+.cd-daily-foot {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--ln2);
+}
+
+.cd-daily-clues {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.cd-daily-clue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 6px 0 11px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 10px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.2s ease;
+}
+
+.cd-daily-clue:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cd-daily-clue-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A price, or a note in its place. The intro's costs wear it too. */
+.cd-daily-tag {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 7px;
+  background: var(--accSoft);
+  color: var(--accText);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Seen" and "Known": nothing to buy. */
+.cd-daily-tag-muted {
+  background: var(--ln2);
+  color: var(--t3);
+}
+
+/* A wrong guess is the one cost that is a penalty. */
+.cd-daily-tag-down {
+  background: color-mix(in oklch, var(--down) 18%, transparent);
+  color: var(--down);
+}
+
+.cd-daily-options {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  max-height: 300px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--s);
+  box-shadow:
+    inset 0 0 0 1px var(--ln2),
+    var(--pop);
+}
+
+.cd-daily-options-note {
+  padding: 12px 10px;
+  font-size: 13.5px;
+  color: var(--t3);
+}
+
+.cd-daily-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 5px 8px;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--t);
+  text-align: left;
+}
+
+.cd-daily-option-at {
+  background: var(--accWash);
+}
+
+/* Already guessed: there, so the reader knows, and not to be chosen. And
+   the last search's rows while the next is on its way, which are not to
+   be chosen either (daily.ts's guessOptions). */
+.cd-daily-option-used,
+.cd-daily-option-held {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.cd-daily-option-poster {
+  display: block;
+  width: 24px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  object-fit: cover;
+  background: var(--poster-fill, var(--skel));
+}
+
+.cd-daily-option-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.cd-daily-option-year {
+  color: var(--t3);
+}
+
+.cd-daily-option-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--t3);
+}
+
+.cd-daily-askrow {
+  display: flex;
+  gap: 8px;
+}
+
+.cd-daily-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--g);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  cursor: text;
+  transition: box-shadow 0.15s ease;
+}
+
+.cd-daily-field:focus-within {
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+
+.cd-daily-field-icon {
+  flex-shrink: 0;
+  color: var(--t3);
+}
+
+.cd-daily-input {
+  flex: 1;
+  align-self: stretch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--t);
+  font: inherit;
+  font-size: 14.5px;
+  outline: none;
+}
+
+.cd-daily-guess {
+  flex-shrink: 0;
+  height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 14.5px;
+  font-weight: 700;
+  transition: opacity 0.15s ease;
+}
+
+/* Nothing chosen yet: guessing is two steps. */
+.cd-daily-guess:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cd-daily-guess:not(:disabled):active {
+  scale: 0.97;
+}
+
+.cd-daily-hintrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.cd-daily-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--t3);
+  text-wrap: pretty;
+}
+
+.cd-daily-reveal {
+  flex-shrink: 0;
+  height: 30px;
+  margin-right: -6px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--t2);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+/* The result. */
+.cd-daily-res {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 16px 14px;
+}
+
+.cd-daily-res-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cd-daily-res-title {
+  margin: 0;
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.cd-daily-res-sub {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--t2);
+  text-wrap: pretty;
+}
+
+.cd-daily-res-answer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--ancBg);
+  box-shadow: inset 0 0 0 1px var(--accSoft);
+  color: var(--t);
+  text-align: left;
+  transition: box-shadow 0.15s ease;
+}
+
+.cd-daily-res-poster {
+  display: block;
+  width: 36px;
+  height: 54px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  object-fit: cover;
+  background: var(--poster-fill, var(--skel));
+}
+
+.cd-daily-res-film {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cd-daily-res-kicker {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accText);
+}
+
+.cd-daily-res-name {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.cd-daily-res-meta {
+  font-size: 12.5px;
+  color: var(--t2);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cd-daily-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--g);
+}
+
+.cd-daily-stat-n {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-stat-caption {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--t2);
+  text-wrap: pretty;
+}
+
+.cd-daily-share {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 14px;
+  border-radius: 14px;
+  background: var(--g);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+}
+
+.cd-daily-share-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.cd-daily-share-title {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.cd-daily-share-line {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--t2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A quiet button on a surface: Copy, the result's toggle and New name. */
+.cd-daily-soft {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.cd-daily-soft-wide {
+  padding: 0 14px;
+}
+
+.cd-daily-soft-name {
+  gap: 6px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.cd-daily-lb {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cd-daily-lb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cd-daily-lb-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.cd-daily-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--g);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+}
+
+.cd-daily-tab {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--t2);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.cd-daily-tab-on {
+  background: var(--c2);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+  color: var(--t);
+}
+
+.cd-daily-week-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--t3);
+}
+
+.cd-daily-week-days {
+  display: flex;
+  gap: 3px;
+}
+
+.cd-daily-week-day {
+  width: 20px;
+  text-align: center;
+}
+
+.cd-daily-week-points {
+  width: 48px;
+  text-align: right;
+}
+
+.cd-daily-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Where the ranks skip. */
+.cd-daily-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  color: var(--t3);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 3px;
+}
+
+.cd-daily-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 6px;
+  border-radius: 10px;
+}
+
+.cd-daily-row-you {
+  background: var(--accWash);
+}
+
+.cd-daily-rank {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--t3);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A player's initials on their hue, worked out in script (avatarColours)
+   and set inline as --tone, with what is written on it as --tone-ink. */
+.cd-daily-avatar {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--tone);
+  color: var(--tone-ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 26px;
+  text-align: center;
+}
+
+.cd-daily-avatar-you {
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 9px;
+}
+
+.cd-daily-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cd-daily-who-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cd-daily-row-you .cd-daily-who-name {
+  font-weight: 700;
+}
+
+.cd-daily-who-sub {
+  font-size: 11.5px;
+  color: var(--t3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A week's days, Monday first: filled to the points kept, a ✕ for a day
+   with none, ringed and empty for a day not played. */
+.cd-daily-cells {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.cd-daily-cell {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--ln);
+  overflow: hidden;
+}
+
+.cd-daily-cell-empty {
+  box-shadow: inset 0 0 0 1px var(--ln3);
+}
+
+.cd-daily-cell-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--acc);
+  opacity: 0.75;
+}
+
+.cd-daily-cell-x {
+  position: absolute;
+  inset: 0;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 20px;
+  text-align: center;
+  color: var(--down);
+}
+
+.cd-daily-value {
+  flex-shrink: 0;
+  min-width: 44px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--t);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-rows-week .cd-daily-value {
+  min-width: 48px;
+}
+
+.cd-daily-value-missed {
+  font-weight: 500;
+  color: var(--down);
+}
+
+.cd-daily-note {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--t3);
+  text-wrap: pretty;
+}
+
+/* A leaderboard that didn't load, and the way to ask for it again. */
+.cd-daily-retry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.cd-daily-retry .cd-daily-note {
+  margin: 0;
+}
+
+.cd-daily-res-foot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 12px 16px;
+  border-top: 1px solid var(--ln2);
+}
+
+.cd-daily-next {
+  font-size: 12.5px;
+  color: var(--t3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The intro, and the rules: over the board, which shows through, blurred
+   and out of reach. */
+.cd-daily-intro {
+  position: absolute;
+  z-index: 35;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: color-mix(in oklch, var(--g) 76%, transparent);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  outline: none;
+}
+
+.cd-daily-intro-col {
+  min-height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 40px 20px calc(40px + env(safe-area-inset-bottom));
+  text-align: center;
+}
+
+/* Three blank cards fanned out, the hidden one in the middle. */
+.cd-daily-fan {
+  position: relative;
+  flex-shrink: 0;
+  width: 300px;
+  height: 118px;
+}
+
+.cd-daily-fan-card {
+  position: absolute;
+  bottom: 0;
+  width: 140px;
+  height: 78px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--c);
+  box-shadow:
+    inset 0 0 0 1px var(--ln3),
+    var(--sh);
+}
+
+.cd-daily-fan-left {
+  left: 0;
+  rotate: -11deg;
+  transform-origin: 100% 100%;
+}
+
+.cd-daily-fan-right {
+  right: 0;
+  rotate: 11deg;
+  transform-origin: 0 100%;
+}
+
+.cd-daily-fan-slot {
+  position: absolute;
+  left: 6px;
+  top: 6px;
+  bottom: 6px;
+  width: 30%;
+  border-radius: 7px;
+  background: var(--skel);
+}
+
+.cd-daily-fan-middle {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  margin-left: -70px;
+  width: 140px;
+  height: 78px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 1.5px dashed var(--acc);
+  border-radius: 13px;
+  background: var(--ancBg);
+  box-shadow: var(--shFan);
+}
+
+.cd-daily-fan-q {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 36px;
+  line-height: 1;
+  color: var(--accText);
+}
+
+.cd-daily-fan-no {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--t2);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-daily-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.cd-daily-day {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t2);
+}
+
+.cd-daily-streak {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 9px 0 7px;
+  border-radius: 8px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.cd-daily-streak svg {
+  color: var(--acc);
+}
+
+.cd-daily-intro-words {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 560px;
+}
+
+.cd-daily-intro-title {
+  margin: 0;
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 46px;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.cd-daily-lead {
+  margin: 0;
+  max-width: 480px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--t2);
+  text-wrap: balance;
+}
+
+.cd-daily-costs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 540px;
+}
+
+.cd-daily-cost-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px 8px 8px 12px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--s);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+  text-align: left;
+}
+
+.cd-daily-cost-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.cd-daily-rules {
+  margin: 0;
+  max-width: 500px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--t2);
+  text-wrap: pretty;
+}
+
+.cd-daily-player {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 540px;
+  padding: 12px 12px 12px 14px;
+  box-sizing: border-box;
+  border-radius: 16px;
+  background: var(--s);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+  text-align: left;
+}
+
+.cd-daily-you {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 42px;
+  text-align: center;
+}
+
+.cd-daily-player-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cd-daily-player-kicker {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--t3);
+}
+
+/* Lands from 1.14 with a bounce, so it grows from its left end. */
+.cd-daily-player-name {
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 19px;
+  line-height: 1.2;
+  transform-origin: 0 50%;
+  overflow-wrap: anywhere;
+}
+
+.cd-daily-play {
+  position: relative;
+  width: 100%;
+  max-width: 540px;
+  flex-shrink: 0;
+}
+
+.cd-daily-play-glow {
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+  background: var(--acc);
+  filter: blur(14px);
+  opacity: 0.25;
+}
+
+.cd-daily-play-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 56px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 17px;
+  font-weight: 700;
+  transition:
+    translate 0.15s ease,
+    filter 0.15s ease;
+}
+
+.cd-daily-play-button:not(:disabled):active {
+  scale: 0.98;
+}
+
+/* Pressed, and waiting on the server. */
+.cd-daily-play-button:disabled {
+  cursor: progress;
+}
+
+.cd-daily-live {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--t3);
+  text-wrap: pretty;
+}
+
+.cd-daily-live-n {
+  font-weight: 700;
+  color: var(--t2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The app's toast, under the header rather than at the foot of the page,
+   where the phone's sheet is. It drops in from just above. */
+.cd-daily .cd-toast {
+  position: absolute;
+  top: 12px;
+  bottom: auto;
+  transform: translate(-50%, -12px);
+}
+
+.cd-daily .cd-toast-in {
+  transform: translate(-50%, 0);
+}
+
+.cd-daily-confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 58;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.cd-daily-help:focus-visible,
+.cd-daily-min:focus-visible,
+.cd-daily-chip:focus-visible,
+.cd-daily-clue:focus-visible,
+.cd-daily-guess:focus-visible,
+.cd-daily-reveal:focus-visible,
+.cd-daily-res-answer:focus-visible,
+.cd-daily-soft:focus-visible,
+.cd-daily-tab:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.cd-daily-play-button:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) {
+  .cd-daily-min:hover,
+  .cd-daily-reveal:hover {
+    background: var(--ln2);
+    color: var(--t);
+  }
+
+  .cd-daily-chip:hover,
+  .cd-daily-clue:not(:disabled):hover,
+  .cd-daily-soft:hover {
+    background: var(--accWash);
+    box-shadow: inset 0 0 0 1px var(--acc);
+  }
+
+  .cd-daily-option:not(.cd-daily-option-used):not(.cd-daily-option-held):hover {
+    background: var(--accWash);
+  }
+
+  .cd-daily-res-answer:hover {
+    box-shadow: inset 0 0 0 1px var(--acc);
+  }
+
+  .cd-daily-play-button:not(:disabled):hover {
+    translate: 0 -2px;
+    filter: brightness(1.06);
+  }
+}
+
+/* On a touch screen every blank card says its price, the controls grow to
+   a finger's size, and the field's 16px keeps iOS from zooming in. */
+@media (max-width: 1023.98px), (max-height: 499.98px), (pointer: coarse) {
+  .cd-daily-card-can .cd-daily-cost {
+    display: block;
+  }
+
+  .cd-daily-clue {
+    height: 42px;
+  }
+
+  .cd-daily-field,
+  .cd-daily-guess {
+    height: 46px;
+  }
+
+  .cd-daily-input {
+    font-size: 16px;
+  }
+
+  .cd-daily-help::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+  }
+}
+
+/* On a phone the panel is a sheet along the bottom: shorter while the
+   game is on, so there is board to see above it, and nearly the screen's
+   height for the result. The intro tightens up. */
+@media (max-width: 639.98px) {
+  .cd-daily-panel {
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 62%;
+    border-radius: 20px;
+  }
+
+  .cd-daily-panel-res {
+    max-height: calc(100% - 16px);
+  }
+
+  .cd-daily-intro-col {
+    gap: 16px;
+    padding: 22px 20px calc(22px + env(safe-area-inset-bottom));
+  }
+
+  .cd-daily-fan {
+    width: 230px;
+    height: 92px;
+  }
+
+  .cd-daily-fan-card,
+  .cd-daily-fan-middle {
+    width: 108px;
+    height: 60px;
+  }
+
+  .cd-daily-fan-middle {
+    margin-left: -54px;
+  }
+
+  .cd-daily-fan-q {
+    font-size: 28px;
+  }
+
+  .cd-daily-intro-title {
+    font-size: 34px;
+  }
+
+  .cd-daily-lead {
+    font-size: 15.5px;
+  }
+
+  .cd-daily-costs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Forced colours drop the shadows that are these things' edges, so the
+   edges come back as system-colour outlines, inside the box. */
+@media (forced-colors: active) {
+  .cd-daily-front,
+  .cd-daily-back,
+  .cd-daily-panel,
+  .cd-daily-chip,
+  .cd-daily-clue,
+  .cd-daily-soft,
+  .cd-daily-field,
+  .cd-daily-options,
+  .cd-daily-cost-item,
+  .cd-daily-player {
+    outline: 1px solid ButtonText;
+    outline-offset: -1px;
+  }
+
+  /* What is picked out, by a ring or a wash these drop. Among them is the
+     guess list's row the arrows are on, which Enter takes. */
+  .cd-daily-answer,
+  .cd-daily-card-hot .cd-daily-back,
+  .cd-daily-option-at,
+  .cd-daily-row-you,
+  .cd-daily-tab-on {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+/* The Daily's own stillness: nothing turns, slides, rolls or rises.
+   The cards are simply face up or not, the rows simply where they are.
+   The script-played motion asks for itself (motion.ts's animate); these
+   are the transitions, after the rules they undo, with selectors that
+   match theirs so that these win. */
+@media (prefers-reduced-motion: reduce) {
+  .cd-daily,
+  .cd-daily-card,
+  .cd-daily-flip,
+  .cd-daily-front,
+  .cd-daily-back,
+  .cd-daily-plot,
+  .cd-daily .cd-band,
+  .cd-daily .cd-rail-slot,
+  .cd-daily .cd-rail-year,
+  .cd-daily-bound-across,
+  .cd-daily-bound-down,
+  .cd-daily-bound-pill-year,
+  .cd-daily-meter-fill,
+  .cd-daily-min-icon,
+  .cd-daily-play-button {
+    transition: none;
+  }
+
+  .cd-daily .cd-toast {
+    transition: opacity 0.12s ease;
+    transform: translate(-50%, 0);
+  }
+
+  .cd-daily-play-button:not(:disabled):hover {
+    translate: none;
+  }
+
+  .cd-daily-play-button:not(:disabled):active,
+  .cd-daily-guess:not(:disabled):active {
+    scale: none;
   }
 }
 

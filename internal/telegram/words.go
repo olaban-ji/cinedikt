@@ -69,6 +69,7 @@ var jobList = []jobInfo{
 	{notify.JobTrailers, "Trailers", "Trailers", "no TMDb key"},
 	{notify.JobPeople, "People photos", "People photos", "no TMDb key"},
 	{notify.JobColours, "Opening colours", "Opening colours", ""},
+	{notify.JobDaily, "Daily puzzles", "Daily puzzles", ""},
 	// The check runs on where to watch's queue, so it is off with
 	// MaxMind credentials set when where to watch is: no
 	// STREAMING_API_KEY, or a queue that would not start.
@@ -283,6 +284,8 @@ func impactSentence(id string, j *job) string {
 		return "People without a photo stay without one for now; the site still works."
 	case notify.JobColours:
 		return "New films on the opening screen show without their placeholder colour; nothing else is affected."
+	case notify.JobDaily:
+		return "No new days of Cinedikt Daily are being picked; the days already picked, up to eight days ahead, still play."
 	case notify.JobGeoIP:
 		if j == nil || j.Built.IsZero() {
 			return "Until the first GeoLite2 build is downloaded, readers can't be placed in a country, so the site leaves out where to watch."

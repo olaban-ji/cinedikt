@@ -1,7 +1,8 @@
 -- meta is never renamed by the daily swap. It holds what must outlive a
--- generation: the stamps that gate the next import, and the poster
+-- generation: the stamps that gate the next import, the poster
 -- addresses, release dates, synopses, trailers, people's photos and
--- where-to-watch answers that cost an API call to learn.
+-- where-to-watch answers that cost an API call to learn, and Cinedikt
+-- Daily's puzzles, players and games.
 
 CREATE SCHEMA IF NOT EXISTS meta;
 
@@ -316,4 +317,123 @@ CREATE TABLE IF NOT EXISTS meta.geoip (
     last_modified text NOT NULL,
     mmdb          bytea NOT NULL,
     fetched_at    timestamptz NOT NULL
+);
+
+-- Cinedikt Daily: one hidden movie a day, its map as the board. Kept in
+-- meta like everything that must outlive a generation, with tconsts and
+-- nconsts as plain text and no key into catalog: that schema is renamed
+-- every night, and a game played last month still has to replay.
+
+-- One row a day, the puzzle as it was picked. Everything a game needs is
+-- copied in when the daily job picks it, and nothing about it is read
+-- from the catalog again: ratings and votes move with every import,
+-- titles are withdrawn, and a card's price is its rating, so a live read
+-- would change prices halfway through a day.
+--
+-- no is the day's number, the first puzzle ever being No. 1; a day
+-- nothing was picked for still uses its number up. people is the
+-- answer's people in slot order, directors then billed cast, as
+-- [{id, name, role}]; cards is the board, every rated movie on the
+-- answer's map but the answer, as [{id, film, title, year, rating, md,
+-- votes, people}] in card id order, with each card's people as slots;
+-- start is the three card ids face up from the beginning. opening is the
+-- first sentence of OMDb's overview, never TMDb's, so nothing of TMDb's
+-- is kept here past its six months. era and genre are the answer's era
+-- in the opening screen's pool and its first IMDb genre, which the next
+-- days' picks are mixed against.
+CREATE TABLE IF NOT EXISTS meta.daily_puzzles (
+    no        int PRIMARY KEY,
+    day       date UNIQUE NOT NULL,
+    answer    text NOT NULL,
+    title     text NOT NULL,
+    year      int NOT NULL,
+    rating    numeric(3,1) NOT NULL,
+    md        int NOT NULL,
+    people    jsonb NOT NULL,
+    genres    text[] NOT NULL,
+    opening   text NOT NULL,
+    cards     jsonb NOT NULL,
+    start     text[] NOT NULL,
+    era       int NOT NULL,
+    genre     text NOT NULL,
+    picked_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- A player is a cookie, with a name the server gave them. token is the
+-- SHA-256 of the cookie, which is the player's only credential, so the
+-- database never holds the cookie itself. The name is generated from
+-- movie characters, never typed, and unique, so a board never shows two
+-- of one name; hue colours their avatar on it.
+CREATE TABLE IF NOT EXISTS meta.daily_players (
+    id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    token      bytea UNIQUE NOT NULL,
+    name       text UNIQUE NOT NULL,
+    hue        smallint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- One game per player per puzzle, made when they press Play. A game is
+-- its moves (daily_moves), and everything about it is worked out by
+-- replaying them; the columns here are only what the boards and the
+-- streak read, kept in step with every move. pts is the points left,
+-- moves how many are recorded, and ms the time from Play to the end,
+-- set with finished_at when it ends. A game nobody finished by the
+-- midnight of its zone (below) is abandoned: it scores nothing and is on
+-- no board.
+CREATE TABLE IF NOT EXISTS meta.daily_games (
+    id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    player      bigint NOT NULL REFERENCES meta.daily_players (id) ON DELETE CASCADE,
+    no          int NOT NULL REFERENCES meta.daily_puzzles (no),
+    pts         int NOT NULL,
+    moves       int NOT NULL DEFAULT 0,
+    started_at  timestamptz NOT NULL,
+    finished_at timestamptz,
+    won         boolean NOT NULL DEFAULT false,
+    gave_up     boolean NOT NULL DEFAULT false,
+    ms          int,
+    UNIQUE (player, no)
+);
+
+-- zone is the IANA time zone Play was pressed in, as the page named it.
+-- Each reader plays the puzzle for their own date, and a game may be
+-- played only while its puzzle's day is the date in this zone: a move is
+-- checked against the zone kept here, never the one the move names, so
+-- a tab cannot hop zones to play on past its midnight. Added rather than
+-- created with the table, so a database that already holds the table
+-- gains it; the games before it were all on UTC's day.
+ALTER TABLE meta.daily_games ADD COLUMN IF NOT EXISTS zone text NOT NULL DEFAULT 'UTC';
+
+-- Today's board in its own order: points, then time. Partial, so it
+-- holds only the games that can be on a board. The streak and the week
+-- read a player's games by (player, no), which the unique constraint
+-- already indexes, and DailyPlayed counts every game of one puzzle,
+-- finished or not, by daily_games_no below.
+CREATE INDEX IF NOT EXISTS daily_games_board
+    ON meta.daily_games (no, pts DESC, ms) WHERE finished_at IS NOT NULL;
+
+-- One puzzle's games, finished or not: DailyPlayed's count, which the
+-- opening screen's banner asks for on every visit. Neither index above
+-- can give it, the board's holding only finished games and the unique
+-- one leading with the player, so without this every visit would read
+-- every game ever played, a table that only grows.
+CREATE INDEX IF NOT EXISTS daily_games_no ON meta.daily_games (no);
+
+-- A game's moves, in order. key is the page's own name for the request
+-- that made the move, so a retry is answered with the game rather than
+-- charged twice. arg is the card turned over or the movie guessed, cost
+-- what the move cost, and detail, for a wrong guess, what it learned
+-- when it was made: the movie's title, year and rating, who it shares
+-- with the answer and where the answer sits from it, so a replay never
+-- needs the live catalog.
+CREATE TABLE IF NOT EXISTS meta.daily_moves (
+    game   bigint NOT NULL REFERENCES meta.daily_games (id) ON DELETE CASCADE,
+    seq    int NOT NULL,
+    key    text NOT NULL,
+    kind   text NOT NULL CHECK (kind IN ('flip', 'director', 'actor', 'genres', 'story', 'guess', 'reveal')),
+    arg    text,
+    cost   int NOT NULL,
+    detail jsonb,
+    at     timestamptz NOT NULL,
+    PRIMARY KEY (game, seq),
+    UNIQUE (game, key)
 );

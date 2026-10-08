@@ -177,6 +177,7 @@ func TestAPublishWakesEveryLoopThatWaitsForIt(t *testing.T) {
 		"opening colours": wakes.Ready,
 		"trailers":        wakes.Trailers,
 		"people":          wakes.People,
+		"daily puzzles":   wakes.Daily,
 	}
 	woke := make(chan string, len(loops))
 	for name, wake := range loops {
@@ -220,6 +221,7 @@ func TestAReaderMeetingAFilmWithNoSynopsisWakesTheSynopsisJob(t *testing.T) {
 		"omdb posters": wakes.Published, "tmdb ids": wakes.PublishedIDs,
 		"tmdb posters": wakes.Wanted, "opening colours": wakes.Ready, "trailers": wakes.Trailers,
 		"trailer demand": wakes.TrailersWanted, "people": wakes.People, "people demand": wakes.PeopleWanted,
+		"daily puzzles": wakes.Daily,
 	} {
 		select {
 		case <-c:
@@ -244,7 +246,7 @@ func TestAReaderOpeningAFilmWithNoTrailerWakesTheTrailerJob(t *testing.T) {
 		"omdb posters": wakes.Published, "tmdb ids": wakes.PublishedIDs,
 		"tmdb posters": wakes.Wanted, "opening colours": wakes.Ready,
 		"synopses": wakes.Synopses, "trailer publish": wakes.Trailers,
-		"people": wakes.People, "people demand": wakes.PeopleWanted,
+		"people": wakes.People, "people demand": wakes.PeopleWanted, "daily puzzles": wakes.Daily,
 	} {
 		select {
 		case <-c:
@@ -270,7 +272,7 @@ func TestAReaderOpeningAMapWithoutPhotosWakesThePeopleJob(t *testing.T) {
 		"omdb posters": wakes.Published, "tmdb ids": wakes.PublishedIDs,
 		"tmdb posters": wakes.Wanted, "opening colours": wakes.Ready,
 		"synopses": wakes.Synopses, "trailers": wakes.Trailers,
-		"trailer demand": wakes.TrailersWanted, "people publish": wakes.People,
+		"trailer demand": wakes.TrailersWanted, "people publish": wakes.People, "daily puzzles": wakes.Daily,
 	} {
 		select {
 		case <-c:

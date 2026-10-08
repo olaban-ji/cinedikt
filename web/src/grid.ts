@@ -505,6 +505,33 @@ export function warmSpan(scrollTop: number, viewH: number): { top: number; botto
   return { top: at - screen, bottom: at + screen * 2 };
 }
 
+/** How far the reader can scroll before a new band of cards is mounted.
+ *  Well inside the screen that is already warm, so the mount happens
+ *  before those cards reach the glass. The map and the Daily's board
+ *  both move their warm band by it. */
+export const WARM_STEP = 64;
+
+/** The top of the screen in the plot, `lift` being how far down the
+ *  scroller the plot starts, in the steps the warm band moves by. */
+export function warmTop(scrollTop: number, lift: number): number {
+  return Math.floor(Math.max(0, scrollTop - lift) / WARM_STEP) * WARM_STEP;
+}
+
+/** A year's band across the plot: striped every other row, lit for the
+ *  searched film's year, ruled for a decade; or the break's. The map and
+ *  the Daily's board draw the same bands, so a modifier added here
+ *  reaches both. */
+export function bandClass(r: Row): string {
+  if (r.isBreak) return 'cd-band cd-band-break';
+  return `cd-band${r.index % 2 === 1 ? ' cd-band-odd' : ''}${r.anchorYear ? ' cd-band-anchor' : ''}${r.decade ? ' cd-band-decade' : ''}`;
+}
+
+/** A year's label on the rail: a decade's numeral larger, the searched
+ *  film's year lit. For the map and the Daily's board alike. */
+export function railYearClass(r: Row): string {
+  return `cd-rail-year${r.decade ? ' cd-rail-decade' : ''}${r.anchorYear ? ' cd-rail-anchor' : ''}`;
+}
+
 /** Whether a card's box meets `span`. A card that only just crosses the
  *  edge still counts: half a poster is how a scroll should arrive. */
 export function inWarmSpan(

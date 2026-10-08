@@ -5,13 +5,15 @@ import {
   GridApp,
   askForMissingPhotos,
   backLabel,
-  drawsAbout,
+  drawsPage,
   headerClass,
+  pageOf,
   skipsOpening,
   useFilmRoute,
   type FilmRoute,
 } from './GridApp';
 import type { fetchPeoplePhotos } from './api';
+import { DailyPage } from './DailyPage';
 import type { GridPerson } from './grid';
 import { routeAt } from './movieParam';
 import { freshFilters } from './trail';
@@ -153,14 +155,14 @@ describe('the About page’s route', () => {
     expect(h.pushState).toHaveBeenCalledTimes(1);
     expect(h.pushState).toHaveBeenCalledWith({ depth: 3, filters: freshFilters() }, '', '/about');
     expect(adopt.current).toHaveBeenCalledWith(freshFilters());
-    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: true });
+    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: true, daily: false });
   });
 
   it('is pushed from a map too, leaving the map behind', () => {
     const h = at('/movie/tt0133093-the-matrix', { depth: 1, filters: freshFilters() });
     route().openAbout(click());
     expect(h.pushState).toHaveBeenCalledWith({ depth: 2, filters: freshFilters() }, '', '/about');
-    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: true });
+    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: true, daily: false });
   });
 
   it('leaves a click with a modifier, or not with the main button, to the browser', () => {
@@ -207,12 +209,12 @@ describe('the About page’s route', () => {
     route().goHome(e);
     expect(e.preventDefault).toHaveBeenCalled();
     expect(h.pushState).toHaveBeenCalledWith({ depth: 2, filters: freshFilters() }, '', '/');
-    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: false });
+    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: false, daily: false });
     // Keeping the query and hash, as the wordmark does from a map.
     const g = at('/about?device=phone#x', { depth: 1, filters: freshFilters() });
     route().goHome(click());
     expect(g.pushState).toHaveBeenCalledWith({ depth: 2, filters: freshFilters() }, '', '/?device=phone#x');
-    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: false });
+    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: false, daily: false });
   });
 
   it('is left for a map picked from its search, which is pushed one deeper with the filters clear', () => {
@@ -225,7 +227,7 @@ describe('the About page’s route', () => {
       '/movie/tt0133093-the-matrix',
     );
     expect(adopt.current).toHaveBeenCalledWith(freshFilters());
-    expect(routeAt(location.pathname)).toEqual({ movieId: 'tt0133093', about: false });
+    expect(routeAt(location.pathname)).toEqual({ movieId: 'tt0133093', about: false, daily: false });
   });
 
   it('is reached at /about/ too, and nowhere under it', () => {
@@ -248,16 +250,158 @@ describe('the About page’s route', () => {
   });
 });
 
-describe('drawsAbout', () => {
+describe('the Daily’s route', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('is pushed by the banner, one entry deeper, with the filters clear', () => {
+    const h = at('/', { depth: 2, filters: freshFilters() });
+    const adopt = { current: vi.fn() };
+    const e = click();
+    route(adopt).openDaily(e);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(h.pushState).toHaveBeenCalledTimes(1);
+    expect(h.pushState).toHaveBeenCalledWith({ depth: 3, filters: freshFilters() }, '', '/daily');
+    expect(adopt.current).toHaveBeenCalledWith(freshFilters());
+    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: false, daily: true });
+  });
+
+  it('leaves a click with a modifier, or not with the main button, to the browser', () => {
+    // So the banner can still be opened in a new tab.
+    for (const over of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+      const h = at('/', { depth: 0, filters: freshFilters() });
+      const e = click(over);
+      route().openDaily(e);
+      expect(e.preventDefault, JSON.stringify(over)).not.toHaveBeenCalled();
+      expect(h.pushState, JSON.stringify(over)).not.toHaveBeenCalled();
+    }
+  });
+
+  it('is not pushed again from the Daily itself', () => {
+    const h = at('/daily', { depth: 1, filters: freshFilters() });
+    route().openDaily(click());
+    expect(h.pushState).not.toHaveBeenCalled();
+  });
+
+  it('has a Back that is the browser’s back, labelled Back', () => {
+    const h = at('/daily', { depth: 1, filters: freshFilters() });
+    const r = route();
+    expect(r.daily).toBe(true);
+    expect(r.about).toBe(false);
+    expect(r.movieId).toBeNull();
+    expect(r.canGoBack).toBe(true);
+    r.goBack();
+    expect(h.back).toHaveBeenCalledTimes(1);
+    expect(h.pushState).not.toHaveBeenCalled();
+    expect(page()).toMatch(/<button type="button" class="cd-back" aria-label="Back">/);
+  });
+
+  it('has no Back when it was opened straight from a link', () => {
+    at('/daily', null);
+    expect(route().canGoBack).toBe(false);
+    expect(page()).not.toContain('cd-back');
+  });
+
+  it('is left for home by the wordmark, which pushes /', () => {
+    // The Daily has no movie in its path, and is not home either.
+    const h = at('/daily', { depth: 1, filters: freshFilters() });
+    const e = click();
+    route().goHome(e);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(h.pushState).toHaveBeenCalledWith({ depth: 2, filters: freshFilters() }, '', '/');
+    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: false, daily: false });
+  });
+
+  it('is left for the About page like any other page', () => {
+    const h = at('/daily', { depth: 1, filters: freshFilters() });
+    route().openAbout(click());
+    expect(h.pushState).toHaveBeenCalledWith({ depth: 2, filters: freshFilters() }, '', '/about');
+    expect(routeAt(location.pathname)).toEqual({ movieId: null, about: true, daily: false });
+  });
+
+  it('is reached at /daily/ too, and nowhere under it', () => {
+    at('/daily/', null);
+    expect(route().daily).toBe(true);
+    at('/daily/142', null);
+    expect(route().daily).toBe(false);
+  });
+
+  it('draws the Daily under the whole wordmark, its pill and How it works, with no search', () => {
+    at('/daily', null);
+    const html = page();
+    expect(html).toContain('<div class="cd-daily"');
+    expect(html).not.toContain('cd-cold');
+    expect(html).not.toContain('cd-about');
+    // Whole from the first paint, as on a map.
+    expect(html).toMatch(/<span class="cd-wordmark-slot" aria-hidden="true"><svg class="cd-mark"/);
+    expect(html).toContain('cd-wordmark-word cd-wordmark-word-in');
+    // Then the pill, the room between, and the rules.
+    const row = /<div class="cd-header-row">([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '';
+    expect(row).toMatch(
+      /class="cd-wordmark"[\s\S]*<span class="cd-daily-pill">Daily<\/span><span class="cd-daily-spacer"><\/span><button type="button" class="cd-daily-help" aria-label="How it works">/,
+    );
+    // The date waits for the puzzle: it is not known before it loads.
+    expect(row).not.toContain('cd-daily-date');
+    // No search, and so none of its shortcuts; no rating filter.
+    expect(html).not.toContain('aria-label="Search for a movie"');
+    expect(html).not.toContain('cd-search');
+    expect(html).not.toContain('cd-rating-filter');
+  });
+
+  it('keeps the word in its wordmark on a phone, where a map’s header drops it', () => {
+    at('/daily', null);
+    vi.stubGlobal('window', { innerWidth: 390, innerHeight: 844 });
+    expect(page()).toContain('cd-wordmark-word cd-wordmark-word-in');
+    at('/about', null);
+    vi.stubGlobal('window', { innerWidth: 390, innerHeight: 844 });
+    expect(page()).not.toContain('cd-wordmark-word');
+  });
+
+  it('rules the header off from the board, and keeps it on the ground', () => {
+    at('/daily', null);
+    vi.stubGlobal('window', { innerWidth: 390, innerHeight: 844 });
+    // Never lying over the page as glass: the Daily places its panel and
+    // its intro against its own box, which starts under the header.
+    const header = /<header class="([^"]*)"/.exec(page())?.[1];
+    expect(header).toBe('cd-header cd-header-map');
+  });
+});
+
+describe('the Daily held under a map', () => {
+  it('steps back behind the progress line while the map loads, as the About page does', () => {
+    // Forward from the Daily to a map that is not in hand yet: drawsPage
+    // keeps the Daily drawn, and GridApp passes it the load as `dim`.
+    expect(renderToStaticMarkup(createElement(DailyPage, { dim: true }))).toMatch(
+      /^<div class="cd-daily cd-daily-dim">/,
+    );
+    expect(renderToStaticMarkup(createElement(DailyPage, {}))).toMatch(/^<div class="cd-daily">/);
+  });
+});
+
+describe('pageOf', () => {
+  it('names the page without a map that a route is on', () => {
+    expect(pageOf(false, false)).toBe('cold');
+    expect(pageOf(true, false)).toBe('about');
+    expect(pageOf(false, true)).toBe('daily');
+  });
+});
+
+describe('drawsPage', () => {
   it('follows the route while there is no movie', () => {
-    expect(drawsAbout(null, true, false)).toBe(true);
-    expect(drawsAbout(null, false, true)).toBe(false);
-    expect(drawsAbout(null, false, false)).toBe(false);
+    expect(drawsPage(null, 'about', 'cold')).toBe('about');
+    expect(drawsPage(null, 'cold', 'about')).toBe('cold');
+    expect(drawsPage(null, 'daily', 'cold')).toBe('daily');
+    expect(drawsPage(null, 'cold', 'daily')).toBe('cold');
+    expect(drawsPage(null, 'about', 'daily')).toBe('about');
   });
 
   it('holds what was drawn while a picked map loads over it', () => {
-    expect(drawsAbout('tt0133093', false, true)).toBe(true);
-    expect(drawsAbout('tt0133093', false, false)).toBe(false);
+    expect(drawsPage('tt0133093', 'cold', 'about')).toBe('about');
+    expect(drawsPage('tt0133093', 'cold', 'cold')).toBe('cold');
+    // Forward from the Daily to a map: the Daily stays, dimmed, until the
+    // map arrives, as the About page does.
+    expect(drawsPage('tt0133093', 'cold', 'daily')).toBe('daily');
   });
 });
 
@@ -266,21 +410,61 @@ describe('skipsOpening', () => {
     expect(skipsOpening('/')).toBe(false);
     expect(skipsOpening('/about')).toBe(true);
     expect(skipsOpening('/about/')).toBe(true);
+    expect(skipsOpening('/daily')).toBe(true);
+    expect(skipsOpening('/daily/')).toBe(true);
     expect(skipsOpening('/movie/tt0133093')).toBe(true);
     expect(skipsOpening('/movie/tt0133093-the-matrix')).toBe(true);
+    // Not a page: the opening screen, which plays it.
+    expect(skipsOpening('/daily/142')).toBe(false);
   });
 });
 
 describe('backLabel', () => {
-  it('is Back on the About page and names the movie trail on a map, once there is somewhere to go', () => {
-    expect(backLabel({ movieId: null, about: true, canGoBack: true })).toBe('Back');
-    expect(backLabel({ movieId: 'tt0133093', about: false, canGoBack: true })).toBe('Back to the previous movie');
+  const none = { movieId: null, about: false, daily: false };
+
+  it('is Back on the About page and the Daily, and names the movie trail on a map, once there is somewhere to go', () => {
+    expect(backLabel({ ...none, about: true, canGoBack: true })).toBe('Back');
+    expect(backLabel({ ...none, daily: true, canGoBack: true })).toBe('Back');
+    expect(backLabel({ ...none, movieId: 'tt0133093', canGoBack: true })).toBe('Back to the previous movie');
   });
 
   it('is nothing on the opening screen, or with nothing behind', () => {
-    expect(backLabel({ movieId: null, about: false, canGoBack: true })).toBeNull();
-    expect(backLabel({ movieId: null, about: true, canGoBack: false })).toBeNull();
-    expect(backLabel({ movieId: 'tt0133093', about: false, canGoBack: false })).toBeNull();
+    expect(backLabel({ ...none, canGoBack: true })).toBeNull();
+    expect(backLabel({ ...none, about: true, canGoBack: false })).toBeNull();
+    expect(backLabel({ ...none, daily: true, canGoBack: false })).toBeNull();
+    expect(backLabel({ ...none, movieId: 'tt0133093', canGoBack: false })).toBeNull();
+  });
+});
+
+describe('the opening screen’s Daily banner', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('comes first, before the headline, as a link to /daily', () => {
+    at('/', null);
+    const cold = /<div class="cd-cold[^"]*">([\s\S]*)$/.exec(page())?.[1] ?? '';
+    expect(cold.startsWith('<a class="cd-daily-banner')).toBe(true);
+    expect(cold.indexOf('cd-daily-banner')).toBeLessThan(cold.indexOf('cd-cold-head'));
+    expect(cold).toMatch(/<a class="cd-daily-banner[^"]*" href="\/daily"/);
+  });
+
+  it('is drawn whole from the first paint, before today’s puzzle has answered', () => {
+    // The grid of films is measured under it, so its box cannot wait.
+    at('/', null);
+    const banner = /<a class="cd-daily-banner[\s\S]*?<\/a>/.exec(page())?.[0] ?? '';
+    expect(banner).toContain('cd-daily-banner-waiting');
+    expect(banner).toContain('<span class="cd-daily-pill">Daily</span>');
+    expect(banner).toContain('<span class="cd-daily-banner-title">Whose map is it?</span>');
+    expect(banner).toContain('aria-label="Cinedikt Daily: Whose map is it?"');
+    // No number and no line about today until the server says.
+    expect(banner).not.toContain('cd-daily-banner-meta');
+    expect(banner).not.toContain('cd-daily-banner-sub');
+  });
+
+  it('is not on the About page or a map', () => {
+    at('/about', null);
+    expect(page()).not.toContain('cd-daily-banner');
   });
 });
 

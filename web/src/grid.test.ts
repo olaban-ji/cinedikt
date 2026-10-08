@@ -54,6 +54,10 @@ import {
   seamArriving,
   seamLeaving,
   searchedTagAt,
+  bandClass,
+  railYearClass,
+  warmTop,
+  WARM_STEP,
   type Row,
   type GridPayload,
   type GridPerson,
@@ -253,6 +257,20 @@ describe('the year rail', () => {
     const decade = rule('\\.cd-rail-slot \\.cd-rail-decade');
     expect(decade).toContain(`top: calc(var(--pin-lift, 0px) + ${AXIS_H + decadeInset}px)`);
     expect(decade).toContain(`margin-top: ${decadeInset}px`);
+  });
+
+  it('marks an odd row, the searched film’s year and a decade the same way on the map and the Daily', () => {
+    // Both draw their bands and labels from these, so a modifier added
+    // for one reaches the other.
+    expect(bandClass(row({}))).toBe('cd-band');
+    expect(bandClass(row({ index: 3, anchorYear: true, decade: true, year: 2000 }))).toBe(
+      'cd-band cd-band-odd cd-band-anchor cd-band-decade',
+    );
+    expect(bandClass(row({ isBreak: true, index: 1, year: 0 }))).toBe('cd-band cd-band-break');
+    expect(railYearClass(row({}))).toBe('cd-rail-year');
+    expect(railYearClass(row({ decade: true, anchorYear: true, year: 2000 }))).toBe(
+      'cd-rail-year cd-rail-decade cd-rail-anchor',
+    );
   });
 
   it('moves a pinned label with the header, on the header’s own timing', () => {
@@ -1369,6 +1387,16 @@ describe('the warm band', () => {
     expect(warmSpan(0, 800)).toEqual({ top: -800, bottom: 1600 });
     expect(warmSpan(400, 800).top).toBe(-400);
     expect(warmSpan(5000, 800).top).toBe(4200);
+  });
+
+  it('moves in 64px steps from the top of the plot, for the map and the Daily alike', () => {
+    expect(WARM_STEP).toBe(64);
+    expect(warmTop(0, 0)).toBe(0);
+    expect(warmTop(127, 0)).toBe(64);
+    expect(warmTop(128, 0)).toBe(128);
+    // Under a header lying over the map, the plot starts that far down.
+    expect(warmTop(200, 60)).toBe(128);
+    expect(warmTop(40, 60)).toBe(0);
   });
 
   it('keeps a card that only just enters the band, and drops one past it', () => {

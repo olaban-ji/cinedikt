@@ -157,8 +157,12 @@ func run(logger *slog.Logger) error {
 	} else {
 		logger.Info("where to watch is off", "reason", "no STREAMING_API_KEY")
 	}
+	// Cinedikt Daily is always on: its puzzles, players and games are kept
+	// in the same Postgres the catalog is, and the runner below picks the
+	// puzzles.
 	server := api.New(catalogServer, logger).
-		WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping})
+		WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping}).
+		WithDaily(store)
 	// The share card. Its assets are read once, here, so a missing font is
 	// a process that will not start rather than a link that will not
 	// unfurl.
@@ -488,7 +492,7 @@ var ogImageTag = regexp.MustCompile(`content="` + regexp.QuoteMeta(ogImagePath) 
 const previewTimeout = 300 * time.Millisecond
 
 // serveIndex writes index.html with its share tags made absolute and, on
-// a movie's route or the About page, named for that page, and with
+// a movie's route, the About page or Daily, named for that page, and with
 // analyticsTag, when there is one, at the end of its head.
 func serveIndex(w http.ResponseWriter, r *http.Request, path string, meta movieMeta, analyticsTag []byte) {
 	body, err := os.ReadFile(path)
@@ -510,6 +514,7 @@ func serveIndex(w http.ResponseWriter, r *http.Request, path string, meta movieM
 		body = setMeta(body, ogURL, origin+"/")
 		body = namePreview(r.Context(), body, origin, r.URL.Path, meta)
 		body = nameAbout(body, origin, r.URL.Path)
+		body = nameDaily(body, origin, r.URL.Path)
 	}
 	body = withAnalyticsMeta(body, analyticsTag)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -614,6 +619,35 @@ func nameAbout(body []byte, origin, path string) []byte {
 	body = titleTag.ReplaceAllLiteral(body, []byte("<title>"+html.EscapeString(aboutTitle)+"</title>"))
 	body = setMeta(body, ogTitle, aboutTitle)
 	body = setMeta(body, ogURL, origin+aboutPath)
+	return body
+}
+
+// dailyTitle is Cinedikt Daily's title in its tab. DAILY_TITLE in
+// web/src/movieParam.ts is the page's own, and the two must agree.
+const dailyTitle = "Daily · Cinedikt"
+
+// dailyPath is Daily's one address. It is also reached at /daily/, as
+// isDailyPath in web/src/movieParam.ts reads it.
+const dailyPath = "/daily"
+
+// What a preview of Daily's link says. The card stays the site's own:
+// a picture of the day's map would give the answer away.
+const (
+	dailyShareTitle = "Cinedikt Daily: whose map is it?"
+	dailyShareText  = "One hidden movie a day. Every movie on its map shares an actor or director with it."
+)
+
+// nameDaily names Daily in the tags a scraper reads: its tab title, a
+// title and a line for the preview of a shared link, and its address
+// without the slash however it was reached.
+func nameDaily(body []byte, origin, path string) []byte {
+	if path != dailyPath && path != dailyPath+"/" {
+		return body
+	}
+	body = titleTag.ReplaceAllLiteral(body, []byte("<title>"+html.EscapeString(dailyTitle)+"</title>"))
+	body = setMeta(body, ogTitle, dailyShareTitle)
+	body = setMeta(body, ogDesc, dailyShareText)
+	body = setMeta(body, ogURL, origin+dailyPath)
 	return body
 }
 

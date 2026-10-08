@@ -59,6 +59,8 @@ const (
 	JobTrailers    = "trailers"
 	JobPeople      = "people"
 	JobColours     = "colours"
+	// JobDaily picks Cinedikt Daily's puzzles, a week ahead.
+	JobDaily = "daily"
 	// JobGeoIP is the GeoLite2 check. Unlike the jobs above it runs on
 	// the queue, in whichever process claims it, so it can report from a
 	// process that does not hold the lease.

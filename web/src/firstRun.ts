@@ -8,7 +8,8 @@ export type FirstRunFilm = SearchHit & { year: number; c?: string };
 export const COLD_MAX = 8;
 
 /** The opening screen's geometry in each screen class: the numbers the
- *  stylesheet gives `.cd-cold`, `.cd-tiles` and the tiles' captions. */
+ *  stylesheet gives `.cd-cold`, `.cd-tiles`, the tiles' captions and the
+ *  Daily's banner over the headline. */
 interface ColdGeometry {
   /** Columns in `.cd-tiles`. A landscape phone lays all eight in a row. */
   columns: number;
@@ -23,22 +24,39 @@ interface ColdGeometry {
    *  the title and the year, each one line at a line-height of 1.2, with
    *  2px between them. */
   caption: number;
+  /** The Daily's banner (DailyBanner.tsx), with the margin under it and
+   *  the column's gap after that: everything it puts above the headline. */
+  banner: number;
 }
+
+/** The sides `.cd-cold` pads in by, and the gap between its lines. */
+const SIDE = 20;
+const COLUMN_GAP = 12;
 
 /** Title 13.5px and year 12px; on a landscape phone, 12 and 11. */
 const CAPTION = 9 + 13.5 * 1.2 + 2 + 12 * 1.2;
 const CAPTION_SHORT = 9 + 12 * 1.2 + 2 + 11 * 1.2;
 
-const GEOMETRY: Record<ScreenClass, ColdGeometry> = {
-  phone: { columns: 2, gap: 14, maxW: 640, gridMargin: 28, foot: 48, caption: CAPTION },
-  short: { columns: 8, gap: 12, maxW: 820, gridMargin: 16, foot: 24, caption: CAPTION_SHORT },
-  tablet: { columns: 4, gap: 18, maxW: 640, gridMargin: 28, foot: 48, caption: CAPTION },
-  desktop: { columns: 4, gap: 18, maxW: 640, gridMargin: 28, foot: 48, caption: CAPTION },
-};
+/** The banner on a desktop, a tablet and a landscape phone, which all
+ *  draw it the same: 12px of padding top and bottom round the fan of
+ *  cards, which at 44px is the tallest thing in it (the words beside it
+ *  come to 43.85), then its 18px margin and the column's gap. */
+const BANNER = 24 + 44 + 18 + COLUMN_GAP;
 
-/** The sides `.cd-cold` pads in by, and the gap between its lines. */
-const SIDE = 20;
-const COLUMN_GAP = 12;
+/** On a phone: 10px of padding top and bottom, the pill's 20px row, 2px,
+ *  and the question at 17px and a line-height of 1.15 — two lines of
+ *  it, which is what it takes beside "Keep going" — then a 10px margin
+ *  and the gap. Beside "Play" it fits on one, and the grid is measured
+ *  anyway; where in doubt the extra line is counted, as introHeight
+ *  counts it. */
+const BANNER_PHONE = 20 + 20 + 2 + 2 * 17 * 1.15 + 10 + COLUMN_GAP;
+
+const GEOMETRY: Record<ScreenClass, ColdGeometry> = {
+  phone: { columns: 2, gap: 14, maxW: 640, gridMargin: 28, foot: 48, caption: CAPTION, banner: BANNER_PHONE },
+  short: { columns: 8, gap: 12, maxW: 820, gridMargin: 16, foot: 24, caption: CAPTION_SHORT, banner: BANNER },
+  tablet: { columns: 4, gap: 18, maxW: 640, gridMargin: 28, foot: 48, caption: CAPTION, banner: BANNER },
+  desktop: { columns: 4, gap: 18, maxW: 640, gridMargin: 28, foot: 48, caption: CAPTION, banner: BANNER },
+};
 
 /** The padding `.cd-cold` takes off the top: 36 on a phone, 18 on a
  *  landscape phone, and otherwise `clamp(28px, 6vh, 110px)`, or 9vh on a
@@ -72,15 +90,21 @@ function introHeight(cls: ScreenClass, vw: number): number {
  *  stylesheet, and they once said 12, 24 and 52 while the CSS said 14,
  *  40 and about 90, so on a window around 700–760px tall this asked for
  *  a row that could not fit and the last one was cut off. They are the
- *  CSS's numbers now, and only used when there is no measurement. */
+ *  CSS's numbers now, and only used when there is no measurement.
+ *
+ *  The Daily's banner is counted whether or not it stays: it is drawn
+ *  from the first paint, and only goes when the server cannot offer
+ *  today's puzzle, when the grid is measured again without it. A row
+ *  too few is room to spare; a row too many is cut off. */
 export function coldScreenCount(vw: number, vh: number, gridTop?: number): number {
   const cls = screenOf(vw, vh).cls;
-  const { columns, gap, maxW, gridMargin, foot, caption } = GEOMETRY[cls];
+  const { columns, gap, maxW, gridMargin, foot, caption, banner } = GEOMETRY[cls];
   const innerW = Math.min(Math.max(0, vw - SIDE * 2), maxW);
   const tileW = (innerW - gap * (columns - 1)) / columns;
   const tileH = tileW * 1.5 + caption;
   const top =
-    gridTop ?? HEADER_ROW_H[cls] + coldTopPad(vw, vh) + introHeight(cls, vw) + gridMargin;
+    gridTop ??
+    HEADER_ROW_H[cls] + coldTopPad(vw, vh) + banner + introHeight(cls, vw) + gridMargin;
   const available = vh - top - foot;
   if (!(tileH > 0) || available <= 0) return columns;
   const rows = Math.max(1, Math.floor((available + gap) / (tileH + gap)));

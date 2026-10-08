@@ -12,7 +12,7 @@ import (
 var testPlace = place{env: "dev"}
 
 var allJobs = []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobTMDbPosters, notify.JobTMDbIDs,
-	notify.JobSynopses, notify.JobTrailers, notify.JobPeople, notify.JobGeoIP}
+	notify.JobSynopses, notify.JobTrailers, notify.JobPeople, notify.JobDaily, notify.JobGeoIP}
 
 // The GeoLite2 builds the boards and pushes name: MaxMind's Tuesday and
 // Friday releases in the week of testNow, at the hours its stamps carry.
@@ -44,6 +44,7 @@ func quietDay(t *testing.T) *policy {
 	p.note(notify.Event{Job: notify.JobPeople, Kind: notify.Started, Total: 2140})
 	p.note(notify.Event{Job: notify.JobPeople, Kind: notify.Finished, Done: 1893, None: 247, Took: 7 * time.Minute})
 	p.note(notify.Event{Job: notify.JobColours, Kind: notify.Checked})
+	p.note(notify.Event{Job: notify.JobDaily, Kind: notify.Checked})
 	p.note(notify.Event{Job: notify.JobGeoIP, Kind: notify.Checked, LiveSince: fridayBuild})
 	p.now = testNow
 	p.note(notify.Event{Job: notify.JobImport, Kind: notify.Checked, NextTry: p.now.Add(40 * time.Minute),
@@ -131,7 +132,7 @@ func boards(t *testing.T) map[string]*policy {
 
 	first := newPolicy(t)
 	first.note(notify.Event{Job: notify.JobSystem, Kind: notify.TookOver,
-		Jobs: []string{notify.JobImport, notify.JobColours, notify.JobPosters, notify.JobSynopses}})
+		Jobs: []string{notify.JobImport, notify.JobColours, notify.JobDaily, notify.JobPosters, notify.JobSynopses}})
 	first.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1})
 	out["first-start-no-catalog"] = first
 

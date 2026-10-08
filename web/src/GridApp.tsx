@@ -54,8 +54,19 @@ import { isSearchShortcut, isTyping, searchPlaceholder } from './search';
 import { Toast, useToast } from './Toast';
 import { usePlayer } from './TrailerRow';
 import { dimsCards, hideEmptyToast } from './quickSwitch';
-import { ABOUT_PATH, filmPath, isAboutPath, movieIdFromPath, routeAt, usePageTitle } from './movieParam';
+import {
+  ABOUT_PATH,
+  DAILY_PATH,
+  filmPath,
+  isAboutPath,
+  isDailyPath,
+  movieIdFromPath,
+  routeAt,
+  usePageTitle,
+} from './movieParam';
 import { AboutPage, MailLink } from './AboutPage';
+import { DailyHeaderTail, DailyPage } from './DailyPage';
+import { DailyBanner, useDailyBanner } from './DailyBanner';
 import {
   applyFilters,
   filtersFromState,
@@ -297,10 +308,13 @@ const SEARCH_DEBOUNCE_MS = 250;
  *  and nothing that has to be grown. */
 export function GridApp() {
   const adopt = useRef<(filters: MapFilters) => void>(() => {});
-  const { movieId, about, canGoBack, openMovie, openAbout, goBack, goHome } = useFilmRoute(adopt);
+  const { movieId, about, daily, canGoBack, openMovie, openAbout, openDaily, goBack, goHome } =
+    useFilmRoute(adopt);
   const screen = useScreen();
   // Only a phone drops "inedikt": a landscape phone has the width for it.
-  const compactHeader = screen.phone;
+  // The Daily's header keeps it even there, as the game's design draws
+  // it: with no search field beside it, the row has the room.
+  const compactHeader = screen.phone && !daily;
   // Anything narrower than 1024 px sends the rating rungs to the View
   // panel: below that the header has no room for them beside the
   // wordmark and the search field. A wide window squashed short keeps
@@ -362,14 +376,24 @@ export function GridApp() {
   // of the opening screen first, and that screen's first-run request
   // would go out only to be cancelled as it unmounted.
   const [loading, setLoading] = useState(() => movieId !== null);
-  // A map is being fetched from the opening screen or the About page,
-  // which stays behind the progress line, dimmed, until it arrives.
+  // A map is being fetched from the opening screen, the About page or
+  // the Daily, which stays behind the progress line, dimmed, until it
+  // arrives.
   const [fromCold, setFromCold] = useState(false);
-  // Which of the two pages without a map is drawn when there is no map
-  // to draw: the About page, or the opening screen (see drawsAbout).
-  const [aboutDrawn, setAboutDrawn] = useState(about);
-  const aboutShown = drawsAbout(movieId, about, aboutDrawn);
-  if (aboutShown !== aboutDrawn) setAboutDrawn(aboutShown);
+  // Which of the three pages without a map is drawn when there is no map
+  // to draw: the opening screen, the About page or the Daily (see
+  // drawsPage).
+  const [pageDrawn, setPageDrawn] = useState<Page>(() => pageOf(about, daily));
+  const pageShown = drawsPage(movieId, pageOf(about, daily), pageDrawn);
+  if (pageShown !== pageDrawn) setPageDrawn(pageShown);
+  // The Daily's puzzle, once its page has loaded it, for the date in the
+  // header; it is forgotten when the page goes, so coming back to it
+  // another day never shows yesterday's number while today's loads. And
+  // a count the header's "How it works" moves on, which the page reads
+  // as a request to open the rules.
+  const [day, setDay] = useState<{ no: number; date: string } | null>(null);
+  if (pageDrawn !== 'daily' && day !== null) setDay(null);
+  const [rulesAsked, setRulesAsked] = useState(0);
   const drawnRef = useRef(drawn);
   drawnRef.current = drawn;
   const [error, setError] = useState<string | null>(null);
@@ -382,6 +406,10 @@ export function GridApp() {
   const player = usePlayer();
   const stopTrailer = player.stop;
   const [searching, setSearching] = useState(false);
+  // The Daily's header has no search field. One that had the focus as
+  // the route moved there — Back, from the keyboard — is taken away
+  // without a blur, so what it said about itself goes with it.
+  if (daily && searching) setSearching(false);
   // The search field has text in it, which an Escape clears before it
   // closes the map's hover preview.
   const [searchTyped, setSearchTyped] = useState(false);
@@ -1005,7 +1033,7 @@ export function GridApp() {
 
   // The panel wants the whole film, which is detail. Opening a card the
   // reader can see means its detail is already here.
-  usePageTitle(payload?.anchor.title, about);
+  usePageTitle(payload?.anchor.title, about ? 'about' : daily ? 'daily' : undefined);
 
   const open = openId == null ? null : (detail.get(openId) ?? null);
   // A sheet or popover is up, and the floating buttons belong to the map
@@ -1116,7 +1144,7 @@ export function GridApp() {
     if (mapPayload && !stale && !leaving) liveDraw.current = { settings, selectedIdx, detail };
   });
   const frozen = mapPayload && (stale || leaving) ? liveDraw.current : null;
-  const back = backLabel({ movieId, about, canGoBack });
+  const back = backLabel({ movieId, about, daily, canGoBack });
 
   return (
     // data-quick marks the quick switch as out, so that on a phone
@@ -1124,7 +1152,15 @@ export function GridApp() {
     <div className="cd-app" data-quick={quick || undefined}>
       <header
         ref={headerRef}
-        className={headerClass({ map: holdsChips, over: overlay, away: headerAway, searching })}
+        // The Daily's board is ruled off from the header as a map is.
+        // The header never lies over it: the page under it places its
+        // panel and its intro against its own box, which starts below.
+        className={headerClass({
+          map: holdsChips || daily,
+          over: overlay,
+          away: headerAway,
+          searching,
+        })}
       >
         <div className="cd-header-row">
           {/* See backLabel for where it shows. A permanently disabled
@@ -1144,25 +1180,41 @@ export function GridApp() {
             href={homeHref()}
             onClick={goHome}
             slotRef={markSlot}
-            // Only the opening screen borrows the header's mark. A map
-            // and the About page have the wordmark whole from the first
-            // paint.
-            hollow={movieId === null && !about && opening !== 'done'}
-            wordIn={movieId !== null || about || opening !== 'draw'}
+            // Only the opening screen borrows the header's mark. A map,
+            // the About page and the Daily have the wordmark whole from
+            // the first paint — and an opening left unfinished, by a
+            // reader who pressed the Daily's banner mid-flight, must not
+            // leave the Daily's mark missing.
+            hollow={movieId === null && !about && !daily && opening !== 'done'}
+            wordIn={movieId !== null || about || daily || opening !== 'draw'}
           />
-          <SearchField
-            placeholder={searchPlaceholder(loading || gliding, loadingTitle, payload?.anchor.title)}
-            onPick={setMovieId}
-            onFocusChange={setSearching}
-            onTyped={setSearchTyped}
-            // A film sheet or the View panel is a dialog with the focus
-            // inside it. A key that pulled the focus out to the field
-            // behind the scrim would leave the reader typing into a
-            // page they cannot see.
-            shortcuts={!covered}
-          />
-          {holdsChips && !rungsInView && (
-            <RatingFilter idle={!payload} value={settings.minRating} onChange={onFloor} />
+          {daily ? (
+            // The Daily's own: its pill, the puzzle's number and day, and
+            // "How it works". No search, and so none of its shortcuts:
+            // the game has "/" for its own guess field, and a search that
+            // opened a map would walk out of a game whose clock runs on.
+            <DailyHeaderTail
+              day={day}
+              phone={screen.phone}
+              onRules={() => setRulesAsked((n) => n + 1)}
+            />
+          ) : (
+            <>
+              <SearchField
+                placeholder={searchPlaceholder(loading || gliding, loadingTitle, payload?.anchor.title)}
+                onPick={setMovieId}
+                onFocusChange={setSearching}
+                onTyped={setSearchTyped}
+                // A film sheet or the View panel is a dialog with the
+                // focus inside it. A key that pulled the focus out to the
+                // field behind the scrim would leave the reader typing
+                // into a page they cannot see.
+                shortcuts={!covered}
+              />
+              {holdsChips && !rungsInView && (
+                <RatingFilter idle={!payload} value={settings.minRating} onChange={onFloor} />
+              )}
+            </>
           )}
         </div>
         {payload ? (
@@ -1262,12 +1314,15 @@ export function GridApp() {
         // plot stays empty rather than holding a message the reader
         // would have to read and then watch disappear.
         <div className="cd-scroller" ref={scrollerRef} aria-hidden="true" />
-      ) : aboutDrawn ? (
+      ) : pageDrawn === 'about' ? (
         <AboutPage dim={loading} />
+      ) : pageDrawn === 'daily' ? (
+        <DailyPage onDay={setDay} rulesSignal={rulesAsked} dim={loading} />
       ) : (
         <ColdStart
           onPick={setMovieId}
           onAbout={openAbout}
+          onDaily={openDaily}
           theme={theme}
           onTheme={onTheme}
           markSlot={markSlot}
@@ -1411,7 +1466,9 @@ export function GridApp() {
         />
       )}
 
-      <Toast spec={toast.spec} visible={toast.visible} onMap={onMap} />
+      {/* The Daily has a toast of its own, under the header where the
+          phone's sheet cannot cover it. Two would talk over each other. */}
+      {!daily && <Toast spec={toast.spec} visible={toast.visible} onMap={onMap} />}
       <p className="cd-sr-live" aria-live="polite">
         {!payload
           ? ''
@@ -1583,51 +1640,62 @@ function browserKeeps(e: MouseEvent<HTMLAnchorElement>): boolean {
   return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
 }
 
-/** Where the reader is, and the ways to move. The route is one of three
- *  things: a map (`movieId`), the About page (`about`), or, with
- *  neither, the opening screen. */
+/** Where the reader is, and the ways to move. The route is one of four
+ *  things: a map (`movieId`), the About page (`about`), the Daily
+ *  (`daily`), or, with none of them, the opening screen. */
 export interface FilmRoute {
   movieId: string | null;
   about: boolean;
+  daily: boolean;
   /** This visit has an entry before this one to go back to. */
   canGoBack: boolean;
   openMovie: (id: string, title?: string) => void;
   openAbout: (e?: MouseEvent<HTMLAnchorElement>) => void;
+  openDaily: (e?: MouseEvent<HTMLAnchorElement>) => void;
   goBack: () => void;
   goHome: (e?: MouseEvent<HTMLAnchorElement>) => void;
 }
 
-/** A visit that begins on a map or on the About page never plays the
- *  opening, not even when the reader later goes home: the header is
+/** A visit that begins on a map, the About page or the Daily never plays
+ *  the opening, not even when the reader later goes home: the header is
  *  complete from the first paint. */
 export function skipsOpening(pathname: string): boolean {
-  return movieIdFromPath(pathname) !== null || isAboutPath(pathname);
+  return movieIdFromPath(pathname) !== null || isAboutPath(pathname) || isDailyPath(pathname);
 }
 
-/** Whether the About page, rather than the opening screen, is the page
- *  without a map that is drawn, given the route and what was drawn
- *  before. It follows the route while there is no movie and holds once
- *  one is picked, so a map picked from the About page's search loads
- *  over the About page, as one picked on the opening screen loads over
- *  that, and neither page is put down afresh in the render before the
+/** The three pages without a map. */
+export type Page = 'cold' | 'about' | 'daily';
+
+/** The page without a map that a route names. */
+export function pageOf(about: boolean, daily: boolean): Page {
+  return about ? 'about' : daily ? 'daily' : 'cold';
+}
+
+/** Which page without a map is drawn, given the one the route names and
+ *  the one drawn before. It follows the route while there is no movie
+ *  and holds once one is picked, so a map picked from the About page's
+ *  search loads over the About page, as one picked on the opening screen
+ *  loads over that and one reached from the Daily by Forward loads over
+ *  the Daily, and no page is put down afresh in the render before the
  *  load begins. */
-export function drawsAbout(movieId: string | null, about: boolean, was: boolean): boolean {
-  return movieId === null ? about : was;
+export function drawsPage(movieId: string | null, page: Page, was: Page): Page {
+  return movieId === null ? page : was;
 }
 
 /** What the header's Back says, or null where there is none. It is on a
- *  map and on the About page, and only when there is somewhere to go
- *  back to. The opening screen has its own ways on — the tiles and the
- *  search — and a map or an About page opened from a link has nothing
- *  behind it. */
+ *  map, on the About page and on the Daily, and only when there is
+ *  somewhere to go back to. The opening screen has its own ways on — the
+ *  tiles and the search — and a map, an About page or a Daily opened
+ *  from a link has nothing behind it. */
 export function backLabel({
   movieId,
   about,
+  daily,
   canGoBack,
-}: Pick<FilmRoute, 'movieId' | 'about' | 'canGoBack'>): string | null {
+}: Pick<FilmRoute, 'movieId' | 'about' | 'daily' | 'canGoBack'>): string | null {
   if (!canGoBack) return null;
   if (movieId !== null) return 'Back to the previous movie';
-  return about ? 'Back' : null;
+  return about || daily ? 'Back' : null;
 }
 
 export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }): FilmRoute {
@@ -1639,7 +1707,9 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
   // keeps the same object, and asks for no render.
   const follow = useCallback(() => {
     const now = routeAt(location.pathname);
-    setRoute((was) => (was.movieId === now.movieId && was.about === now.about ? was : now));
+    setRoute((was) =>
+      was.movieId === now.movieId && was.about === now.about && was.daily === now.daily ? was : now,
+    );
   }, []);
   useEffect(() => {
     // A page opened from a link or typed in has no entry of its own yet.
@@ -1689,6 +1759,20 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
     setDepth(next);
     adopt.current(freshFilters());
   }, [adopt, follow]);
+  // The Daily, from the opening screen's banner: a new entry one deeper,
+  // as the About page is, so Back returns to the opening screen.
+  const openDaily = useCallback((e?: MouseEvent<HTMLAnchorElement>) => {
+    if (e) {
+      if (browserKeeps(e)) return;
+      e.preventDefault();
+    }
+    if (isDailyPath(location.pathname)) return;
+    const next = historyDepth(history.state) + 1;
+    history.pushState(forwardEntry(next), '', DAILY_PATH);
+    follow();
+    setDepth(next);
+    adopt.current(freshFilters());
+  }, [adopt, follow]);
   const back = useCallback(() => {
     if (historyDepth(history.state) === 0) return;
     history.back();
@@ -1699,9 +1783,10 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
       if (browserKeeps(e)) return;
       e.preventDefault();
     }
-    // Already home. The About page has no movie in its path either, but
-    // it is not home, so it moves like a map does.
-    if (movieIdFromPath(location.pathname) === null && !isAboutPath(location.pathname)) {
+    // Already home. The About page and the Daily have no movie in their
+    // paths either, but neither is home, so each moves like a map does.
+    const p = location.pathname;
+    if (movieIdFromPath(p) === null && !isAboutPath(p) && !isDailyPath(p)) {
       follow();
       return;
     }
@@ -1714,9 +1799,11 @@ export function useFilmRoute(adopt: { current: (filters: MapFilters) => void }):
   return {
     movieId: route.movieId,
     about: route.about,
+    daily: route.daily,
     canGoBack: depth > 0,
     openMovie: go,
     openAbout,
+    openDaily,
     goBack: back,
     goHome: home,
   };
@@ -2188,6 +2275,7 @@ const HEADLINE_FACE = '400 46px "Young Serif"';
 function ColdStart({
   onPick,
   onAbout,
+  onDaily,
   theme,
   onTheme,
   markSlot,
@@ -2197,6 +2285,8 @@ function ColdStart({
   onPick: (id: string, title?: string) => void;
   /** The router's way to the About page, for its link in the footer. */
   onAbout: (e: MouseEvent<HTMLAnchorElement>) => void;
+  /** The router's way to the Daily, for the banner over the headline. */
+  onDaily: (e: MouseEvent<HTMLAnchorElement>) => void;
   theme: ThemePref;
   onTheme: (p: ThemePref) => void;
   /** The header's empty mark slot, which is where the loader is going. */
@@ -2219,6 +2309,12 @@ function ColdStart({
   const [textIn, setTextIn] = useState(false);
   const [box, setBox] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
   const drawn = useResolvedTheme();
+  // Today's Daily, for the banner over the headline. Its box is drawn
+  // from the first paint, so the grid is measured under it; it goes only
+  // when the server cannot offer today's puzzle.
+  const daily = useDailyBanner();
+  const bannerUp = daily.state !== 'gone';
+  const banner = useRef<HTMLAnchorElement>(null);
   // Where the grid actually starts. The row count needs it, and the
   // alternative is keeping a copy of the stylesheet's paddings in
   // JavaScript and remembering to change both.
@@ -2237,8 +2333,14 @@ function ColdStart({
     read();
     const ro = new ResizeObserver(read);
     ro.observe(document.documentElement);
+    // The window does not change size when the banner does: its
+    // question taking a second line on a phone, once the button says
+    // "Keep going", moves the grid down without moving anything this
+    // would otherwise hear. And the banner going is measured again here,
+    // with this run again for it.
+    if (banner.current) ro.observe(banner.current);
     return () => ro.disconnect();
-  }, []);
+  }, [bannerUp]);
 
   // The copy fades in from the moment the frames are on screen. Young
   // Serif is preloaded, so it is nearly always in hand by then; when it
@@ -2463,7 +2565,9 @@ function ColdStart({
       return;
     }
     setSpot(at);
-  }, [room, finish]);
+    // The banner going takes the grid up by its height, and the mark
+    // with it.
+  }, [room, finish, bannerUp]);
 
   // The veil is mounted down from the start but only raised at
   // VEIL_AT_MS, once a fast list has been ruled out: finish() clears
@@ -2515,6 +2619,9 @@ function ColdStart({
 
   return (
     <div className={`cd-cold${textIn ? ' cd-cold-in' : ''}${dim ? ' cd-cold-dim' : ''}`}>
+      {/* The Daily, first, so it is seen on arrival. It fades in with
+          the copy, on the same class: it is set in the same face. */}
+      <DailyBanner day={daily} onDaily={onDaily} boxRef={banner} />
       <strong className="cd-cold-head">Start with a movie you love</strong>
       <p className="cd-cold-sub">
         See every movie its cast and directors made, arranged by year and rating.

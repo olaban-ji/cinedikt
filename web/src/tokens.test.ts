@@ -147,9 +147,12 @@ describe('the theme tokens', () => {
     // header lying over the map pushes the pinned year labels; the
     // --trailer- ones are an open trailer player's measurements, which
     // trailer.ts works out; --syn-tr is the panel synopsis's transition,
-    // timed for whatever is changing it (synopsis.ts).
+    // timed for whatever is changing it (synopsis.ts); --tone-ink is what
+    // is written on a Daily leaderboard avatar's --tone (daily.ts's
+    // avatarColours).
     const inline = new Set([
       '--tone',
+      '--tone-ink',
       '--swatch-r',
       '--i',
       '--at',
@@ -203,6 +206,20 @@ describe('the stylesheet', () => {
         .b { color: color-mix(in oklch, var(--a) 50%, transparent); }
         @media (max-width: 1px) { .c { background: linear-gradient(oklch(0.4 0.1 20), red); } }`),
     ).toEqual(['.c background']);
+  });
+
+  it('invents no colour outside custom properties, as its header promises', () => {
+    // A shadow or fill written out in a rule drifts from the token it
+    // copies when that token is retuned, and the theme never reaches it.
+    // A mask's stops are not drawn — a mask reads only their alpha — so
+    // the chip row's #000 is not a colour.
+    const literal = /rgba?\(|hsla?\(|#[0-9a-f]{3,8}\b/i;
+    const invented = rules(css).flatMap((r) =>
+      r.decls
+        .filter(([k, v]) => !k.startsWith('--') && !/mask-image$/.test(k) && literal.test(v))
+        .map(([k]) => `${r.selector.replace(/\s+/g, ' ')} ${k}`),
+    );
+    expect(invented).toEqual([]);
   });
 
   it('draws in Figtree and Young Serif only', () => {
