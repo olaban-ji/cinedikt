@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from 'react';
-import { fetchDaily, type DailyToday } from './api';
-import { clockOffset, dailyDayText, fmtN, watchMidnight } from './daily';
+import { fetchDaily, fetchDailyWeek, type DailyToday, type DailyWeek } from './api';
+import { clockOffset, dailyDayText, fmtN, standingText, watchMidnight } from './daily';
 import { DAILY_PATH } from './movieParam';
 import { animate } from './motion';
 import { useReducedMotion } from './theme';
@@ -24,8 +24,12 @@ import { useReducedMotion } from './theme';
 
 /** What the banner needs of today's puzzle: which it is, how many have
  *  played it, the reader's own game, if they have one, and the server's
- *  clock and the reader's next midnight, to know when to ask again. */
-export type BannerToday = Pick<DailyToday, 'no' | 'date' | 'played' | 'game' | 'now' | 'next'>;
+ *  clock and the reader's next midnight, to know when to ask again. And
+ *  the reader's place this week, from `GET /api/daily/me`, when they have
+ *  one; absent or null, there is none to say. */
+export type BannerToday = Pick<DailyToday, 'no' | 'date' | 'played' | 'game' | 'now' | 'next'> & {
+  week?: DailyWeek | null;
+};
 
 /** Where the banner's answer has got to: on its way, with the box drawn
  *  and nothing in it yet; here; or not coming, and the banner gone. */
@@ -44,8 +48,9 @@ export interface BannerView {
   /** "Thursday 8 October", which follows the number where there is room
    *  for it. The stylesheet takes it off a phone, as it does the sub. */
   day: string;
-  /** The line beside the button: how many are playing, the points left,
-   *  or how today went. Empty when there is nothing worth saying. */
+  /** The line beside the button: the reader's place this week or how
+   *  many are playing, the points left, or how today went. Empty when
+   *  there is nothing worth saying. */
   sub: string;
   /** The button's word: Play, Keep going or Results. */
   go: string;
@@ -67,9 +72,14 @@ export function bannerView(today: BannerToday | null): BannerView {
       ? [g.won ? `${fmtN(g.pts)} points today` : 'Missed today', 'Results']
       : g?.phase === 'play'
         ? [`${fmtN(g.pts)} points left`, 'Keep going']
-        : // Nobody yet is not a crowd worth mentioning; "0 playing today"
-          // would say the game is empty, not that it is new.
-          [today.played > 0 ? `${fmtN(today.played)} playing today` : '', 'Play'];
+        : // Not started: the reader's own place this week, which is
+          // over the days before today, when they have one; otherwise the
+          // crowd. Nobody yet is not a crowd worth mentioning; "0 playing
+          // today" would say the game is empty, not that it is new.
+          [
+            standingText(today.week) || (today.played > 0 ? `${fmtN(today.played)} playing today` : ''),
+            'Play',
+          ];
   const no = `No. ${today.no}`;
   return {
     no,
@@ -102,6 +112,16 @@ export const BOB_KEYFRAMES: Keyframe[] = [
   { transform: 'translateY(0) rotate(-2deg)' },
   { transform: 'translateY(-5px) rotate(2deg)' },
 ];
+
+/** Today's puzzle and the reader's place this week, asked for together
+ *  and handed on as one, so the line beside the button is settled once,
+ *  rather than changing under the reader a moment after it is drawn. A
+ *  place that cannot be had is no place: only the puzzle failing takes
+ *  the banner away. Both go through the Daily's own helpers, so both
+ *  carry the reader's zone. */
+export function fetchBanner(signal: AbortSignal): Promise<BannerToday> {
+  return Promise.all([fetchDaily(signal), fetchDailyWeek(signal)]).then(([today, week]) => ({ ...today, week }));
+}
 
 /** Asks for today's puzzle for the banner and hands on what came of it:
  *  the puzzle, or the banner gone. Any failure, not-ready included, takes
@@ -151,13 +171,14 @@ export function followBanner(
   };
 }
 
-/** Today's puzzle, asked for as the opening screen comes up, on every
- *  visit to it: the answer changes as the reader plays, and the server's
- *  is the only game there is. `GET /api/daily` never writes, so asking
- *  costs nothing but the request. A screen still up at the reader's
- *  midnight asks again, keeping what it has until the answer comes. */
+/** Today's puzzle and the reader's place, asked for as the opening screen
+ *  comes up, on every visit to it: the answer changes as the reader
+ *  plays, and the server's is the only game there is. Neither request
+ *  writes, so asking costs nothing but the requests. A screen still up
+ *  at the reader's midnight asks again, keeping what it has until the
+ *  answer comes. */
 export function useDailyBanner(
-  fetcher: (signal: AbortSignal) => Promise<BannerToday> = fetchDaily,
+  fetcher: (signal: AbortSignal) => Promise<BannerToday> = fetchBanner,
 ): BannerState {
   const [day, setDay] = useState<BannerState>({ state: 'waiting' });
   // Followed from when the screen comes up until it goes.

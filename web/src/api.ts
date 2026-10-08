@@ -445,7 +445,9 @@ export type DailyEntry =
   | { type: 'flip'; card: string; cost: number; relative: { shared: number }; film?: undefined }
   | { type: 'person'; role: 'director' | 'actor'; cost: number; people: DailyPerson[] }
   | { type: 'genres'; cost: number; genres: string[] }
-  | { type: 'story'; cost: number; opening: string }
+  /** The answer's year, which the server sends with this entry and never
+   *  before it, or before the end. */
+  | { type: 'year'; cost: number; year: number }
   | {
       type: 'guess';
       cost: number;
@@ -542,7 +544,7 @@ export interface DailyToday {
 }
 
 /** The clues the panel sells. */
-export type DailyClue = 'director' | 'actor' | 'genres' | 'story';
+export type DailyClue = 'director' | 'actor' | 'genres' | 'year';
 
 /** What the reader can do to a game in progress. */
 export type DailyMove =
@@ -660,6 +662,45 @@ export function playDaily(
   signal?: AbortSignal,
 ): Promise<{ game: DailyGame; player: DailyPlayer }> {
   return dailyPost(`/daily/${no}/play`, { name }, signal);
+}
+
+/** The reader's place on this week's board, as the This week tab ranks
+ *  it: by points, then by time, among the same players. `players` is
+ *  the board's size, the reader counted. */
+export interface DailyWeek {
+  rank: number;
+  players: number;
+}
+
+/** The reader's standing, for the opening screens: the streak the title
+ *  screen shows, and their place this week, which is null with no
+ *  points this week to place (a Monday before playing, say) and for a
+ *  reader who has never played. */
+export interface DailyMe {
+  streak: number;
+  week: DailyWeek | null;
+}
+
+/** The reader's standing on their own puzzle's week. Before they have
+ *  finished today's game it is over the days before today, so not having
+ *  played yet never counts against them; once they have, today is in it.
+ *  It never writes, and the server keeps it for a minute, so both opening
+ *  screens can ask on every visit; a reader with no cookie is simply
+ *  nobody, `{ streak: 0, week: null }`. */
+export function fetchDailyMe(signal?: AbortSignal): Promise<DailyMe> {
+  return dailyGet<DailyMe>('/daily/me', signal);
+}
+
+/** The reader's place this week alone, for a screen that shows it beside
+ *  something else: null with no place to show, and null too when it
+ *  cannot be had. A place that fails is no place, so it never takes the
+ *  screen it sits on away, and never leaves an older one standing in its
+ *  stead: the banner and both of the title screen's asks go through it. */
+export function fetchDailyWeek(signal?: AbortSignal): Promise<DailyWeek | null> {
+  return fetchDailyMe(signal).then(
+    (me) => me.week,
+    () => null,
+  );
 }
 
 /** One move in a game in progress. `key` names this move for good, so

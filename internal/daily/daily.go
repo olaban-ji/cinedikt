@@ -24,14 +24,15 @@ import (
 const Start = 1000
 
 // What each clue costs. A director and an actor cost the same: either
-// is one person, and which one gives more away depends on the map.
-// Reading how the movie starts is dearest, because a first sentence
-// often all but names it.
+// is one person, and which one gives more away depends on the map. The
+// year is dearest: it marks the answer's row on the map, which with a
+// rating line or two from wrong guesses leaves a handful of cards'
+// worth of places for it to be.
 const (
 	DirectorCost = 150
 	ActorCost    = 150
 	GenresCost   = 80
-	StoryCost    = 300
+	YearCost     = 200
 )
 
 // The first wrong guess costs WrongCost, and each one after it

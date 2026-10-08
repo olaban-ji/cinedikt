@@ -7,9 +7,9 @@ import (
 
 // What the page is shown of a game. Everything here is drawn from a
 // replay, and a replay decides what may be seen: until a game ends
-// nothing below names the answer, and a card face down is only ever its
-// id, year and rating (Faces). The tests in view_test.go hold every
-// response to that.
+// nothing below names the answer, nor says its year until the year is
+// bought, and a card face down is only ever its id, year and rating
+// (Faces). The tests in view_test.go hold every response to that.
 
 // Record is a game as it is kept: when it started, when it ended, the
 // time zone it was started in, and its moves in order.
@@ -68,7 +68,7 @@ const (
 	EntryFlip   = "flip"
 	EntryPerson = "person"
 	EntryGenres = "genres"
-	EntryStory  = "story"
+	EntryYear   = "year"
 	EntryGuess  = "guess"
 	EntryWin    = "win"
 	EntryGaveUp = "gaveup"
@@ -92,13 +92,15 @@ type Entry struct {
 	Role   string
 	People []Person
 	Genres []string
-	// Opening is "How it starts".
-	Opening string
-	// Shared, Year and Rating are what a wrong guess said: who it shares
-	// with the answer, and where the answer sits from it.
-	Shared []Person
-	Year   string
-	Rating string
+	// Year is the year clue: the answer's year, which nothing else the
+	// page is sent says before the game ends. A card from the same year
+	// says its own year, as every card does, but nothing marks it out.
+	Year int
+	// Shared, YearHint and RatingHint are what a wrong guess said: who
+	// it shares with the answer, and where the answer sits from it.
+	Shared     []Person
+	YearHint   string
+	RatingHint string
 }
 
 // MarshalJSON writes an entry in its type's shape.
@@ -125,12 +127,12 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 			Cost   int      `json:"cost"`
 			Genres []string `json:"genres"`
 		}{e.Type, e.Cost, nonNilStrings(e.Genres)})
-	case EntryStory:
+	case EntryYear:
 		return json.Marshal(struct {
-			Type    string `json:"type"`
-			Cost    int    `json:"cost"`
-			Opening string `json:"opening"`
-		}{e.Type, e.Cost, e.Opening})
+			Type string `json:"type"`
+			Cost int    `json:"cost"`
+			Year int    `json:"year"`
+		}{e.Type, e.Cost, e.Year})
 	case EntryGuess:
 		return json.Marshal(struct {
 			Type   string   `json:"type"`
@@ -140,7 +142,7 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 			Shared []Person `json:"shared"`
 			Year   *string  `json:"year"`
 			Rating *string  `json:"rating"`
-		}{e.Type, e.Cost, e.Film, orNull(e.Card), nonNil(e.Shared), orNull(e.Year), orNull(e.Rating)})
+		}{e.Type, e.Cost, e.Film, orNull(e.Card), nonNil(e.Shared), orNull(e.YearHint), orNull(e.RatingHint)})
 	default:
 		return json.Marshal(struct {
 			Type string `json:"type"`
@@ -292,8 +294,8 @@ func (p *Puzzle) entries(s *State, st step, last bool, live Live) []Entry {
 		return []Entry{{Type: EntryPerson, Role: m.Kind, Cost: m.Cost, People: p.persons(st.people, live)}}
 	case KindGenres:
 		return []Entry{{Type: EntryGenres, Cost: m.Cost, Genres: p.Answer.Genres}}
-	case KindStory:
-		return []Entry{{Type: EntryStory, Cost: m.Cost, Opening: p.Opening}}
+	case KindYear:
+		return []Entry{{Type: EntryYear, Cost: m.Cost, Year: p.Answer.Year}}
 	case KindGuess:
 		if m.Arg == p.Answer.ID {
 			return []Entry{{Type: EntryWin}}
@@ -303,7 +305,7 @@ func (p *Puzzle) entries(s *State, st step, last bool, live Live) []Entry {
 		if g := m.Guess; g != nil {
 			f.Title, f.Year, f.Rating, f.MD = g.Title, g.Year, g.Rating, g.MD
 			e.Shared = p.persons(g.Shared, live)
-			e.Year, e.Rating = g.YearHint, g.RatingHint
+			e.YearHint, e.RatingHint = g.YearHint, g.RatingHint
 		}
 		f.Poster = live.Posters[m.Arg]
 		e.Film = &f

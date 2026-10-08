@@ -24,8 +24,6 @@ type Candidate struct {
 	Era    int
 	Genres []string
 	Votes  int
-	// Overview is OMDb's plot, whose first sentence is "How it starts".
-	Overview string
 }
 
 // Recent is what the days around a pick have already used.
@@ -123,13 +121,6 @@ func (u Unfit) Error() string { return "daily: " + string(u) }
 // own. The cards' ids are dealt after a shuffle seeded from the day, so
 // a card's number says nothing about how well known it is.
 func Build(no int, day time.Time, a Candidate, people []Slot, films []MapFilm) (*Puzzle, error) {
-	opening := Opening(a.Overview)
-	if opening == "" {
-		return nil, Unfit("its overview has no opening sentence")
-	}
-	if Mentions(opening, a.Title) {
-		return nil, Unfit("its opening sentence names it")
-	}
 	var directors, cast int
 	for _, s := range people {
 		if s.Role == RoleDirector {
@@ -180,12 +171,11 @@ func Build(no int, day time.Time, a Candidate, people []Slot, films []MapFilm) (
 			ID: a.ID, Title: a.Title, Year: a.Year, Rating: a.Rating, MD: a.MD,
 			Genres: nonNilStrings(slices.Clone(a.Genres)),
 		},
-		People:  people,
-		Cards:   cards,
-		Start:   start,
-		Opening: opening,
-		Era:     a.Era,
-		Genre:   genre,
+		People: people,
+		Cards:  cards,
+		Start:  start,
+		Era:    a.Era,
+		Genre:  genre,
 	}, nil
 }
 

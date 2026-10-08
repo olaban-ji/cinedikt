@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"cinedikt/internal/daily"
 )
@@ -623,5 +626,230 @@ func TestTodaysCountIsReadFromAnIndex(t *testing.T) {
 	}
 	if n == 0 {
 		t.Error("meta.daily_games has no index of every game that leads with no")
+	}
+}
+
+// TestTheYearIsKeptAsAMove: bought once for 200, on the row the boards
+// read, and replayed cold to its entry with the answer's year; "story"
+// is no move.
+func TestTheYearIsKeptAsAMove(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := todaysPuzzle(t, s)
+	player, err := s.CreateDailyPlayer(ctx, daily.TokenHash(daily.NewToken()), "Trinity Kimble", 205)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartDailyGame(ctx, player.ID, p.No, oct8, time.UTC); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: "the-story", Seq: 0, Kind: "story"}, oct8); !errors.Is(err, daily.ErrBad) {
+		t.Errorf("buying the story: %v, want bad", err)
+	}
+	rec, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: "the-year", Seq: 0, Kind: daily.KindYear}, oct8.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := rec.Moves[0]; m.Kind != daily.KindYear || m.Cost != daily.YearCost || m.Arg != "" {
+		t.Errorf("the year was recorded as %+v", m)
+	}
+	if _, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: "year-again", Seq: 1, Kind: daily.KindYear}, oct8.Add(2*time.Minute)); !errors.Is(err, daily.ErrKnown) {
+		t.Errorf("the year twice: %v, want known", err)
+	}
+	var pts int
+	if err := s.pool.QueryRow(ctx, `SELECT pts FROM meta.daily_games WHERE player = $1`, player.ID).Scan(&pts); err != nil {
+		t.Fatal(err)
+	}
+	if pts != daily.Start-200 {
+		t.Errorf("the row says %d points", pts)
+	}
+	cold, err := s.DailyGame(ctx, player.ID, p.No)
+	if err != nil {
+		t.Fatal(err)
+	}
+	game := daily.Render(p, cold, daily.Live{})
+	if last := game.Log[len(game.Log)-1]; last.Type != daily.EntryYear || last.Year != p.Answer.Year || last.Cost != 200 || game.Pts != 800 {
+		t.Errorf("read back, the year says %+v with %d points", last, game.Pts)
+	}
+}
+
+// dailyShape is what meta.sql must leave the daily tables as, read from
+// the catalog: whether the puzzles still have an opening column, and
+// what the moves' kind check says.
+func dailyShape(t *testing.T, s *Store) (opening bool, check string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		               WHERE table_schema = 'meta' AND table_name = 'daily_puzzles' AND column_name = 'opening')`).Scan(&opening); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		WHERE conrelid = 'meta.daily_moves'::regclass AND conname = 'daily_moves_kind_check'`).Scan(&check); err != nil {
+		t.Fatal(err)
+	}
+	return opening, check
+}
+
+// TestMetaBringsTheFirstDailyTablesToTheYear: applied twice to a
+// database with no daily tables, and twice to one whose tables were
+// made before the year replaced "How it starts", with the opening
+// column and a check that knows "story" and not "year", meta.sql leaves
+// both the same: no opening, and a check that takes a year and refuses
+// a story. A puzzle kept with an opening is still read.
+func TestMetaBringsTheFirstDailyTablesToTheYear(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	exec := func(stmts ...string) {
+		t.Helper()
+		for _, stmt := range stmts {
+			if _, err := s.pool.Exec(ctx, stmt); err != nil {
+				t.Fatalf("%v\n%s", err, stmt)
+			}
+		}
+	}
+	want := func(when string) {
+		t.Helper()
+		opening, check := dailyShape(t, s)
+		if opening || !strings.Contains(check, "'year'") || strings.Contains(check, "'story'") {
+			t.Errorf("%s: opening column %v, kind check %s", when, opening, check)
+		}
+	}
+
+	exec(`DROP TABLE meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`)
+	t.Cleanup(func() { resetDaily(t, s) })
+	exec(metaSQL, metaSQL)
+	want("on a fresh database")
+
+	exec(
+		`ALTER TABLE meta.daily_puzzles ADD COLUMN opening text NOT NULL`,
+		`ALTER TABLE meta.daily_moves DROP CONSTRAINT daily_moves_kind_check`,
+		`ALTER TABLE meta.daily_moves ADD CONSTRAINT daily_moves_kind_check
+		     CHECK (kind IN ('flip', 'director', 'actor', 'genres', 'story', 'guess', 'reveal'))`,
+		`INSERT INTO meta.daily_puzzles (no, day, answer, title, year, rating, md, people, genres, opening, cards, start, era, genre)
+		 VALUES (1, '2026-10-08', 'tt0133093', 'The Matrix', 1999, 8.7, 331, '[]', '{Action}', 'Neo is the one.', '[]', '{}', 1995, 'Action')`,
+	)
+	if opening, _ := dailyShape(t, s); !opening {
+		t.Fatal("the set-up did not put the opening column back")
+	}
+	exec(metaSQL, metaSQL)
+	want("over the first tables")
+	p, err := s.DailyPuzzleNo(ctx, 1)
+	if err != nil || p.Answer.Year != 1999 {
+		t.Errorf("the puzzle kept with an opening: %+v, %v", p, err)
+	}
+
+	player, err := s.CreateDailyPlayer(ctx, daily.TokenHash(daily.NewToken()), "Trinity Kimble", 205)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartDailyGame(ctx, player.ID, 1, oct8, time.UTC); err != nil {
+		t.Fatal(err)
+	}
+	move := `INSERT INTO meta.daily_moves (game, seq, key, kind, cost, at)
+	         SELECT id, $2, $3, $4, 200, now() FROM meta.daily_games WHERE player = $1`
+	if _, err := s.pool.Exec(ctx, move, player.ID, 1, "the-year", daily.KindYear); err != nil {
+		t.Errorf("a year move: %v", err)
+	}
+	var pgErr *pgconn.PgError
+	if _, err := s.pool.Exec(ctx, move, player.ID, 2, "the-story", "story"); !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Errorf("a story move: %v, want the check to refuse it", err)
+	}
+}
+
+// TestTheStandingIsYourPlaceOnTheWeeksBoard, the one the result's This
+// week tab shows, rank and size alike: before today's game over the days
+// before today, after it through today, ties falling as the tab breaks
+// them, a player not yet listed placed and counted on their own board
+// only, and nothing for a week with no points in it, a Monday before
+// playing among them.
+func TestTheStandingIsYourPlaceOnTheWeeksBoard(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	players := boardFixture(t, s)
+	thursday, err := s.DailyPuzzleNo(ctx, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monday, err := s.DailyPuzzleNo(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Zed's only game is today's, given up: on the week's board, with
+	// nothing.
+	zed, err := s.CreateDailyPlayer(ctx, daily.TokenHash(daily.NewToken()), "Zed Player", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	players["Zed"] = zed.ID
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO meta.daily_games (player, no, pts, moves, started_at, finished_at, gave_up, ms)
+		VALUES ($1, 4, 0, 1, now(), now(), true, 20000)`, zed.ID); err != nil {
+		t.Fatal(err)
+	}
+	standing := func(p *daily.Puzzle, name string, finished bool) *daily.Week {
+		t.Helper()
+		w, err := s.DailyStanding(ctx, p, players[name], finished)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	same := func(got, want *daily.Week) bool {
+		return (got == nil && want == nil) || (got != nil && want != nil && *got == *want)
+	}
+
+	// After today's game, through Thursday. Ava and Bo tie on 2,400 and
+	// Ava was faster; Gus scored nothing today and is last of the seven
+	// listed; New, on their first game, is placed eighth on a board of
+	// eight that only they see, as the tab places them.
+	for name, want := range map[string]*daily.Week{
+		"Ava": {Rank: 1, Players: 7},
+		"Bo":  {Rank: 2, Players: 7},
+		"Gus": {Rank: 7, Players: 7},
+		"New": {Rank: 8, Players: 8},
+		"Zed": nil,
+	} {
+		got := standing(thursday, name, true)
+		if !same(got, want) {
+			t.Errorf("%s after today's game: %+v, want %+v", name, got, want)
+		}
+		tab, err := s.DailyBoard(ctx, thursday, daily.TabWeek, players[name])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil && (tab.You == nil || tab.You.Rank != got.Rank || tab.Total != got.Players) {
+			t.Errorf("%s: the standing says %+v and the This week tab %+v of %d", name, got, tab.You, tab.Total)
+		}
+	}
+
+	// Before today's game, Monday to Wednesday: the seven who played
+	// them have 1,500 in three minutes each, a tie all the way down,
+	// which falls by who joined first, as the tab's does. Today's points
+	// count for nobody, Ava's 900 included, and nobody with nothing
+	// before today has a standing.
+	for name, want := range map[string]*daily.Week{
+		"Ava": {Rank: 1, Players: 7},
+		"Flo": {Rank: 6, Players: 7},
+		"Gus": {Rank: 7, Players: 7},
+		"New": nil,
+		"Zed": nil,
+	} {
+		if got := standing(thursday, name, false); !same(got, want) {
+			t.Errorf("%s before today's game: %+v, want %+v", name, got, want)
+		}
+	}
+
+	// A Monday before playing has no day to count; after Monday's game,
+	// everyone is listed, there being no earlier puzzle.
+	if got := standing(monday, "Ava", false); got != nil {
+		t.Errorf("Monday before playing: %+v", got)
+	}
+	if got := standing(monday, "Bo", true); !same(got, &daily.Week{Rank: 2, Players: 7}) {
+		t.Errorf("Bo after Monday's game: %+v", got)
+	}
+	if w, err := s.DailyStanding(ctx, thursday, 0, true); err != nil || w != nil {
+		t.Errorf("no player: %+v, %v", w, err)
 	}
 }

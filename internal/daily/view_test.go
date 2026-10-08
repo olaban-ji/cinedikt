@@ -2,7 +2,9 @@ package daily
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -52,14 +54,74 @@ func hidden(t *testing.T, p *Puzzle, s *State, body, when string) {
 	}
 }
 
+// yearSaid is everywhere body says year other than as a movie's own:
+// every number or string that is the year, by its path, unless it is
+// the "year" of an object with an "id", which is a card or a movie
+// saying its own year, as every card does and every guess may. The year
+// clue's entry has no id.
+func yearSaid(t *testing.T, body string, year int) []string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal([]byte(body), &v); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			_, movie := x["id"]
+			for k, e := range x {
+				if !movie || k != "year" {
+					walk(path+"."+k, e)
+				}
+			}
+		case []any:
+			for i, e := range x {
+				walk(fmt.Sprintf("%s[%d]", path, i), e)
+			}
+		case float64:
+			if x == float64(year) {
+				out = append(out, path)
+			}
+		case string:
+			if x == strconv.Itoa(year) {
+				out = append(out, path)
+			}
+		}
+	}
+	walk("", v)
+	slices.Sort(out)
+	return out
+}
+
+// yearHidden fails the test when a game says the answer's year anywhere
+// but the year clue's entry, or says it there before the clue is bought.
+func yearHidden(t *testing.T, p *Puzzle, game Game, when string) {
+	t.Helper()
+	var want []string
+	for i, e := range game.Log {
+		if e.Type == EntryYear {
+			want = append(want, fmt.Sprintf(".log[%d].year", i))
+		}
+	}
+	if got := yearSaid(t, rendered(t, game), p.Answer.Year); !slices.Equal(got, want) {
+		t.Errorf("%s: the answer's year is said at %v, want %v", when, got, want)
+	}
+}
+
 // TestNothingBeforeTheEndNamesTheAnswerOrAFaceDownCard is the fairness
 // rule: at load, and after every kind of move short of the end, nothing
-// the page is sent names the answer or a card it has not turned over.
-// Only the starting cards are sent in full at load.
+// the page is sent names the answer or a card it has not turned over,
+// and nothing says the answer's year but the year clue once it is
+// bought. Only the starting cards are sent in full at load.
 func TestNothingBeforeTheEndNamesTheAnswerOrAFaceDownCard(t *testing.T) {
 	p := matrix()
 	load := rendered(t, map[string]any{"cards": p.Faces(), "start": p.Opened(live), "clues": p.Clues()})
 	hidden(t, p, nil, load, "at load")
+	if got := yearSaid(t, load, p.Answer.Year); got != nil {
+		t.Errorf("at load the answer's year is said at %v", got)
+	}
 	for _, id := range []string{"tt0067433", "tt0108065", "tt0109190"} {
 		if !strings.Contains(load, `"`+id+`"`) {
 			t.Errorf("starting card %s is not sent in full at load", id)
@@ -67,20 +129,25 @@ func TestNothingBeforeTheEndNamesTheAnswerOrAFaceDownCard(t *testing.T) {
 	}
 
 	// Two games between them make every kind of move, each kept short
-	// of spending its last point.
+	// of spending its last point. The second guesses a movie from the
+	// answer's year, which says its own year and "same", as a guess
+	// earns, before it buys the year.
 	for _, moves := range [][]struct{ kind, arg string }{
 		{{KindFlip, "c7"}, {KindDirector, ""}, {KindActor, ""}, {KindGenres, ""},
 			{KindGuess, "tt0111257"}, {KindGuess, "tt0034583"}, {KindFlip, "c1"}},
-		{{KindStory, ""}, {KindGuess, "tt9000002"}, {KindActor, ""}, {KindGuess, "tt0209144"}},
+		{{KindGuess, "tt9000001"}, {KindGuess, "tt9000002"}, {KindActor, ""}, {KindYear, ""}, {KindGuess, "tt0209144"}},
 	} {
 		g := play(t, p)
 		hidden(t, p, g.state(), rendered(t, Render(p, g.record(), live)), "after Play")
+		yearHidden(t, p, Render(p, g.record(), live), "after Play")
 		for _, m := range moves {
 			s := g.do(m.kind, m.arg)
 			if s.Done {
 				t.Fatalf("%s %s ended the game; the test means to stop short of the end", m.kind, m.arg)
 			}
-			hidden(t, p, s, rendered(t, Render(p, g.record(), live)), "after "+m.kind+" "+m.arg)
+			game := Render(p, g.record(), live)
+			hidden(t, p, s, rendered(t, game), "after "+m.kind+" "+m.arg)
+			yearHidden(t, p, game, "after "+m.kind+" "+m.arg)
 		}
 	}
 
@@ -103,7 +170,7 @@ func TestTheLogHasAnEntryPerMove(t *testing.T) {
 	g := play(t, p)
 	g.do(KindFlip, "c5")
 	g.do(KindDirector, "")
-	g.do(KindStory, "")
+	g.do(KindYear, "")
 	g.do(KindActor, "")
 	g.do(KindActor, "")
 	g.do(KindGenres, "")
@@ -115,7 +182,7 @@ func TestTheLogHasAnEntryPerMove(t *testing.T) {
 	for _, e := range game.Log {
 		types = append(types, e.Type)
 	}
-	want := []string{"start", "flip", "person", "story", "person", "person", "genres", "guess", "guess", "out"}
+	want := []string{"start", "flip", "person", "year", "person", "person", "genres", "guess", "guess", "out"}
 	if !slices.Equal(types, want) {
 		t.Errorf("log = %v, want %v", types, want)
 	}
@@ -143,8 +210,8 @@ func TestTheLogHasAnEntryPerMove(t *testing.T) {
 		!slices.Equal(anyStrings(lana["cards"]), []string{"c1", "c6", "c9"}) {
 		t.Errorf("Lana = %v", lana)
 	}
-	if story := log[3]; story["opening"] != p.Opening || story["cost"] != 300.0 {
-		t.Errorf("story = %v", story)
+	if year := rendered(t, game.Log[3]); year != `{"type":"year","cost":200,"year":1999}` {
+		t.Errorf("year = %s", year)
 	}
 	if genres := log[6]; !slices.Equal(anyStrings(genres["genres"]), []string{"Action", "Sci-Fi"}) {
 		t.Errorf("genres = %v", genres)

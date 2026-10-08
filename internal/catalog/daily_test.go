@@ -41,11 +41,13 @@ const dailyCandidates = DailyBehind + 1 + DailyAhead
 // dailyFixture adds to the published fixture what a day's puzzle needs,
 // straight into the live tables: ten candidates in the first-run pool,
 // one in each of the opening screen pool's eight eras and a second in
-// two of them, each with an OMDb overview and a poster, all five people
-// on every one of them; sixty more movies each through one of those
-// people, rated and voted from the fewest up, so every candidate's map
-// holds 69 rated cards (the other nine candidates as close relatives);
-// and one unrated movie that must stay off every board.
+// two of them, each with a poster, all five people on every one of
+// them, and half with only TMDb's overview and half with no synopsis at
+// all, since an answer needs none; sixty more movies each through one
+// of those people, rated and voted from the fewest up, so every
+// candidate's map holds 69 rated cards (the other nine candidates as
+// close relatives); and one unrated movie that must stay off every
+// board.
 func dailyFixture(t *testing.T, s *Store) {
 	t.Helper()
 	ctx := context.Background()
@@ -82,10 +84,10 @@ func dailyFixture(t *testing.T, s *Store) {
 		`INSERT INTO ` + Live + `.principals (tconst, ordering, nconst, category, character)
 		 SELECT 'tt99001' || lpad(g::text, 2, '0'), a, 'nm990000' || (a + 1), 'actor', 'Hero ' || a
 		 FROM generate_series(1, 10) g, generate_series(1, 4) a`,
-		`INSERT INTO meta.synopses (tconst, overview, source, fetched_at, omdb_at)
+		`INSERT INTO meta.synopses (tconst, overview, source, fetched_at)
 		 SELECT 'tt99001' || lpad(g::text, 2, '0'),
-		        'A stranger arrives in town number ' || g || '. Nothing is the same after.', 'omdb', now(), now()
-		 FROM generate_series(1, 10) g`,
+		        'A stranger arrives in town number ' || g || '. Nothing is the same after.', 'tmdb', now()
+		 FROM generate_series(1, 10) g WHERE g % 2 = 0`,
 		`INSERT INTO meta.posters (tconst, poster_url, status, fetched_at)
 		 SELECT 'tt99001' || lpad(g::text, 2, '0'), 'https://img.example/' || g || '.jpg', 'ok', now()
 		 FROM generate_series(1, 10) g`,
@@ -122,7 +124,9 @@ func dailyJob(s *Store, now *time.Time) *DailyJob {
 // TestTheDailyJobKeepsYesterdayToEightDaysAheadPicked, once: a pass
 // picks every day from UTC yesterday, which readers west of UTC are
 // still on, to eight days past UTC today, numbered from the first, each
-// a different answer, and the next pass changes nothing.
+// a different answer, and the next pass changes nothing. Every one of
+// the ten candidates is an answer, though none has an overview from
+// OMDb and half have none at all.
 func TestTheDailyJobKeepsYesterdayToEightDaysAheadPicked(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -221,9 +225,8 @@ func TestTheJobNeverPicksADayBeforeTheFirst(t *testing.T) {
 
 // TestADailyPuzzleIsTheMapWithTheAnswerHidden: the board is the
 // answer's map, rated movies only, the answer off it; the people are in
-// slot order with the director first; the starting cards are the least
-// known through three different people; and the opening is the
-// overview's first sentence.
+// slot order with the director first; and the starting cards are the
+// least known through three different people.
 func TestADailyPuzzleIsTheMapWithTheAnswerHidden(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -243,9 +246,6 @@ func TestADailyPuzzleIsTheMapWithTheAnswerHidden(t *testing.T) {
 	}
 	if p.Genre != p.Answer.Genres[0] {
 		t.Errorf("genre = %q, want the first of %v", p.Genre, p.Answer.Genres)
-	}
-	if !strings.HasPrefix(p.Opening, "A stranger arrives in town number ") || strings.Contains(p.Opening, "Nothing") {
-		t.Errorf("opening = %q", p.Opening)
 	}
 	var ids []string
 	for _, sl := range p.People {

@@ -12,10 +12,12 @@ import {
   SHINE_MS,
   askForBanner,
   bannerView,
+  fetchBanner,
   followBanner,
   type BannerState,
   type BannerToday,
 } from './DailyBanner';
+import css from './grid.css?raw';
 
 /** A game as far as the banner reads one: its phase, points and outcome.
  *  The rest is the shape the server sends, filled with nothing. */
@@ -113,6 +115,90 @@ describe('what the banner says', () => {
       expect(JSON.stringify(bannerView(today(g)))).not.toMatch(/film/i);
     }
     expect(JSON.stringify(bannerView(null))).not.toMatch(/film/i);
+  });
+});
+
+describe('the banner’s line with a place this week', () => {
+  const week = { rank: 1204, players: 83500 };
+  const ranked = (game: DailyGame | null) => ({ ...today(game), week });
+
+  it('says the reader’s place in place of the crowd, before they have started today', () => {
+    expect(bannerView(ranked(null))).toMatchObject({
+      sub: '1,204th this week',
+      go: 'Play',
+      label: 'Cinedikt Daily, No. 142: Whose map is it? 1,204th this week. Play',
+    });
+    // Even on a day nobody has played yet.
+    expect(bannerView({ ...ranked(null), played: 0 }).sub).toBe('1,204th this week');
+  });
+
+  it('says the crowd as before with no place to say', () => {
+    expect(bannerView({ ...today(null), week: null }).sub).toBe('61,240 playing today');
+    expect(bannerView(today(null)).sub).toBe('61,240 playing today');
+  });
+
+  it('keeps to the points while the game is on, and to how it went once it is over', () => {
+    expect(bannerView(ranked(playing)).sub).toBe('640 points left');
+    expect(bannerView(ranked(won)).sub).toBe('640 points today');
+    expect(bannerView(ranked(missed)).sub).toBe('Missed today');
+  });
+
+  it('draws the line and no leaderboard', () => {
+    const html = render({ state: 'ready', today: ranked(null) });
+    expect(html).toContain('<span class="cd-daily-banner-sub">1,204th this week</span>');
+    expect(html).not.toContain('cd-daily-row');
+  });
+
+  it('is hidden on a phone, whatever it says', () => {
+    // The phone's block: "(max-width: 639.98px)" alone, as the screen
+    // classes write it.
+    const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const blocks = [...text.matchAll(/@media \(max-width: 639\.98px\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]);
+    const hides = blocks.some((b) =>
+      [...b.matchAll(/([^{}]+)\{([^{}]*)\}/g)].some(
+        (r) => r[1].split(',').map((x) => x.trim()).includes('.cd-daily-banner-sub') && /display:\s*none/.test(r[2]),
+      ),
+    );
+    expect(hides).toBe(true);
+  });
+});
+
+describe('asking for the banner', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** A fetch that answers today's puzzle and the reader's standing by
+   *  address, and remembers what it was asked. */
+  function stub(me: { status: number; body?: unknown }) {
+    const fetch = vi.fn(async (url: string) => {
+      const a = url.startsWith('/api/daily/me') ? me : { status: 200, body: today(null) };
+      return {
+        ok: a.status >= 200 && a.status < 300,
+        status: a.status,
+        statusText: '',
+        json: async () => a.body,
+      };
+    });
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  }
+
+  it('asks for today’s puzzle and the reader’s standing together, and hands on both as one', async () => {
+    const fetch = stub({ status: 200, body: { streak: 3, week: { rank: 1204, players: 83500 } } });
+    const got = await fetchBanner(new AbortController().signal);
+    expect(got).toEqual({ ...today(null), week: { rank: 1204, players: 83500 } });
+    const asked = fetch.mock.calls.map(([url]) => new URL(url, 'https://cinedikt.test').pathname).sort();
+    expect(asked).toEqual(['/api/daily', '/api/daily/me']);
+  });
+
+  it('takes a standing that fails, or that has no week, as no place', async () => {
+    stub({ status: 500 });
+    expect((await fetchBanner(new AbortController().signal)).week).toBeNull();
+    stub({ status: 200, body: { streak: 0, week: null } });
+    const got = await fetchBanner(new AbortController().signal);
+    expect(got.week).toBeNull();
+    expect(bannerView(got).sub).toBe('61,240 playing today');
   });
 });
 

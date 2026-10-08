@@ -73,11 +73,12 @@ func TestACardIsTurnedOverOnceAndOnlyWhenPaidFor(t *testing.T) {
 	}
 
 	poor := play(t, matrix())
-	poor.do(KindStory, "")
+	poor.do(KindYear, "")
 	poor.do(KindDirector, "")
 	poor.do(KindActor, "")
 	poor.do(KindActor, "")
 	poor.do(KindActor, "")
+	poor.do(KindGuess, "tt0034583")
 	if s := poor.state(); s.Pts != 100 {
 		t.Fatalf("set-up spent to %d, want 100", s.Pts)
 	}
@@ -122,20 +123,85 @@ func TestAnActorIsTheNextInBillingNobodyKnows(t *testing.T) {
 	}
 }
 
-func TestGenresAndTheOpeningAreBoughtOnce(t *testing.T) {
+// TestGenresAndTheYearAreBoughtOnce, the year for 200 points, and
+// "story", the clue the year replaced, is no move at all.
+func TestGenresAndTheYearAreBoughtOnce(t *testing.T) {
 	g := play(t, matrix())
 	s := g.do(KindGenres, "")
-	s = g.do(KindStory, "")
-	if !s.Genres || !s.Story || s.Pts != Start-GenresCost-StoryCost {
+	s = g.do(KindYear, "")
+	if !s.Genres || !s.Year || s.Pts != Start-80-200 {
 		t.Errorf("state = %+v", s)
 	}
-	for _, kind := range []string{KindGenres, KindStory} {
+	if m := g.moves[1]; m.Kind != KindYear || m.Cost != 200 || m.Arg != "" {
+		t.Errorf("the year was recorded as %+v", m)
+	}
+	for _, kind := range []string{KindGenres, KindYear} {
 		if err := g.try(kind, ""); !errors.Is(err, ErrKnown) {
 			t.Errorf("%s again: %v, want known", kind, err)
 		}
 	}
-	if err := g.try("trailer", ""); !errors.Is(err, ErrBad) {
-		t.Errorf("an unknown kind: %v, want bad", err)
+	for _, kind := range []string{"trailer", "story"} {
+		if err := g.try(kind, ""); !errors.Is(err, ErrBad) {
+			t.Errorf("%s: %v, want bad", kind, err)
+		}
+	}
+}
+
+// TestTheYearNeedsTwoHundredPoints: with exactly 200 left it is bought
+// and spends the last of them; with 170 it is refused, and nothing
+// changes.
+func TestTheYearNeedsTwoHundredPoints(t *testing.T) {
+	g := play(t, matrix())
+	g.do(KindDirector, "")
+	for range 3 {
+		g.do(KindActor, "")
+	}
+	for _, card := range []string{"c8", "c7", "c5"} {
+		g.do(KindFlip, card)
+	}
+	if s := g.state(); s.Pts != 200 {
+		t.Fatalf("set-up spent to %d, want 200", s.Pts)
+	}
+	if s := g.do(KindYear, ""); !s.Year || s.Pts != 0 || s.Done {
+		t.Errorf("the year with 200 left: %+v", s)
+	}
+
+	poor := play(t, matrix())
+	poor.do(KindDirector, "")
+	for range 4 {
+		poor.do(KindActor, "")
+	}
+	poor.do(KindGenres, "")
+	if err := poor.try(KindYear, ""); !errors.Is(err, ErrPoints) {
+		t.Errorf("the year with 170 left: %v, want points", err)
+	}
+	if s := poor.state(); s.Year || s.Pts != 170 || len(poor.moves) != 6 {
+		t.Errorf("after the refusal: %+v, %d moves", s, len(poor.moves))
+	}
+}
+
+// TestAKindTheEngineDoesNotKnowIsTakenAsNothing: a game holding a move
+// of a kind that is no longer one, as "story" no longer is, replays as
+// though the move cost nothing and showed nothing, with no line in the
+// log, and its seq still counts it, so the game can go on. No game was
+// ever kept with one; this is the clean refusal, not a reader of old
+// games.
+func TestAKindTheEngineDoesNotKnowIsTakenAsNothing(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	g.do(KindGenres, "")
+	g.moves = append(g.moves, Move{Seq: 2, Key: "key-story", Kind: "story", Cost: 300})
+	s := g.do(KindFlip, "c9")
+	if s.Pts != Start-80-60 || s.Done || s.Year {
+		t.Errorf("replayed: %+v", s)
+	}
+	game := Render(p, g.record(), live)
+	var types []string
+	for _, e := range game.Log {
+		types = append(types, e.Type)
+	}
+	if !slices.Equal(types, []string{"start", "genres", "flip"}) || game.Seq != 3 || game.Pts != Start-80-60 {
+		t.Errorf("log %v, seq %d, %d points", types, game.Seq, game.Pts)
 	}
 }
 
@@ -172,18 +238,17 @@ func TestAWrongGuessFindsItsPeopleAndTurnsItsCardUp(t *testing.T) {
 // takes the game to nothing and ends it.
 func TestAWrongGuessIsNeverRefusedForPoints(t *testing.T) {
 	g := play(t, matrix())
-	g.do(KindStory, "")
+	g.do(KindYear, "")
 	g.do(KindDirector, "")
-	g.do(KindActor, "")
-	g.do(KindActor, "")
-	g.do(KindActor, "")
-	g.do(KindGenres, "")
-	if s := g.state(); s.Pts != 20 {
-		t.Fatalf("set-up spent to %d, want 20", s.Pts)
+	for range 4 {
+		g.do(KindActor, "")
+	}
+	if s := g.state(); s.Pts != 50 {
+		t.Fatalf("set-up spent to %d, want 50", s.Pts)
 	}
 	s := g.do(KindGuess, "tt0034583")
 	if !s.Done || !s.Out || s.Won || s.Pts != 0 {
-		t.Errorf("after a 100-point guess with 20 left: %+v", s)
+		t.Errorf("after a 100-point guess with 50 left: %+v", s)
 	}
 	if err := g.try(KindGuess, "tt0133093"); !errors.Is(err, ErrDone) {
 		t.Errorf("a guess after the end: %v, want done", err)

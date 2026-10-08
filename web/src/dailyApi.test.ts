@@ -103,6 +103,38 @@ describe('the Daily’s requests', () => {
     ]);
   });
 
+  it('ask for the reader’s standing without writing anything', async () => {
+    const fetch = stubFetch([{ status: 200, body: { streak: 3, week: { rank: 1204, players: 83500 } } }]);
+    const { fetchDailyMe } = await load();
+    await expect(fetchDailyMe()).resolves.toEqual({ streak: 3, week: { rank: 1204, players: 83500 } });
+    expect(fetch.mock.calls[0][0]).toBe(`/api/daily/me?${NY}`);
+    expect(fetch.mock.calls[0][1]?.method).toBeUndefined();
+  });
+
+  it('ask for the reader’s place alone, in their zone, and take one that cannot be had as none', async () => {
+    const fetch = stubFetch([
+      { status: 200, body: { streak: 3, week: { rank: 1204, players: 83500 } } },
+      { status: 200, body: { streak: 0, week: null } },
+      { status: 503, body: { error: 'down', reason: 'unavailable' } },
+    ]);
+    const { fetchDailyWeek } = await load();
+    await expect(fetchDailyWeek()).resolves.toEqual({ rank: 1204, players: 83500 });
+    await expect(fetchDailyWeek()).resolves.toBeNull();
+    await expect(fetchDailyWeek()).resolves.toBeNull();
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(Array(3).fill(`/api/daily/me?${NY}`));
+    // Nor does a request that never got an answer take anything away.
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
+    await expect(fetchDailyWeek()).resolves.toBeNull();
+  });
+
+  it('buy the year as the clue "year"', async () => {
+    const fetch = stubFetch([{ status: 200, body: { game: 1 } }]);
+    const { sendDailyMove } = await load();
+    await sendDailyMove(142, { kind: 'buy', clue: 'year' }, 'k-1', 2);
+    expect(fetch.mock.calls[0][0]).toBe(`/api/daily/142/buy?${NY}`);
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ key: 'k-1', seq: 2, kind: 'year' });
+  });
+
   it('ask for a leaderboard by puzzle and tab', async () => {
     const fetch = stubFetch([{ status: 200, body: { tab: 'week' } }]);
     const { fetchDailyBoard } = await load();
@@ -119,13 +151,14 @@ describe('the reader’s time zone', () => {
 
   /** Every Daily request there is, once each, and the addresses asked. */
   async function everyRequest(): Promise<string[]> {
-    const fetch = stubFetch(Array.from({ length: 8 }, () => ({ status: 200, body: {} })));
+    const fetch = stubFetch(Array.from({ length: 9 }, () => ({ status: 200, body: {} })));
     const api = await load();
     await api.fetchDaily();
+    await api.fetchDailyMe();
     await api.renameDaily('Trinity Kimble');
     await api.playDaily(142, 'Trinity Kimble');
     await api.sendDailyMove(142, { kind: 'flip', card: 'c1' }, 'k-1', 1);
-    await api.sendDailyMove(142, { kind: 'buy', clue: 'genres' }, 'k-2', 2);
+    await api.sendDailyMove(142, { kind: 'buy', clue: 'year' }, 'k-2', 2);
     await api.sendDailyMove(142, { kind: 'guess', film: 'tt0133093' }, 'k-3', 3);
     await api.sendDailyMove(142, { kind: 'reveal' }, 'k-4', 4);
     await api.fetchDailyBoard(142, 'today');
@@ -135,12 +168,12 @@ describe('the reader’s time zone', () => {
   it('goes with every Daily request, reads and writes alike, so the server knows the reader’s date', async () => {
     stubZone('Asia/Tokyo');
     const urls = await everyRequest();
-    expect(urls).toHaveLength(8);
+    expect(urls).toHaveLength(9);
     for (const url of urls) {
       expect(new URL(url, 'https://cinedikt.test').searchParams.get('tz')).toBe('Asia/Tokyo');
     }
     // The board keeps its tab: the zone is added to what is there.
-    expect(urls[7]).toBe('/api/daily/142/board?tab=today&tz=Asia%2FTokyo');
+    expect(urls[8]).toBe('/api/daily/142/board?tab=today&tz=Asia%2FTokyo');
   });
 
   it('is written so the address carries it whole', async () => {
@@ -161,6 +194,7 @@ describe('the reader’s time zone', () => {
       const urls = await everyRequest();
       expect(urls).toEqual([
         '/api/daily',
+        '/api/daily/me',
         '/api/daily/name',
         '/api/daily/142/play',
         '/api/daily/142/flip',

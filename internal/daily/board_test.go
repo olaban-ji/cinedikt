@@ -130,6 +130,54 @@ func TestTheStreakIsConsecutivePuzzlesThatScored(t *testing.T) {
 	}
 }
 
+// TestTheTitleScreenShowsTodaysRunOnceTodayIsFinished, and until then
+// the run today can still extend; finished with nothing, the run is
+// over.
+func TestTheTitleScreenShowsTodaysRunOnceTodayIsFinished(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		streak   Streak
+		finished bool
+		want     int
+	}{
+		{"finished and scored", Streak{Now: 4}, true, 4},
+		{"not finished yet", Streak{Before: 3}, false, 3},
+		{"finished with nothing", Streak{Before: 3}, true, 0},
+		{"no run at all", Streak{}, false, 0},
+	} {
+		if got := c.streak.Shown(c.finished); got != c.want {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestTheStandingCountsTheDaysBeforeTodayUntilTodayIsFinished: on
+// Thursday 8 October, Monday to Wednesday before the game and Monday to
+// Thursday after it; on the Monday, no day at all before the game; and
+// on the Sunday after it, the whole week. A moment in the day is its
+// day.
+func TestTheStandingCountsTheDaysBeforeTodayUntilTodayIsFinished(t *testing.T) {
+	for _, c := range []struct {
+		day           time.Time
+		finished      bool
+		from, through string
+		days          int
+	}{
+		{time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC), false, "2026-10-05", "2026-10-07", 3},
+		{time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC), true, "2026-10-05", "2026-10-08", 4},
+		{time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), false, "2026-10-05", "2026-10-04", 0},
+		{time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), true, "2026-10-05", "2026-10-05", 1},
+		{time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC), true, "2026-10-05", "2026-10-11", 7},
+		{time.Date(2026, 10, 8, 23, 30, 0, 0, time.UTC), false, "2026-10-05", "2026-10-07", 3},
+	} {
+		from, through := StandingDays(c.day, c.finished)
+		if DayString(from) != c.from || DayString(through) != c.through || daysBetween(from, through)+1 != c.days {
+			t.Errorf("StandingDays(%s, finished %v) = %s to %s, want %s to %s, %d days",
+				c.day.Format(time.RFC3339), c.finished, DayString(from), DayString(through), c.from, c.through, c.days)
+		}
+	}
+}
+
 // TestTheDayIsTheReadersOwnDate: at 23:30 UTC on 8 October, Tokyo and
 // Kiritimati are already on the 9th, while Los Angeles and UTC are
 // still on the 8th. Today is UTC's date, wherever the moment was

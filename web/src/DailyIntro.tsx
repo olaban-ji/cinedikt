@@ -31,6 +31,9 @@ interface IntroProps {
   spinning: boolean;
   /** The streak to show in the pill; none at zero. */
   streak: number;
+  /** The reader's place this week, "1,204th this week" (standingText),
+   *  or empty for none. Shown on every visit, the rules included. */
+  rank: string;
   /** Opened from "How it works", over a game already begun. */
   rules: boolean;
   /** Play has been pressed and the server has not answered yet. */
@@ -49,7 +52,7 @@ const COSTS: { label: string; tag: string; down?: boolean }[] = [
   { label: 'See a director', tag: String(CLUE_COST.director) },
   { label: 'See an actor', tag: String(CLUE_COST.actor) },
   { label: 'See its genres', tag: String(CLUE_COST.genres) },
-  { label: 'Read how it starts', tag: String(CLUE_COST.story) },
+  { label: 'See its year', tag: String(CLUE_COST.year) },
   { label: 'A wrong guess', tag: `${WRONG_BASE}+`, down: true },
 ];
 
@@ -107,6 +110,7 @@ export function DailyIntro({
   name,
   spinning,
   streak,
+  rank,
   rules,
   busy,
   dialogRef,
@@ -193,6 +197,25 @@ export function DailyIntro({
                 <path d="M12.5 2.5c.6 3.3-1.4 5-2.8 7.1C8.6 11.3 7.5 13 7.5 15.3c0 3.1 2.2 5.7 5 5.7s4.9-2.4 4.9-5.4c0-2-.9-3.6-1.9-4.9-.1 1.3-.6 2.3-1.5 2.9.4-3.4-.9-7.4-1.5-11.1z" />
               </svg>
               {streak}-day streak
+            </span>
+          )}
+          {/* The streak pill's box, with a podium for the flame. */}
+          {rank && (
+            <span className="cd-daily-streak cd-daily-standing">
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 21h18M4.5 21v-6h5v6M9.5 21V8h5v13M14.5 21v-4h5v4" />
+              </svg>
+              {rank}
             </span>
           )}
         </div>

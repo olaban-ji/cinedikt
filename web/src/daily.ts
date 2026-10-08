@@ -26,10 +26,13 @@ import type {
   DailyPerson,
   DailyTab,
   DailyToday,
+  DailyWeek,
 } from './api';
 import {
   AXIS_H,
   DEFAULT_SETTINGS,
+  R_LO,
+  layoutGrid,
   ratingText,
   xOf,
   type GridLayout,
@@ -49,12 +52,20 @@ import type { Theme } from './theme';
 export const DAILY_START = 1000;
 
 /** What each clue costs. The server charges; these are what the buttons
- *  and the rules say. */
+ *  and the rules say.
+ *
+ *  The rule for any clue added here, as for the server's: none may give
+ *  the answer away in a single search. So no plot, no tagline, no quote
+ *  and no character's name: any line of text can be pasted into a
+ *  search engine, and The Matrix's first sentence alone names Neo and
+ *  Morpheus, so there is no text clue at all. A director or an actor
+ *  can be searched through a filmography, which takes several steps and
+ *  costs 150 each; the year narrows the map and names nothing. */
 export const CLUE_COST: Record<DailyClue, number> = {
   director: 150,
   actor: 150,
   genres: 80,
-  story: 300,
+  year: 200,
 };
 
 /** The first wrong guess, and how much more each one after it costs, so
@@ -170,10 +181,18 @@ export function guessedIds(game: DailyGame | null): Set<string> {
   return out;
 }
 
-/** Whether a clue of this kind has been bought: genres and the opening
- *  line are bought once. */
-export function bought(game: DailyGame | null, kind: 'genres' | 'story'): boolean {
+/** Whether a clue of this kind has been bought: genres and the year are
+ *  bought once. */
+export function bought(game: DailyGame | null, kind: 'genres' | 'year'): boolean {
   return !!game?.log.some((e) => e.type === kind);
+}
+
+/** The answer's year, once the Year clue has been bought, or null. The
+ *  server sends it with that entry and never before, so this is the
+ *  only place the page learns it while the game is on. */
+export function yearOf(game: DailyGame | null): number | null {
+  for (const e of game?.log ?? []) if (e.type === 'year') return e.year;
+  return null;
 }
 
 /** The card most worth putting in front of a reader coming back to a
@@ -190,12 +209,19 @@ export function resumeCards(today: DailyToday, game: DailyGame): string[] {
 
 /** The board's settings. Unrated movies never reach the board, so there
  *  is no unrated column to keep a place for; and the answer's year is not
- *  lit, because lighting it would say what it is. */
+ *  lit, because lighting it would say what it is — until the reader has
+ *  paid to be told (boardPayload). */
 export const DAILY_SETTINGS: GridSettings = {
   ...DEFAULT_SETTINGS,
   showUnrated: false,
   highlightYear: false,
 };
+
+/** The id of the year row's placeholder: what holds the row open for
+ *  the answer's year once Year is bought, when no card on the map is
+ *  from it. Never a card's: the server's card ids are its own short
+ *  opaque strings. */
+export const YEAR_PLACEHOLDER = '__year';
 
 /** What the board is laid out from, for grid.ts's layoutGrid.
  *
@@ -204,7 +230,18 @@ export const DAILY_SETTINGS: GridSettings = {
  *  from year 0: no row is lit, no row is kept for it, and nothing the
  *  layout reads from it says anything. Once the game is over the real
  *  answer takes its place, joins the cards in its own year, and its row
- *  is lit as a searched film's is. */
+ *  is lit as a searched film's is.
+ *
+ *  Once the reader has bought the year, the stand-in takes it, and that
+ *  year is lit as the searched film's is: its band in the wash, its label
+ *  in the accent (bandClass and railYearClass, the map's own). A year no
+ *  card shares has no row to light, so the layout is handed a placeholder
+ *  in it, which opens one: a lane's height, like any year with one card,
+ *  so the answer fills it at the end and nothing moves. It has to come
+ *  through layoutGrid's own filters to do that — the Daily's settings
+ *  take unrated movies off the board, so it is given a rating inside the
+ *  scale — and it is taken off the cards again after (boardLayout), so it
+ *  is never drawn, pressed, counted or scrolled to as a card. */
 export function boardPayload(
   today: DailyToday,
   game: DailyGame | null,
@@ -212,13 +249,15 @@ export function boardPayload(
   const films: SpineTuple[] = today.cards.map((c: DailyCard) => [c.id, c.year, c.rating, c.md]);
   const answer = game?.end?.answer;
   if (!answer) {
+    const year = yearOf(game);
+    if (year != null && !today.cards.some((c) => c.year === year)) films.push([YEAR_PLACEHOLDER, year, R_LO, 0]);
     return {
       payload: {
-        anchor: { id: '', year: 0, rating: null, md: 0, isAnchor: true, title: '', people: [] },
+        anchor: { id: '', year: year ?? 0, rating: null, md: 0, isAnchor: true, title: '', people: [] },
         people: [],
         films,
       },
-      settings: DAILY_SETTINGS,
+      settings: year == null ? DAILY_SETTINGS : { ...DAILY_SETTINGS, highlightYear: true },
     };
   }
   return {
@@ -237,6 +276,19 @@ export function boardPayload(
     },
     settings: { ...DAILY_SETTINGS, highlightYear: true },
   };
+}
+
+/** The board laid out at this width: layoutGrid's layout of what
+ *  boardPayload hands it, without the year row's placeholder among the
+ *  cards. Its row stays, which is all it was there for. Every layout the
+ *  page draws, scrolls by or staggers the end from comes from here. */
+export function boardLayout(
+  laid: { payload: GridPayload; settings: GridSettings },
+  width: number,
+  compact?: boolean,
+): GridLayout {
+  const l = layoutGrid(laid.payload, width, laid.settings, undefined, compact);
+  return { ...l, cards: l.cards.filter((c) => c.film.id !== YEAR_PLACEHOLDER) };
 }
 
 /** Where the last row ends: the bottom of the rows themselves, without
@@ -262,9 +314,11 @@ export function plotSize(layout: GridLayout, phone: boolean): { w: number; h: nu
 
 /** Where each year that has just opened grows out of: the top its next
  *  row had in the layout before, or that layout's bottom. Only the
- *  answer's own year can open, and only at the end, when the answer joins
- *  the board — so its row comes out of the seam between its neighbours
- *  and everything below it slides down to make room. */
+ *  answer's own year can open — when Year is bought and no card shares
+ *  it, or at the end, when the answer joins the board — so its row comes
+ *  out of the seam between its neighbours and everything below it slides
+ *  down to make room. A year opened by Year is already there at the end,
+ *  so the answer lands in it without anything moving. */
 export function seamsFor(was: readonly Row[], now: readonly Row[]): Map<number, number> {
   const before = new Set(was.map((r) => r.year));
   const bottom = rowsBottom({ rows: was as Row[] });
@@ -322,12 +376,29 @@ export function narrowed(
 }
 
 /** The bounds the guesses so far leave, or null before any guess. Once
- *  the game is over there are none: the answer is on the board. */
+ *  the game is over there are none: the answer is on the board.
+ *
+ *  These are what fade the cards, and only these. The year clue says
+ *  where the answer sits, not that any card is wrong — no card is the
+ *  answer, whatever year it is from — so it narrows the rows and the
+ *  lines (rowBoundsOf) and leaves every card as it was. */
 export function boundsOf(game: DailyGame | null): Bounds | null {
   if (!game || game.phase === 'done') return null;
   let b: Bounds | null = null;
   for (const e of game.log) if (e.type === 'guess') b = narrowed(b ?? OPEN_BOUNDS, e);
   return b;
+}
+
+/** The bounds the rows and the dashed lines go by: the guesses', with
+ *  the year once it is bought pinning both ends of the years to it. The
+ *  ratings the guesses ruled out stay, and so do their lines; the year
+ *  ranges they left ("1995 or later") give way to the exact year, which
+ *  says more and can never disagree with them. Null when there is
+ *  nothing to draw, and once the game is over. */
+export function rowBoundsOf(game: DailyGame | null): Bounds | null {
+  const b = boundsOf(game);
+  const year = game && game.phase !== 'done' ? yearOf(game) : null;
+  return year == null ? b : { ...(b ?? OPEN_BOUNDS), yLo: year, yHi: year };
 }
 
 /** Whether a card could still be the answer's neighbour in year and
@@ -367,6 +438,8 @@ export interface YearLine {
   /** From the year rail's left edge, which stays at the screen's however
    *  far the map is panned: just past the rail. */
   labelLeft: number;
+  /** Empty for a line that draws no pill: the bottom edge of a pinned
+   *  year, whose top edge already names it. */
   label: string;
 }
 
@@ -392,9 +465,15 @@ export function untilLabel(b: Bounds): string {
 }
 
 /** The dashed lines the bounds draw. A year line is drawn only where it
- *  rules a row out; when the year is pinned the top line names it alone,
- *  and the bottom one, which would sit just under it saying the same
- *  thing, is not drawn. */
+ *  rules a row out, so the map's first year has no line over it and its
+ *  last none under it.
+ *
+ *  A pinned year — the year bought, or a guess from the same one — is
+ *  ruled on both edges of its row, full width, and named once, by one
+ *  pill inside the row: on the top line, 6px under it, or, when the row
+ *  is the map's first and has no top line, on the bottom line, 24px over
+ *  it, which keeps it inside the row all the same. The prototype's own
+ *  rule (Cinedikt Daily.dc.html's mapVals). */
 export function boundLines(
   b: Bounds | null,
   layout: GridLayout,
@@ -418,10 +497,11 @@ export function boundLines(
     const y = r ? r.top : rowsBottom(layout);
     years.push({ kind: 'from', y, labelTop: y + 6, labelLeft, label: fromLabel(b) });
   }
-  if (rows.length && b.yHi < 9999 && b.yHi < rows[rows.length - 1].year && b.yLo !== b.yHi) {
+  if (rows.length && b.yHi < 9999 && b.yHi < rows[rows.length - 1].year) {
     const r = [...rows].reverse().find((w) => w.year <= b.yHi);
     const y = r ? r.top + r.height : 0;
-    years.push({ kind: 'until', y, labelTop: y - 24, labelLeft, label: untilLabel(b) });
+    const label = b.yLo !== b.yHi ? untilLabel(b) : years.length ? '' : `${b.yHi}`;
+    years.push({ kind: 'until', y, labelTop: y - 24, labelLeft, label });
   }
   return { ratings, years };
 }
@@ -474,7 +554,6 @@ export interface FeedView {
   cost: string;
   text: string;
   faces: DailyPerson[];
-  quote: string;
   more: string;
   chips: FeedChip[];
 }
@@ -541,7 +620,6 @@ export function feedOf(today: DailyToday, game: DailyGame | null): FeedView[] {
       cost: 'cost' in e && e.cost ? `−${e.cost}` : '',
       text: '',
       faces: [],
-      quote: '',
       more: '',
       chips: [],
     };
@@ -576,8 +654,8 @@ export function feedOf(today: DailyToday, game: DailyGame | null): FeedView[] {
         };
       case 'genres':
         return { ...o, label: 'Genres', text: e.genres.join(', ') };
-      case 'story':
-        return { ...o, label: 'How it starts', quote: e.opening };
+      case 'year':
+        return { ...o, label: 'Year', text: `It came out in ${e.year}. The map marks where that year sits.` };
       case 'guess':
         return {
           ...o,
@@ -625,11 +703,11 @@ export interface ClueButton {
   aria: string;
 }
 
-/** The clue buttons, in order. Director buys every director not yet
- *  known, Actor the next of the cast in billing order, so each says
- *  "Known" once there is nobody left for it; genres and the opening line
- *  say "Seen" once bought. "Directors" when the answer has more than one,
- *  which the server says up front. */
+/** The clue buttons, in order: Director, Actor, Genres, Year. Director
+ *  buys every director not yet known, Actor the next of the cast in
+ *  billing order, so each says "Known" once there is nobody left for it;
+ *  genres and the year say "Seen" once bought. "Directors" when the
+ *  answer has more than one, which the server says up front. */
 export function clueButtons(today: DailyToday, game: DailyGame | null): ClueButton[] {
   const known = game?.known ?? [];
   const playing = game?.phase === 'play';
@@ -652,7 +730,7 @@ export function clueButtons(today: DailyToday, game: DailyGame | null): ClueButt
     make('director', today.clues.directors > 1 ? 'Directors' : 'Director', false, dirsKnown >= today.clues.directors),
     make('actor', 'Actor', false, castKnown >= today.clues.cast),
     make('genres', 'Genres', bought(game, 'genres'), false),
-    make('story', 'How it starts', bought(game, 'story'), false),
+    make('year', 'Year', bought(game, 'year'), false),
   ];
 }
 
@@ -721,7 +799,7 @@ export function usedList(log: readonly DailyEntry[]): string[] {
   if (flips) out.push(plural(flips, 'card', 'cards'));
   if (people) out.push(plural(people, 'person', 'people'));
   if (log.some((e) => e.type === 'genres')) out.push('the genres');
-  if (log.some((e) => e.type === 'story')) out.push('the opening line');
+  if (log.some((e) => e.type === 'year')) out.push('the year');
   if (wrong) out.push(`${wrong} wrong ${wrong === 1 ? 'guess' : 'guesses'}`);
   return out;
 }
@@ -729,6 +807,22 @@ export function usedList(log: readonly DailyEntry[]): string[] {
 /** A count as the page writes it: "61,240". */
 export function fmtN(n: number): string {
   return n.toLocaleString('en-GB');
+}
+
+/** A place as the page writes it: "1st", "112th", "1,204th". The
+ *  teens are "th" whatever they end in (11th, 12th, 13th, and 111th), and
+ *  otherwise a number ending 1, 2 or 3 takes "st", "nd" or "rd". */
+export function ord(n: number): string {
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  return `${fmtN(n)}${teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
+}
+
+/** What the opening screens say of the reader's week: "1,204th this
+ *  week", or nothing with no place to say. Neither shows a leaderboard:
+ *  before playing, today's would be strangers the reader cannot be on
+ *  yet, and it would start them off behind. */
+export function standingText(week: DailyWeek | null | undefined): string {
+  return week ? `${ord(week.rank)} this week` : '';
 }
 
 /** The result's heading. */
@@ -1115,6 +1209,18 @@ export function scrollTarget(
     left: Math.max(0, (b.x0 + b.x1) / 2 - view.w / 2),
     top: Math.max(0, (b.y0 + b.y1) / 2 - (AXIS_H + view.h) / 2),
   };
+}
+
+/** What the map scrolls to once Year is bought: the cards in that year's
+ *  row, for scrollTarget to centre (the middle one, when they are wider
+ *  than the clear part of the map), or, for a row opened empty, a card's
+ *  box where the placeholder sits, at the left edge, as an unrated card
+ *  would be. Nothing for a year the layout has no row for. */
+export function yearTargets(layout: GridLayout, year: number): Pick<Placed, 'left' | 'top'>[] {
+  const here = layout.cards.filter((c) => c.film.year === year && !c.film.isAnchor);
+  if (here.length) return here;
+  const row = layout.rows.find((r) => r.year === year && !r.isBreak);
+  return row ? [{ left: layout.metrics.railW + 8, top: row.top + 12 }] : [];
 }
 
 // ---- moves ----

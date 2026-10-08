@@ -1,9 +1,10 @@
 package api
 
-// Cinedikt Daily over HTTP: today's puzzle, the player's game, the moves
-// and the boards. The rules are internal/daily's, and the games are kept
-// by the catalog's store; this is who the reader is, the shapes, and the
-// status codes.
+// Cinedikt Daily over HTTP: today's puzzle, the player's game, the moves,
+// the boards, and the reader's own standing, which is all the opening
+// screens show of the boards. The rules are internal/daily's, and the
+// games are kept by the catalog's store; this is who the reader is, the
+// shapes, and the status codes.
 //
 // Each reader plays the puzzle for their own date, changing at their
 // own midnight. The page names its time zone on every request, as the
@@ -11,7 +12,8 @@ package api
 // that zone (zoneOf); a game keeps the zone Play was pressed in, and is
 // played on its puzzle's day there and nowhere else. A player whose
 // unfinished game has passed that zone's midnight is moved on to the day
-// it has reached there, by read, Play and the board alike (readerDay).
+// it has reached there, by read, Play, the board and the standing alike
+// (readerDay).
 //
 // A player is a cookie, cd_daily, and nothing else: no account, no
 // name typed in. Reading never makes one, so the opening screen's banner
@@ -70,6 +72,10 @@ type DailyStore interface {
 	DailyPlayed(ctx context.Context, no int) (int, error)
 	DailyStreak(ctx context.Context, player int64, no int) (daily.Streak, error)
 	DailyBoard(ctx context.Context, p *daily.Puzzle, tab string, player int64) (daily.Board, error)
+	// DailyStanding is a player's place on the week's board of p, over
+	// the days before p's until they have finished it, and through it
+	// after; nil when they are not on it, or are with nothing.
+	DailyStanding(ctx context.Context, p *daily.Puzzle, player int64, finished bool) (*daily.Week, error)
 	// DailyNames is the characters players' names are made from, and the
 	// real people no name may be.
 	DailyNames(ctx context.Context) (daily.Credits, error)
@@ -119,11 +125,12 @@ const joinTries = 8
 
 // dailyRoutes is the Daily routes and what they hold between requests.
 type dailyRoutes struct {
-	store  DailyStore
-	logger *slog.Logger
-	names  *daily.NamePool
-	offers *nameOffers
-	joins  *joinLimiter
+	store     DailyStore
+	logger    *slog.Logger
+	names     *daily.NamePool
+	offers    *nameOffers
+	joins     *joinLimiter
+	standings *standings
 	// now, intn and hue are the clock and the draws; a test fixes them.
 	now  func() time.Time
 	intn func(int) int
@@ -140,13 +147,14 @@ type dailyRoutes struct {
 
 func newDailyRoutes(logger *slog.Logger) *dailyRoutes {
 	return &dailyRoutes{
-		logger: logger,
-		offers: newNameOffers(),
-		joins:  newJoinLimiter(),
-		now:    time.Now,
-		intn:   rand.IntN,
-		hue:    func() int { return rand.IntN(360) },
-		live:   map[int]*daily.Puzzle{},
+		logger:    logger,
+		offers:    newNameOffers(),
+		joins:     newJoinLimiter(),
+		standings: newStandings(),
+		now:       time.Now,
+		intn:      rand.IntN,
+		hue:       func() int { return rand.IntN(360) },
+		live:      map[int]*daily.Puzzle{},
 	}
 }
 
@@ -162,6 +170,7 @@ func zoneOf(r *http.Request) *time.Location {
 func (d *dailyRoutes) register(mux *http.ServeMux) {
 	route := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, d.guard(h)) }
 	route("GET /daily", d.read)
+	route("GET /daily/me", d.me)
 	route("POST /daily/name", d.rename)
 	route("POST /daily/{no}/play", d.play)
 	route("POST /daily/{no}/flip", d.flip)
@@ -531,6 +540,65 @@ func (d *dailyRoutes) read(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
+// dailyMe is GET /daily/me: what the opening screens show of the
+// reader before any board. Streak is the number the title screen shows
+// (daily.Streak.Shown), and Week their place on this week's board, null
+// with no points this week.
+type dailyMe struct {
+	Streak int         `json:"streak"`
+	Week   *daily.Week `json:"week"`
+}
+
+// me is GET /daily/me: the reader's streak and their standing this
+// week, on their puzzle as GET /daily works it out (readerDay). Neither
+// opening screen shows a leaderboard, only this: the daily title screen
+// beside the streak, and the start screen's banner in place of how many
+// are playing. Both ask on every visit, so it writes nothing, a reader
+// with no player is answered without a read of anything, and a
+// player's answer is kept for a minute (standings), until they finish
+// their game. A player's cookie is renewed, as GET /daily renews it.
+func (d *dailyRoutes) me(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	now := d.now()
+	player, token, ok, err := d.player(r)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, dailyMe{})
+		return
+	}
+	_, p, rec, err := d.readerDay(ctx, player.ID, zoneOf(r), now)
+	if errors.Is(err, catalog.ErrNotFound) {
+		dailyRefuse(w, http.StatusServiceUnavailable, "not-ready", "today's puzzle has not been picked yet")
+		return
+	}
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	setDailyCookie(w, token)
+	key := standingKey{player: player.ID, no: p.No, finished: rec != nil && rec.Finished != nil}
+	if me, ok := d.standings.get(key, now); ok {
+		writeJSON(w, http.StatusOK, me)
+		return
+	}
+	streak, err := d.store.DailyStreak(ctx, player.ID, p.No)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	week, err := d.store.DailyStanding(ctx, p, player.ID, key.finished)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	me := dailyMe{Streak: streak.Shown(key.finished), Week: week}
+	d.standings.put(key, me, now)
+	writeJSON(w, http.StatusOK, me)
+}
+
 // rename is POST /daily/name {}: a player is given a fresh name, kept;
 // a reader with none is only offered another, remembered so Play can
 // keep it (nameOffers), and nothing is written. Either way it is never
@@ -693,8 +761,9 @@ type dailyMove struct {
 	Film string `json:"film"`
 }
 
-// The four clues "buy" sells.
-var dailyBuys = map[string]bool{daily.KindDirector: true, daily.KindActor: true, daily.KindGenres: true, daily.KindStory: true}
+// The four clues "buy" sells. "story", the clue the year replaced, is
+// not one, and is refused as bad like any kind that never was.
+var dailyBuys = map[string]bool{daily.KindDirector: true, daily.KindActor: true, daily.KindGenres: true, daily.KindYear: true}
 
 func (d *dailyRoutes) flip(w http.ResponseWriter, r *http.Request) {
 	d.act(w, r, func(m dailyMove) (string, string, bool) { return daily.KindFlip, m.Card, m.Card != "" })
@@ -819,6 +888,79 @@ func (d *dailyRoutes) board(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, b)
+}
+
+// standings are GET /daily/me's answers, kept a minute each in each
+// process's memory: both opening screens ask on every visit, and each
+// answer ranks a week's board. Kept by player, puzzle and whether they
+// have finished it, so finishing their game, which moves their standing
+// at once, is a key nothing was kept under and is worked out afresh,
+// and so is a new day. Anything else that moves it, another player
+// finishing, waits out the minute: a place on a week's board is not
+// news by the second.
+type standings struct {
+	mu sync.Mutex
+	at map[standingKey]standing
+}
+
+type standingKey struct {
+	player   int64
+	no       int
+	finished bool
+}
+
+type standing struct {
+	me dailyMe
+	at time.Time
+}
+
+const (
+	// standingLife is how long an answer is kept.
+	standingLife = time.Minute
+	// standingMax caps how many are held at once, a few megabytes: one
+	// for each player who opened Cinedikt in the last minute, and the
+	// sweep drops the rest.
+	standingMax = 50_000
+)
+
+func newStandings() *standings {
+	return &standings{at: map[standingKey]standing{}}
+}
+
+// get is the answer kept for key, while it is younger than
+// standingLife.
+func (c *standings) get(key standingKey, now time.Time) (dailyMe, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	s, ok := c.at[key]
+	if !ok || now.Sub(s.at) >= standingLife {
+		return dailyMe{}, false
+	}
+	return s.me, true
+}
+
+func (c *standings) put(key standingKey, me dailyMe, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.at[key]; !ok && len(c.at) >= standingMax {
+		c.sweep(now)
+	}
+	c.at[key] = standing{me: me, at: now}
+}
+
+// sweep drops the answers past standingLife, and if none were, all of
+// them, as nameOffers' sweep does: an answer dropped early is only
+// worked out again. Called with the lock held.
+func (c *standings) sweep(now time.Time) {
+	before := len(c.at)
+	for key, s := range c.at {
+		if now.Sub(s.at) >= standingLife {
+			delete(c.at, key)
+		}
+	}
+	if len(c.at) == before {
+		clear(c.at)
+	}
 }
 
 // nameOffers are the names offered to readers with no player, by

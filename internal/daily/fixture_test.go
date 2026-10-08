@@ -44,10 +44,9 @@ func matrix() *Puzzle {
 			{ID: "c9", Film: "tt1371111", Title: "Cloud Atlas", Year: 2012, Rating: 7.4, MD: 1026, Votes: 380000, People: []int{0, 1}},
 			{ID: "c10", Film: "tt0090000", Title: "A Cheap Thriller", Year: 1988, Rating: 4.1, MD: 0, Votes: 1200, People: []int{3}},
 		},
-		Start:   []string{"c2", "c3", "c4"},
-		Opening: "Thomas A. Anderson is a man living two lives.",
-		Era:     1995,
-		Genre:   "Action",
+		Start: []string{"c2", "c3", "c4"},
+		Era:   1995,
+		Genre: "Action",
 	}
 }
 

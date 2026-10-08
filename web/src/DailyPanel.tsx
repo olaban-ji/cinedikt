@@ -289,7 +289,6 @@ function Entry({
       </span>
       {e.text && <span className="cd-daily-entry-text">{e.text}</span>}
       {e.faces.length > 0 && <Faces people={e.faces} theme={theme} hues={hues} codes={codes} />}
-      {e.quote && <span className="cd-daily-quote">“{e.quote}”</span>}
       {e.more && <span className="cd-daily-more">{e.more}</span>}
       {e.chips.length > 0 && (
         <div className="cd-daily-chips">

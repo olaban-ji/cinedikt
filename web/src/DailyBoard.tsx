@@ -27,6 +27,7 @@ import {
   fmtN,
   inBounds,
   plotSize,
+  rowBoundsOf,
   seamsFor,
   yearRuledOut,
   type Bounds,
@@ -181,8 +182,12 @@ export function DailyBoard({
   const reduced = useReducedMotion();
   const plot = plotSize(layout, phone);
   const m = layout.metrics;
+  // Two sets of bounds. The cards fade only for what wrong guesses have
+  // ruled out; the rows, their labels and the dashed lines go by the
+  // guesses and the year, once it is bought, together.
   const bounds = boundsOf(game);
-  const lines = boundLines(bounds, layout);
+  const rowBounds = rowBoundsOf(game);
+  const lines = boundLines(rowBounds, layout);
   const playing = game?.phase === 'play';
   const pts = game?.pts ?? 0;
   const seams = useSeams(layout.rows, reduced);
@@ -223,7 +228,7 @@ export function DailyBoard({
       </div>
       <div className="cd-plot cd-daily-plot" style={{ height: plot.h }}>
         {layout.rows.map((r) => (
-          <Band key={r.year} row={r} seam={seams.get(r.year)} bounds={bounds} />
+          <Band key={r.year} row={r} seam={seams.get(r.year)} bounds={rowBounds} />
         ))}
         {layout.lines.map((l) => (
           <div key={l.rating} className="cd-gridline" style={{ left: l.x }} />
@@ -282,22 +287,26 @@ export function DailyBoard({
         <div className="cd-rail-layer" style={{ height: plot.h, width: plot.w }}>
           <div className="cd-rail" style={{ width: m.railW, height: plot.h }}>
             {layout.rows.map((r) => (
-              <YearLabel key={r.year} row={r} seam={seams.get(r.year)} bounds={bounds} />
+              <YearLabel key={r.year} row={r} seam={seams.get(r.year)} bounds={rowBounds} />
             ))}
             {/* A year bound's pill rides with the rail rather than the
                 plot: the map is often panned sideways (the starting
                 cards are rarely at the low end), and a pill left at the
-                plot's own left edge would be off the screen with it. */}
-            {lines.years.map((l) => (
-              <span
-                key={l.kind}
-                className="cd-daily-bound-pill cd-daily-bound-pill-year"
-                style={{ left: l.labelLeft, top: l.labelTop }}
-                aria-hidden="true"
-              >
-                {l.label}
-              </span>
-            ))}
+                plot's own left edge would be off the screen with it. A
+                pinned year is named once: its bottom line draws no pill
+                when its top line has one. */}
+            {lines.years.map((l) =>
+              l.label ? (
+                <span
+                  key={l.kind}
+                  className="cd-daily-bound-pill cd-daily-bound-pill-year"
+                  style={{ left: l.labelLeft, top: l.labelTop }}
+                  aria-hidden="true"
+                >
+                  {l.label}
+                </span>
+              ) : null,
+            )}
           </div>
         </div>
       </div>
@@ -339,8 +348,10 @@ function useSeams(rows: Row[], reduced: boolean): Map<number, number> {
   return seen.rows === rows ? seen.seams : new Map();
 }
 
-/** A year's band across the board. A year the guesses have ruled out
- *  fades; the answer's own year, at the end, is lit. */
+/** A year's band across the board. A year the guesses, or the year
+ *  bought, have ruled out fades; the answer's own year, once it is
+ *  bought and at the end, is lit (the layout's anchorYear). A year that
+ *  has just opened grows out of the seam it opens from. */
 function Band({ row: r, seam, bounds }: { row: Row; seam: number | undefined; bounds: Bounds | null }) {
   const opening = seam != null;
   return (

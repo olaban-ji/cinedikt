@@ -93,7 +93,6 @@ var matrixPeople = []Slot{
 var answer = Candidate{
 	ID: "tt0133093", Title: "The Matrix", Year: 1999, Rating: 8.7, MD: 331, Era: 1995,
 	Genres: []string{"Action", "Sci-Fi"}, Votes: 2000000,
-	Overview: "Thomas A. Anderson is a man living two lives. By day he writes code.",
 }
 
 // mapOf is a map of n rated movies, each through one person in turn, the
@@ -123,9 +122,6 @@ func TestBuildDealsTheBoard(t *testing.T) {
 	}
 	if p.No != 142 || !p.Day.Equal(oct8) || p.Answer.ID != "tt0133093" || p.Era != 1995 || p.Genre != "Action" {
 		t.Errorf("puzzle = %+v", p)
-	}
-	if p.Opening != "Thomas A. Anderson is a man living two lives." {
-		t.Errorf("opening = %q", p.Opening)
 	}
 	// Forty-five linked movies and the relative: the answer and the two
 	// unrated movies are left off.
@@ -211,9 +207,6 @@ func TestBuildRefusesAMapThatIsNoGame(t *testing.T) {
 		{"no director", answer, matrixPeople[1:], mapOf(45), "no director"},
 		{"too few cast", answer, matrixPeople[:3], mapOf(45), "2 billed cast"},
 		{"one way in", answer, matrixPeople, noStarts, "no three starting cards"},
-		{"an opening that names it", Candidate{ID: answer.ID, Title: "The Matrix", Overview: "Neo is the one the Matrix fears."},
-			matrixPeople, mapOf(45), "names it"},
-		{"no overview", Candidate{ID: answer.ID, Title: "The Matrix"}, matrixPeople, mapOf(45), "no opening"},
 	} {
 		_, err := Build(1, oct8, c.a, c.people, c.films)
 		var unfit Unfit

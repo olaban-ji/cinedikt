@@ -149,10 +149,6 @@ func (j *DailyJob) pick(ctx context.Context, day time.Time, no int, cands []dail
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		// The opening is the cheapest test, and it needs no query.
-		if o := daily.Opening(c.Overview); o == "" || daily.Mentions(o, c.Title) {
-			continue
-		}
 		p, err := j.Store.dailyPuzzleOf(ctx, no, day, c)
 		var unfit daily.Unfit
 		if errors.As(err, &unfit) {
@@ -182,22 +178,19 @@ func (u unnamed) Unwrap() error { return u.err }
 
 // dailyCandidates are the movies that could be an answer: the most voted
 // 250 of each era in the opening screen's pool, so every one is well
-// known and the eras are spread, each rated, with an overview from OMDb
-// to take the opening from, and a poster. OMDb's overview rather than
-// TMDb's: TMDb's terms want what is kept from it gone within six months,
-// and a puzzle is kept for good.
+// known and the eras are spread, each rated and with a poster, which
+// the end of the game shows. Nothing is asked of its synopsis: no clue
+// is a line of its text any more, so a movie OMDb has no plot for is as
+// fair an answer as any.
 func (s *Store) dailyCandidates(ctx context.Context) ([]daily.Candidate, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.tconst, t.primary_title, t.start_year, r.average_rating::float8, p.released,
-		       f.era, t.genres, f.num_votes, sy.overview
+		       f.era, t.genres, f.num_votes
 		FROM `+Live+`.first_run f
 		JOIN `+Live+`.titles t USING (tconst)
 		JOIN `+Live+`.ratings r USING (tconst)
-		JOIN meta.synopses sy USING (tconst)
 		JOIN meta.posters p USING (tconst)
-		WHERE sy.source = 'omdb'
-		  AND btrim(coalesce(sy.overview, '')) <> ''
-		  AND p.status = 'ok'
+		WHERE p.status = 'ok'
 		  AND btrim(coalesce(p.poster_url, '')) <> ''
 		  AND `+gridFilm)
 	if err != nil {
@@ -208,7 +201,7 @@ func (s *Store) dailyCandidates(ctx context.Context) ([]daily.Candidate, error) 
 	for rows.Next() {
 		var c daily.Candidate
 		var released *time.Time
-		if err := rows.Scan(&c.ID, &c.Title, &c.Year, &c.Rating, &released, &c.Era, &c.Genres, &c.Votes, &c.Overview); err != nil {
+		if err := rows.Scan(&c.ID, &c.Title, &c.Year, &c.Rating, &released, &c.Era, &c.Genres, &c.Votes); err != nil {
 			return nil, fmt.Errorf("catalog: scan daily candidate: %w", err)
 		}
 		c.MD = monthDay(released)
@@ -385,11 +378,11 @@ func (s *Store) putDailyPuzzle(ctx context.Context, p *daily.Puzzle) (bool, erro
 	}
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO meta.daily_puzzles
-		    (no, day, answer, title, year, rating, md, people, genres, opening, cards, start, era, genre, picked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+		    (no, day, answer, title, year, rating, md, people, genres, cards, start, era, genre, picked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
 		ON CONFLICT (day) DO NOTHING`,
 		p.No, p.Day, p.Answer.ID, p.Answer.Title, p.Answer.Year, p.Answer.Rating, p.Answer.MD,
-		people, genres, p.Opening, cards, start, p.Era, p.Genre)
+		people, genres, cards, start, p.Era, p.Genre)
 	if err != nil {
 		return false, fmt.Errorf("catalog: keep the daily puzzle for %s: %w", daily.DayString(p.Day), err)
 	}
@@ -411,10 +404,10 @@ func (s *Store) dailyPuzzle(ctx context.Context, where string, arg any) (*daily.
 	var p daily.Puzzle
 	var people, cards []byte
 	err := s.pool.QueryRow(ctx, `
-		SELECT no, day, answer, title, year, rating::float8, md, people, genres, opening, cards, start, era, genre
+		SELECT no, day, answer, title, year, rating::float8, md, people, genres, cards, start, era, genre
 		FROM meta.daily_puzzles WHERE `+where, arg).
 		Scan(&p.No, &p.Day, &p.Answer.ID, &p.Answer.Title, &p.Answer.Year, &p.Answer.Rating, &p.Answer.MD,
-			&people, &p.Answer.Genres, &p.Opening, &cards, &p.Start, &p.Era, &p.Genre)
+			&people, &p.Answer.Genres, &cards, &p.Start, &p.Era, &p.Genre)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("catalog: daily puzzle %v: %w", arg, ErrNotFound)
 	}

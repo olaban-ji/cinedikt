@@ -3,6 +3,7 @@ import { capture } from './analytics';
 import {
   ApiError,
   fetchDaily,
+  fetchDailyWeek,
   playDaily,
   renameDaily,
   sendDailyMove,
@@ -10,6 +11,7 @@ import {
   type DailyMove,
   type DailyPlayer,
   type DailyToday,
+  type DailyWeek,
 } from './api';
 import { DailyBoard, NO_FX, useBoardView, type BoardFx } from './DailyBoard';
 import { DailyIntro } from './DailyIntro';
@@ -40,6 +42,7 @@ import {
   TWINKLE_KEYFRAMES,
   TWINKLE_MS,
   UNREACHABLE,
+  boardLayout,
   boardPayload,
   burstShift,
   clockOffset,
@@ -65,9 +68,12 @@ import {
   shareText,
   staggerDelays,
   staleGame,
+  standingText,
   watchMidnight,
+  yearOf,
+  yearTargets,
 } from './daily';
-import { initialsFor, layoutGrid, type GridLayout } from './grid';
+import { initialsFor, type GridLayout } from './grid';
 import { animate, stillNow } from './motion';
 import { useScreen } from './screen';
 import { isTyping } from './search';
@@ -89,14 +95,50 @@ interface Props {
 
 type Load =
   | { state: 'loading' }
-  | { state: 'ready'; today: DailyToday; offset: number; n: number }
+  | { state: 'ready'; today: DailyToday; week: DailyWeek | null; offset: number; n: number }
   | { state: 'failed'; reason: string | null };
+
+/** Today's puzzle and the reader's place this week, asked for together
+ *  as the page opens, as the banner asks for them, so the title screen
+ *  draws the place in its first frame. One that came a round trip after
+ *  the puzzle would land in the middle of the screen's entrance and
+ *  re-centre the row it sits in, which on a phone can wrap onto a line
+ *  of its own and lift the whole column under the reader's thumb. A
+ *  place that cannot be had is no place: only the puzzle failing fails
+ *  the page. */
+export function fetchDailyPage(signal: AbortSignal): Promise<{ today: DailyToday; week: DailyWeek | null }> {
+  return Promise.all([fetchDaily(signal), fetchDailyWeek(signal)]).then(([today, week]) => ({ today, week }));
+}
+
+/** Asks for the reader's place this week again once today's game has
+ *  ended here, and hands on what came of it. The place held until then
+ *  was worked out over the days before today, so it is let go as the ask
+ *  goes out: until the new one lands, and for good if it cannot be had,
+ *  there is no place, as on the banner, rather than one that leaves
+ *  today's game out and disagrees with the result's This week tab. The
+ *  title screen is not up as a game ends, so letting go draws nothing.
+ *  An answer that lands after `signal` has gone is dropped. */
+export function askForStanding(
+  fetcher: (signal: AbortSignal) => Promise<DailyWeek | null>,
+  signal: AbortSignal,
+  onWeek: (week: DailyWeek | null) => void,
+): Promise<void> {
+  onWeek(null);
+  return fetcher(signal).then(
+    (week) => {
+      if (!signal.aborted) onWeek(week);
+    },
+    // Let go already: a place that cannot be had stays none.
+    () => {},
+  );
+}
 
 /** Cinedikt Daily, under the app's header: the board, the panel, the
  *  intro that is also the rules, the toast and the confetti. It asks for
- *  today's puzzle as it opens, again at the reader's midnight, and again
- *  whenever the server says the game it is showing has moved on (a new
- *  day, a game that ended in another tab). */
+ *  today's puzzle, and the reader's place this week with it, as it
+ *  opens, again at the reader's midnight, and again whenever the server
+ *  says the game it is showing has moved on (a new day, a game that
+ *  ended in another tab). */
 export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
   const toast = useToast();
   const [load, setLoad] = useState<Load>({ state: 'loading' });
@@ -104,10 +146,10 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
 
   useEffect(() => {
     const ctrl = new AbortController();
-    fetchDaily(ctrl.signal)
-      .then((today) => {
+    fetchDailyPage(ctrl.signal)
+      .then(({ today, week }) => {
         if (ctrl.signal.aborted) return;
-        setLoad({ state: 'ready', today, offset: clockOffset(today.now, Date.now()), n: asked });
+        setLoad({ state: 'ready', today, week, offset: clockOffset(today.now, Date.now()), n: asked });
       })
       .catch((e: unknown) => {
         if (ctrl.signal.aborted) return;
@@ -140,6 +182,7 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
           // says: whatever the old one was showing is what was wrong.
           key={`${load.today.no}:${load.n}`}
           today={load.today}
+          week={load.week}
           offset={load.offset}
           say={say}
           reload={reload}
@@ -173,12 +216,19 @@ function DailyMissing({ notReady, onRetry }: { notReady: boolean; onRetry: () =>
   );
 }
 
-/** Where the map is asked to go: to cards, or to the middle of the plot
- *  behind the intro. `n` makes asking twice for the same place two asks. */
-type Aim = { ids: string[]; smooth: boolean; n: number } | { centre: true; n: number };
+/** Where the map is asked to go: to cards, to a year's row, or to the
+ *  middle of the plot behind the intro. `n` makes asking twice for the
+ *  same place two asks. */
+type Aim =
+  | { ids: string[]; smooth: boolean; n: number }
+  | { year: number; smooth: boolean; n: number }
+  | { centre: true; n: number };
 
 interface GameProps {
   today: DailyToday;
+  /** The reader's place this week, asked for with today's puzzle, or
+   *  null with none to show. */
+  week: DailyWeek | null;
   /** The server's clock less this one's. */
   offset: number;
   say: (text: string) => void;
@@ -188,7 +238,7 @@ interface GameProps {
 
 /** The game for one loaded puzzle. Exported for its tests, which draw it
  *  from a fixture; the page draws it once today's puzzle has arrived. */
-export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameProps) {
+export function DailyGameView({ today, week, offset, say, reload, rulesSignal }: GameProps) {
   const screen = useScreen();
   const theme = useResolvedTheme();
   const tap = useTapGuard();
@@ -240,6 +290,10 @@ export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameP
     aims.current += 1;
     setAim({ ids, smooth, n: aims.current });
   }, []);
+  const goToYear = useCallback((year: number) => {
+    aims.current += 1;
+    setAim({ year, smooth: true, n: aims.current });
+  }, []);
 
   // Timers that must not outlive the view.
   const timers = useRef(new Set<number>());
@@ -259,15 +313,14 @@ export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameP
 
   const view = useBoardView(scroller, tap.onScroll);
   const compact = screen.overlay;
-  // Laid out again only when the answer arrives: a move changes what the
-  // cards say, never where they are.
+  // Laid out again only when the year is bought and when the answer
+  // arrives: any other move changes what the cards say, never where they
+  // are.
   const answer = game?.end?.answer;
+  const year = yearOf(game);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const laid = useMemo(() => boardPayload(today, game), [today, answer]);
-  const layout = useMemo(
-    () => layoutGrid(laid.payload, view.width, laid.settings, undefined, compact),
-    [laid, view.width, compact],
-  );
+  const laid = useMemo(() => boardPayload(today, game), [today, answer, year]);
+  const layout = useMemo(() => boardLayout(laid, view.width, compact), [laid, view.width, compact]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   // What a game would be laid out as at this width, for the end's
@@ -324,10 +377,7 @@ export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameP
       const added = [...revealedOf(today, next)].filter((id) => !before.has(id));
       const done = next.phase === 'done';
       let ending: GridLayout | null = null;
-      if (done) {
-        const p = boardPayload(today, next);
-        ending = layoutGrid(p.payload, shape.current.width, p.settings, undefined, shape.current.compact);
-      }
+      if (done) ending = boardLayout(boardPayload(today, next), shape.current.width, shape.current.compact);
       const delays = stillNow() || added.length === 0 ? {} : staggerDelays(added, done, ending);
       setGame(next);
       if (added.length) {
@@ -346,8 +396,12 @@ export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameP
         setResIn(true);
         if (next.end) goTo([next.end.answer.id], false);
       } else if (!quiet && newWrongGuess(was, next)) shake();
+      // The year just bought: the map goes to its row, which the same
+      // render opens, if no card shares it.
+      const told = yearOf(next);
+      if (!quiet && !done && told != null && yearOf(was) == null) goToYear(told);
     },
-    [today, later, finish, goTo, shake],
+    [today, later, finish, goTo, goToYear, shake],
   );
 
   // A solve's confetti, CONFETTI_AFTER_MS after the commit that drew the
@@ -365,6 +419,26 @@ export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameP
       });
     }, CONFETTI_AFTER_MS);
   }, [burstAsk, later]);
+
+  // ---- the reader's standing ----
+
+  // Their place this week, for the title screen: the one asked for with
+  // today's puzzle, and asked for again once a game ends here. Before
+  // today's game the server counts the days before today, and after it
+  // today is in, keying what it keeps by which, so the second ask is
+  // worked out afresh. A game already over when the page opened needs no
+  // second ask: the first was worked out with today in. The place from
+  // before is let go as the second ask goes out, so the screen never
+  // shows a place that leaves today out once today is played.
+  const [standing, setStanding] = useState<DailyWeek | null>(week);
+  const over = game?.phase === 'done';
+  const overAtOpen = useRef(over);
+  useEffect(() => {
+    if (!over || overAtOpen.current) return;
+    const ctrl = new AbortController();
+    void askForStanding(fetchDailyWeek, ctrl.signal, setStanding);
+    return () => ctrl.abort();
+  }, [over]);
 
   // ---- the intro and the rules ----
 
@@ -658,7 +732,7 @@ export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameP
     }
     const l = layoutRef.current;
     const at = new Map(l.cards.map((c) => [c.film.id, c]));
-    const cards = aim.ids.flatMap((id) => at.get(id) ?? []);
+    const cards = 'year' in aim ? yearTargets(l, aim.year) : aim.ids.flatMap((id) => at.get(id) ?? []);
     const panel = panelRef.current;
     const w = el.clientWidth - (!screen.phone && panel ? panel.offsetWidth + 32 : 0);
     const h = el.clientHeight - (screen.phone && panel ? panel.offsetHeight + 8 : 0);
@@ -738,6 +812,7 @@ export function DailyGameView({ today, offset, say, reload, rulesSignal }: GameP
           name={reel ?? player.name}
           spinning={rolling}
           streak={introStreak(today.streak, game)}
+          rank={standingText(standing)}
           rules={rules}
           busy={busy}
           dialogRef={dialogRef}

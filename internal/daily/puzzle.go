@@ -25,9 +25,6 @@ type Puzzle struct {
 	Cards []Card
 	// Start is the three cards face up from the beginning.
 	Start []string
-	// Opening is the first sentence of the answer's overview, the "How
-	// it starts" clue.
-	Opening string
 	// Era and Genre are the answer's era in the opening screen's pool and
 	// its first IMDb genre, kept so the next days' picks can be told
 	// apart from this one.

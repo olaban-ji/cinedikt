@@ -336,11 +336,10 @@ CREATE TABLE IF NOT EXISTS meta.geoip (
 -- [{id, name, role}]; cards is the board, every rated movie on the
 -- answer's map but the answer, as [{id, film, title, year, rating, md,
 -- votes, people}] in card id order, with each card's people as slots;
--- start is the three card ids face up from the beginning. opening is the
--- first sentence of OMDb's overview, never TMDb's, so nothing of TMDb's
--- is kept here past its six months. era and genre are the answer's era
--- in the opening screen's pool and its first IMDb genre, which the next
--- days' picks are mixed against.
+-- start is the three card ids face up from the beginning. era and genre
+-- are the answer's era in the opening screen's pool and its first IMDb
+-- genre, which the next days' picks are mixed against. Nothing of the
+-- answer's synopsis is kept: no clue may be a line of its text.
 CREATE TABLE IF NOT EXISTS meta.daily_puzzles (
     no        int PRIMARY KEY,
     day       date UNIQUE NOT NULL,
@@ -351,13 +350,21 @@ CREATE TABLE IF NOT EXISTS meta.daily_puzzles (
     md        int NOT NULL,
     people    jsonb NOT NULL,
     genres    text[] NOT NULL,
-    opening   text NOT NULL,
     cards     jsonb NOT NULL,
     start     text[] NOT NULL,
     era       int NOT NULL,
     genre     text NOT NULL,
     picked_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- opening was the first sentence of the answer's synopsis, the "How it
+-- starts" clue. Any sentence of a synopsis can be pasted into a search
+-- engine, and The Matrix's names Neo and Morpheus, so one search gave
+-- the answer away. The year clue replaced it, and needs nothing kept:
+-- it is the year column above. Dropped here as well as left out of the
+-- CREATE, so a database made before the year, whose column is NOT NULL,
+-- stops asking every new puzzle for one; on any other this does nothing.
+ALTER TABLE meta.daily_puzzles DROP COLUMN IF EXISTS opening;
 
 -- A player is a cookie, with a name the server gave them. token is the
 -- SHA-256 of the cookie, which is the player's only credential, so the
@@ -429,7 +436,7 @@ CREATE TABLE IF NOT EXISTS meta.daily_moves (
     game   bigint NOT NULL REFERENCES meta.daily_games (id) ON DELETE CASCADE,
     seq    int NOT NULL,
     key    text NOT NULL,
-    kind   text NOT NULL CHECK (kind IN ('flip', 'director', 'actor', 'genres', 'story', 'guess', 'reveal')),
+    kind   text NOT NULL CHECK (kind IN ('flip', 'director', 'actor', 'genres', 'year', 'guess', 'reveal')),
     arg    text,
     cost   int NOT NULL,
     detail jsonb,
@@ -437,3 +444,25 @@ CREATE TABLE IF NOT EXISTS meta.daily_moves (
     PRIMARY KEY (game, seq),
     UNIQUE (game, key)
 );
+
+-- The kinds a move can be, made to match the CREATE on a database whose
+-- table was made before the year replaced "story": CREATE TABLE IF NOT
+-- EXISTS leaves an existing table's check as it was, and that one would
+-- refuse every year bought. No game recorded "story" outside
+-- development, so the new check has nothing to refuse. Guarded, once,
+-- because this file runs on every process start and ADD CONSTRAINT is
+-- not free: it reads every move ever made, holding the table, while it
+-- checks them.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'meta.daily_moves'::regclass
+          AND conname  = 'daily_moves_kind_check'
+          AND pg_get_constraintdef(oid) LIKE '%''year''%'
+    ) THEN
+        ALTER TABLE meta.daily_moves DROP CONSTRAINT IF EXISTS daily_moves_kind_check;
+        ALTER TABLE meta.daily_moves ADD CONSTRAINT daily_moves_kind_check
+            CHECK (kind IN ('flip', 'director', 'actor', 'genres', 'year', 'guess', 'reveal'));
+    END IF;
+END $$;

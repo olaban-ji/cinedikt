@@ -6055,10 +6055,11 @@ button {
   }
 }
 
-/* The board's rows move: a year the guesses rule out fades, and at the
-   end the answer's row opens out of the seam between its neighbours and
-   everything below slides down to make room (DailyBoard's useSeams). The
-   curve is the rows' own. */
+/* The board's rows move: a year the guesses or the year bought rule out
+   fades, and the answer's row, opened by Year or at the end, opens out
+   of the seam between its neighbours while everything below slides down
+   to make room (DailyBoard's useSeams), its label fading in. The curve
+   is the rows' own. */
 .cd-daily-plot {
   transition: height 0.5s var(--ease-row);
 }
@@ -6567,15 +6568,6 @@ button {
   font-size: 13.5px;
   font-weight: 600;
   white-space: nowrap;
-}
-
-.cd-daily-quote {
-  font-family: 'Young Serif', serif;
-  font-weight: 400;
-  font-size: 15px;
-  line-height: 1.4;
-  color: var(--t);
-  text-wrap: pretty;
 }
 
 .cd-daily-more {
@@ -7460,6 +7452,13 @@ button {
 
 .cd-daily-streak svg {
   color: var(--acc);
+}
+
+/* The reader's place this week, in the streak pill's box: its numbers
+   line up as they change, in the text colour whatever the box sits in. */
+.cd-daily-standing {
+  color: var(--t);
+  font-variant-numeric: tabular-nums;
 }
 
 .cd-daily-intro-words {

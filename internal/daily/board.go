@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"math"
 	"slices"
+	"time"
 )
 
-// The leaderboards, and the streak.
+// The leaderboards, the streak, and the reader's standing on the
+// opening screens.
 
 // Board tabs: today's puzzle, and the week so far.
 const (
@@ -186,4 +188,41 @@ func StreakOf(today int, days []Played) Streak {
 		return Streak{Before: run(i)}
 	}
 	return Streak{}
+}
+
+// Shown is the streak the title screen shows: the run ending at the
+// reader's puzzle once they have finished it, and until then the run
+// they can still extend by finishing it. A game finished with nothing
+// shows nothing: the run it ended is over.
+func (s Streak) Shown(finished bool) int {
+	if finished {
+		return s.Now
+	}
+	return s.Before
+}
+
+// Neither opening screen shows a leaderboard: today's would be strangers
+// the reader cannot be on yet, and it would start them off behind. They
+// show the reader's own standing instead, their place on this week's
+// board, which the result's This week tab then shows them on.
+
+// Week is the reader's place on the week's board: their rank, and how
+// many players the board ranks, the reader among them.
+type Week struct {
+	Rank    int `json:"rank"`
+	Players int `json:"players"`
+}
+
+// StandingDays are the puzzle days the reader's standing adds up: from
+// the Monday of the ISO week their puzzle's day falls in, through their
+// puzzle's day once they have finished it, and through the day before
+// until then, so not having played yet never counts against them. On a
+// Monday before playing, through is the Sunday before from, and no day
+// counts at all.
+func StandingDays(day time.Time, finished bool) (from, through time.Time) {
+	day = Today(day)
+	if !finished {
+		return Monday(day), day.AddDate(0, 0, -1)
+	}
+	return Monday(day), day
 }

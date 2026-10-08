@@ -38,6 +38,7 @@ import {
   andList,
   answerLabel,
   avatarColours,
+  boardLayout,
   boardLines,
   boardNote,
   boardPayload,
@@ -74,6 +75,7 @@ import {
   moveSig,
   narrowed,
   newKey,
+  ord,
   newWrongGuess,
   peopleByCard,
   peopleOf,
@@ -89,6 +91,7 @@ import {
   resultsDelay,
   resumeCards,
   revealedOf,
+  rowBoundsOf,
   rowsBottom,
   scrollTarget,
   seamsFor,
@@ -98,18 +101,22 @@ import {
   shareText,
   staggerDelays,
   staleGame,
+  standingText,
   statsOf,
   streakAfter,
   usedList,
   watchMidnight,
   weekdayOf,
+  yearOf,
   yearRuledOut,
+  yearTargets,
+  YEAR_PLACEHOLDER,
   type Bounds,
   type BoardsSeen,
   type GuessFound,
 } from './daily';
 import css from './grid.css?raw';
-import { layoutGrid, xOf, type GridLayout } from './grid';
+import { bandClass, railYearClass, xOf, type GridLayout } from './grid';
 
 // ---- a puzzle to play with: The Matrix, on a board of eight ----
 
@@ -232,10 +239,11 @@ function ended(g: DailyGame, won: boolean): DailyGame {
   };
 }
 
-const layoutFor = (today: DailyToday, game: DailyGame | null, width = 1440): GridLayout => {
-  const { payload, settings } = boardPayload(today, game);
-  return layoutGrid(payload, width, settings);
-};
+const layoutFor = (today: DailyToday, game: DailyGame | null, width = 1440, compact?: boolean): GridLayout =>
+  boardLayout(boardPayload(today, game), width, compact);
+
+/** The Year clue's entry, as the server logs it. */
+const yearEntry = (year: number): DailyEntry => ({ type: 'year', cost: 200, year });
 
 describe('what turning a card over costs', () => {
   it('runs from 20 to 80 in fives, by the card’s rating', () => {
@@ -277,7 +285,7 @@ describe('the rules’ prices', () => {
     // The server charges, and sends the next wrong guess's price with the
     // game; these are what the intro says.
     expect(DAILY_START).toBe(1000);
-    expect(CLUE_COST).toEqual({ director: 150, actor: 150, genres: 80, story: 300 });
+    expect(CLUE_COST).toEqual({ director: 150, actor: 150, genres: 80, year: 200 });
     expect([WRONG_BASE, WRONG_STEP]).toEqual([100, 50]);
   });
 });
@@ -563,9 +571,13 @@ describe('the bound lines', () => {
     ]);
   });
 
-  it('name a pinned year once, with no line under it', () => {
+  it('rule a pinned year on both edges of its row, and name it once, inside the row', () => {
     const { years } = boundLines({ yLo: 1999, yHi: 1999, rLo: 0, rHi: 10 }, l);
-    expect(years.map((y) => y.label)).toEqual(['1999']);
+    const r = l.rows.find((w) => w.year === 1999)!;
+    expect(years).toEqual([
+      { kind: 'from', y: r.top, labelTop: r.top + 6, labelLeft: l.metrics.railW + 10, label: '1999' },
+      { kind: 'until', y: r.top + r.height, labelTop: r.top + r.height - 24, labelLeft: l.metrics.railW + 10, label: '' },
+    ]);
   });
 
   it('draw no year line that would rule nothing out', () => {
@@ -583,6 +595,198 @@ describe('the bound lines', () => {
 
   it('draw nothing before a guess', () => {
     expect(boundLines(null, l)).toEqual({ ratings: [], years: [] });
+  });
+});
+
+describe('the year on the map', () => {
+  // The Matrix's own case: nothing else on its map is from 1999, and
+  // there are cards from the years either side of it, so the row it
+  // opens closes a gap.
+  const matrixLike = todayOf({
+    cards: [
+      { id: 'c1', year: 1971, rating: 5.5, md: 0 },
+      { id: 'c2', year: 1993, rating: 7.3, md: 811 },
+      { id: 'c3', year: 1994, rating: 6.3, md: 701 },
+      { id: 'c9', year: 1998, rating: 6.6, md: 0 },
+      { id: 'c6', year: 2000, rating: 7.0, md: 0 },
+      { id: 'c4', year: 2003, rating: 7.2, md: 515 },
+    ],
+  });
+  const bought = gameOf([yearEntry(1999)], { pts: 800 });
+  const at = (l: GridLayout, y: number) => l.rows.find((r) => r.year === y)!;
+  const span = (l: GridLayout) => l.rows.map((r) => [r.year, r.top, r.height]);
+
+  it('is known from the entry Year logs, and from nothing before it', () => {
+    expect(yearOf(null)).toBeNull();
+    expect(yearOf(gameOf([guess(BOUND, 'newer', 'higher')]))).toBeNull();
+    expect(yearOf(bought)).toBe(1999);
+  });
+
+  it('never reaches the board before it is bought', () => {
+    const g = gameOf([
+      { type: 'flip', card: 'c4', cost: 55, relative: { shared: 4 } },
+      guess(BOUND, 'newer', 'higher', { shared: [LANA] }),
+    ]);
+    const { payload, settings } = boardPayload(matrixLike, g);
+    expect(JSON.stringify(payload)).not.toContain('1999');
+    expect(payload.anchor.year).toBe(0);
+    expect(settings.highlightYear).toBe(false);
+  });
+
+  it('opens an empty row between 1998 and 2000, and the gap mark between them goes', () => {
+    const was = layoutFor(matrixLike, gameOf([]));
+    const now = layoutFor(matrixLike, bought);
+    // Before: 1998 and 2000 do not meet, and the 10px mark says so.
+    expect(was.rows.map((r) => r.year)).not.toContain(1999);
+    expect(at(was, 2000).top).toBe(at(was, 1998).top + at(was, 1998).height + 10);
+    // After: three years in a row, meeting.
+    expect(at(now, 1999).top).toBe(at(now, 1998).top + at(now, 1998).height);
+    expect(at(now, 2000).top).toBe(at(now, 1999).top + at(now, 1999).height);
+    // The plot grows by the row, less the mark it closed.
+    expect(rowsBottom(now) - rowsBottom(was)).toBe(114 - 10);
+    expect(plotSize(now, false).h - plotSize(was, false).h).toBe(104);
+  });
+
+  it('is one lane tall: 114 on a desktop, 96 on a phone', () => {
+    expect(at(layoutFor(matrixLike, bought), 1999)).toMatchObject({ height: 114, lanes: 1 });
+    expect(at(layoutFor(matrixLike, bought, 390, true), 1999)).toMatchObject({ height: 96, lanes: 1 });
+  });
+
+  it('holds the row open with a placeholder the layout keeps and the board never draws', () => {
+    // Rated, so the board's settings, which take unrated movies off it,
+    // let it through to make its row.
+    const { payload } = boardPayload(matrixLike, bought);
+    const held = payload.films.find(([id]) => id === YEAR_PLACEHOLDER);
+    expect(held?.[1]).toBe(1999);
+    expect(held?.[2]).toEqual(expect.any(Number));
+    // Taken off the cards again: nothing to draw, press, count or turn.
+    const l = layoutFor(matrixLike, bought);
+    expect(l.cards.map((c) => c.film.id).sort()).toEqual(matrixLike.cards.map((c) => c.id).sort());
+    expect(l.anchor).toBeNull();
+  });
+
+  it('lights the year’s band and label as the map lights a searched year, and nothing before', () => {
+    const l = layoutFor(matrixLike, bought);
+    expect(l.rows.filter((r) => r.anchorYear).map((r) => r.year)).toEqual([1999]);
+    expect(bandClass(at(l, 1999))).toContain('cd-band-anchor');
+    expect(railYearClass(at(l, 1999))).toContain('cd-rail-anchor');
+    expect(layoutFor(matrixLike, gameOf([])).rows.some((r) => r.anchorYear)).toBe(false);
+  });
+
+  it('adds no row when a card shares the year, and marks that one', () => {
+    // The fixture's c7 is from 1999.
+    const today = todayOf();
+    const g = gameOf([yearEntry(1999)]);
+    const was = layoutFor(today, gameOf([]));
+    const now = layoutFor(today, g);
+    expect(boardPayload(today, g).payload.films.some(([id]) => id === YEAR_PLACEHOLDER)).toBe(false);
+    expect(span(now)).toEqual(span(was));
+    expect(seamsFor(was.rows, now.rows).size).toBe(0);
+    expect(now.rows.filter((r) => r.anchorYear).map((r) => r.year)).toEqual([1999]);
+  });
+
+  it('grows out of the seam between its neighbours', () => {
+    const was = layoutFor(matrixLike, gameOf([]));
+    const now = layoutFor(matrixLike, bought);
+    expect(seamsFor(was.rows, now.rows)).toEqual(new Map([[1999, at(was, 2000).top]]));
+  });
+
+  it('fades every other year’s row, and leaves the cards at full strength', () => {
+    const rows = rowBoundsOf(bought);
+    expect(rows).toEqual({ yLo: 1999, yHi: 1999, rLo: 0, rHi: 10 });
+    for (const y of [1971, 1998, 2000, 2003]) expect(yearRuledOut(y, rows), `${y}`).toBe(true);
+    expect(yearRuledOut(1999, rows)).toBe(false);
+    // The cards go by the guesses alone, and there are none.
+    expect(boundsOf(bought)).toBeNull();
+    for (const c of matrixLike.cards) expect(inBounds(c, boundsOf(bought)), c.id).toBe(true);
+  });
+
+  it('leaves a card a wrong guess ruled out at its fade', () => {
+    const g = gameOf([guess(BABY, 'newer', 'higher'), yearEntry(1999)]);
+    expect(inBounds({ year: 1971, rating: 5.5 }, boundsOf(g))).toBe(false);
+    expect(inBounds({ year: 2003, rating: 7.2 }, boundsOf(g))).toBe(true);
+    // Its row is out either way.
+    expect(rowBoundsOf(g)).toEqual({ yLo: 1999, yHi: 1999, rLo: 6.4, rHi: 10 });
+  });
+
+  it('keeps the exact year on the rows after a wrong guess, and adds the guess’s rating line', () => {
+    const g = gameOf([yearEntry(1999), guess(RELOADED, 'older', 'higher')]);
+    expect(rowBoundsOf(g)).toEqual({ yLo: 1999, yHi: 1999, rLo: 7.3, rHi: 10 });
+    const lines = boundLines(rowBoundsOf(g), layoutFor(matrixLike, g));
+    expect(lines.ratings.map((r) => r.label)).toEqual(['7.3+']);
+    // "2002 or earlier" gives way to the year.
+    expect(lines.years.map((y) => y.label)).toEqual(['1999', '']);
+  });
+
+  it('rules both edges of its row across the board, with one tag inside it, just past the rail', () => {
+    for (const [width, compact, railW] of [
+      [1440, false, 72],
+      [390, true, 52],
+    ] as const) {
+      const l = layoutFor(matrixLike, bought, width, compact);
+      const r = at(l, 1999);
+      expect(boundLines(rowBoundsOf(bought), l).years).toEqual([
+        { kind: 'from', y: r.top, labelTop: r.top + 6, labelLeft: railW + 10, label: '1999' },
+        { kind: 'until', y: r.top + r.height, labelTop: r.top + r.height - 24, labelLeft: railW + 10, label: '' },
+      ]);
+    }
+  });
+
+  it('moves the tag to the bottom line on the map’s first year, which has no line over it', () => {
+    const first = todayOf({ cards: matrixLike.cards.filter((c) => c.year > 1999) });
+    const l = layoutFor(first, bought);
+    const r = at(l, 1999);
+    expect(l.rows[0]).toBe(r);
+    const { years } = boundLines(rowBoundsOf(bought), l);
+    expect(years).toEqual([
+      { kind: 'until', y: r.top + r.height, labelTop: r.top + r.height - 24, labelLeft: 82, label: '1999' },
+    ]);
+    // Still inside the row: the tag is 18px tall.
+    expect(years[0].labelTop).toBeGreaterThanOrEqual(r.top);
+    expect(years[0].labelTop + 18).toBeLessThanOrEqual(r.top + r.height);
+  });
+
+  it('draws no line under the map’s last year', () => {
+    const last = todayOf({ cards: matrixLike.cards.filter((c) => c.year < 1999) });
+    const l = layoutFor(last, bought);
+    const r = at(l, 1999);
+    expect(l.rows[l.rows.length - 1]).toBe(r);
+    expect(boundLines(rowBoundsOf(bought), l).years).toEqual([
+      { kind: 'from', y: r.top, labelTop: r.top + 6, labelLeft: 82, label: '1999' },
+    ]);
+  });
+
+  it('is filled by the answer at the end, so nothing moves and the plot keeps its height', () => {
+    for (const [width, compact] of [
+      [1440, false],
+      [390, true],
+    ] as const) {
+      const play = layoutFor(matrixLike, bought, width, compact);
+      const end = layoutFor(matrixLike, ended(bought, true), width, compact);
+      expect(span(end)).toEqual(span(play));
+      expect(seamsFor(play.rows, end.rows).size).toBe(0);
+      expect(plotSize(end, compact)).toEqual(plotSize(play, compact));
+      expect(end.anchor?.top).toBe(at(play, 1999).top + 12);
+      // Its band keeps the wash.
+      expect(at(end, 1999).anchorYear).toBe(true);
+    }
+    // And the lines go: the answer is on the board.
+    expect(rowBoundsOf(ended(bought, true))).toBeNull();
+  });
+
+  it('is scrolled to: its cards, or a row opened empty at its left edge', () => {
+    const l = layoutFor(matrixLike, bought);
+    expect(yearTargets(l, 1999)).toEqual([{ left: 72 + 8, top: at(l, 1999).top + 12 }]);
+    // Centred in the part the panel leaves clear, which keeps it at the
+    // left edge.
+    const view = { w: 1366 - 380 - 32, h: 700 };
+    expect(scrollTarget(yearTargets(l, 1999), { w: 168, h: 90 }, view)).toEqual({
+      left: 0,
+      top: Math.max(0, at(l, 1999).top + 12 + 45 - (26 + 700) / 2),
+    });
+    const shared = layoutFor(todayOf(), gameOf([yearEntry(1999)]));
+    expect(yearTargets(shared, 1999)).toEqual([shared.cards.find((c) => c.film.id === 'c7')]);
+    expect(yearTargets(l, 1950)).toEqual([]);
   });
 });
 
@@ -674,16 +878,18 @@ describe('the feed', () => {
     expect(markedText(14)).toBe('14 of their movies are marked on the map.');
   });
 
-  it('lists the genres and quotes the opening line', () => {
-    const feed = feedOf(
-      today,
-      gameOf([
-        { type: 'genres', cost: 80, genres: ['Action', 'Sci-Fi'] },
-        { type: 'story', cost: 300, opening: 'A hacker learns the truth.' },
-      ]),
-    );
+  it('lists the genres, and says the year and that the map marks it', () => {
+    const feed = feedOf(today, gameOf([{ type: 'genres', cost: 80, genres: ['Action', 'Sci-Fi'] }, yearEntry(1999)]));
     expect(feed[1]).toMatchObject({ label: 'Genres', text: 'Action, Sci-Fi', cost: '−80' });
-    expect(feed[2]).toMatchObject({ label: 'How it starts', quote: 'A hacker learns the truth.', text: '' });
+    expect(feed[2]).toMatchObject({
+      label: 'Year',
+      cost: '−200',
+      text: 'It came out in 1999. The map marks where that year sits.',
+      faces: [],
+      chips: [],
+    });
+    // No text clue is left to quote.
+    expect(Object.keys(feed[2])).not.toContain('quote');
   });
 
   it('says what a wrong guess shares, and where the answer is from it', () => {
@@ -742,15 +948,27 @@ describe('where a wrong guess puts the answer', () => {
 describe('the clue buttons', () => {
   const today = todayOf();
 
-  it('offer Directors, Actor, Genres and How it starts at their prices', () => {
+  it('offer Directors, Actor, Genres and Year at their prices', () => {
     const b = clueButtons(today, gameOf([]));
-    expect(b.map((x) => [x.label, x.tag, x.off])).toEqual([
-      ['Directors', '150', false],
-      ['Actor', '150', false],
-      ['Genres', '80', false],
-      ['How it starts', '300', false],
+    expect(b.map((x) => [x.clue, x.label, x.tag, x.off])).toEqual([
+      ['director', 'Directors', '150', false],
+      ['actor', 'Actor', '150', false],
+      ['genres', 'Genres', '80', false],
+      ['year', 'Year', '200', false],
     ]);
     expect(b[0].aria).toBe('Directors for 150 points');
+    expect(b[3]).toMatchObject({ priced: true, aria: 'Year for 200 points' });
+  });
+
+  it('say "Seen" for the year once it is bought, and take no more for it', () => {
+    const b = clueButtons(today, gameOf([yearEntry(1999)], { pts: 800 }))[3];
+    expect(b).toMatchObject({ tag: 'Seen', priced: false, off: true, aria: 'Year: seen' });
+  });
+
+  it('keep the year’s price showing when the points will not cover it', () => {
+    const b = clueButtons(today, gameOf([], { pts: 199 }))[3];
+    expect(b).toMatchObject({ tag: '200', priced: true, off: true, aria: 'Year for 200 points' });
+    expect(clueButtons(today, gameOf([], { pts: 200 }))[3].off).toBe(false);
   });
 
   it('say "Director" when the answer has one', () => {
@@ -848,10 +1066,10 @@ describe('the result', () => {
         { type: 'start' },
         { type: 'flip', card: 'c5', cost: 55, film: BOUND },
         { type: 'person', role: 'director', cost: 150, people: [LANA, LILLY] },
-        { type: 'story', cost: 300, opening: 'x' },
+        yearEntry(1999),
         guess(BOUND, 'newer', 'higher'),
       ]),
-    ).toEqual(['1 card', '2 people', 'the opening line', '1 wrong guess']);
+    ).toEqual(['1 card', '2 people', 'the year', '1 wrong guess']);
     expect(
       usedList([
         { type: 'flip', card: 'c5', cost: 55, film: BOUND },
@@ -867,6 +1085,23 @@ describe('the result', () => {
   it('heads a solve with its points, and anything else with none', () => {
     expect(resultTitle(ended(gameOf([], { pts: 6950 }), true))).toBe('6,950 points');
     expect(resultTitle(ended(gameOf([], { pts: 0 }), false))).toBe('No points today');
+  });
+
+  it('joins the year to the others, after the genres', () => {
+    const g = ended(
+      gameOf(
+        [
+          { type: 'flip', card: 'c5', cost: 55, film: BOUND },
+          { type: 'flip', card: 'c6', cost: 55, film: BOUND },
+          { type: 'genres', cost: 80, genres: ['Action'] },
+          yearEntry(1999),
+          { type: 'win' },
+        ],
+        { pts: 610 },
+      ),
+      true,
+    );
+    expect(resultSub(g)).toBe('Solved in 3:12. You used 2 cards, the genres and the year.');
   });
 
   it('says how long a solve took and what it used', () => {
@@ -1072,6 +1307,31 @@ describe('the intro', () => {
   });
 });
 
+describe('a place this week', () => {
+  it('is written with its suffix, "th" for the teens, and en-GB thousands', () => {
+    expect([1, 2, 3, 4, 11, 12, 13, 21, 101, 111, 1204].map(ord)).toEqual([
+      '1st',
+      '2nd',
+      '3rd',
+      '4th',
+      '11th',
+      '12th',
+      '13th',
+      '21st',
+      '101st',
+      '111th',
+      '1,204th',
+    ]);
+    expect([22, 23, 102, 112, 1203, 1000].map(ord)).toEqual(['22nd', '23rd', '102nd', '112th', '1,203rd', '1,000th']);
+  });
+
+  it('says where the reader stands this week, or nothing', () => {
+    expect(standingText({ rank: 1204, players: 83500 })).toBe('1,204th this week');
+    expect(standingText(null)).toBe('');
+    expect(standingText(undefined)).toBe('');
+  });
+});
+
 describe('time', () => {
   it('writes a game’s clock as minutes and seconds', () => {
     expect(mmss(0)).toBe('0:00');
@@ -1252,7 +1512,7 @@ describe('a move', () => {
   it('is the same request from the same point, and a new one from the next', () => {
     expect(moveSig({ kind: 'flip', card: 'c5' }, 3)).toBe(moveSig({ kind: 'flip', card: 'c5' }, 3));
     expect(moveSig({ kind: 'flip', card: 'c5' }, 3)).not.toBe(moveSig({ kind: 'flip', card: 'c5' }, 4));
-    expect(moveSig({ kind: 'buy', clue: 'genres' }, 3)).not.toBe(moveSig({ kind: 'buy', clue: 'story' }, 3));
+    expect(moveSig({ kind: 'buy', clue: 'genres' }, 3)).not.toBe(moveSig({ kind: 'buy', clue: 'year' }, 3));
     expect(moveSig({ kind: 'guess', film: 'tt1' }, 3)).toBe('3:guess:tt1');
     expect(moveSig({ kind: 'reveal' }, 5)).toBe('5:reveal:');
   });
@@ -1418,6 +1678,82 @@ function declsIn(selector: string, media: string | null): Map<string, string> {
   return out;
 }
 
+describe('the year’s marks in the stylesheet', () => {
+  const REDUCED = '(prefers-reduced-motion: reduce)';
+
+  it('washes the year’s band and lights its label, a decade keeping its face', () => {
+    expect(declsIn('.cd-band-anchor', null).get('background')).toBe('var(--accWash)');
+    const label = declsIn('.cd-rail-anchor', null);
+    expect([label.get('font-size'), label.get('font-weight'), label.get('color')]).toEqual(['13px', '700', 'var(--accText)']);
+    const decade = declsIn('.cd-rail-decade.cd-rail-anchor', null);
+    expect([decade.get('font-size'), decade.get('font-weight')]).toEqual(['16px', '400']);
+    expect(declsIn('.cd-rail-decade', null).get('font-family')).toBe("'Young Serif', serif");
+  });
+
+  it('opens the row on the map’s reflow curve, fading the other years and the new label over .4s', () => {
+    expect(declsIn('.cd-daily .cd-band', null).get('transition')).toBe(
+      'top 0.5s var(--ease-row), height 0.5s var(--ease-row), background-color 0.3s ease, opacity 0.4s ease',
+    );
+    expect(declsIn('.cd-daily .cd-rail-slot', null).get('transition')).toBe(
+      'top 0.5s var(--ease-row), height 0.5s var(--ease-row), opacity 0.4s ease',
+    );
+    expect(declsIn('.cd-daily-plot', null).get('transition')).toBe('height 0.5s var(--ease-row)');
+  });
+
+  it('rules its edges across the board in the accent, over the bands and under the cards', () => {
+    const across = declsIn('.cd-daily-bound-across', null);
+    expect(across.get('border-top')).toBe('1.5px dashed var(--acc)');
+    expect([across.get('left'), across.get('right')]).toEqual(['0', '0']);
+    expect(across.get('z-index')).toBe('5');
+    expect(across.get('transition')).toBe('top 0.5s ease');
+    const tag = declsIn('.cd-daily-bound-pill', null);
+    expect([tag.get('height'), tag.get('padding'), tag.get('border-radius')]).toEqual(['18px', '0 7px', '6px']);
+    expect([tag.get('background'), tag.get('color'), tag.get('font-size'), tag.get('font-weight')]).toEqual([
+      'var(--acc)',
+      'var(--accInk)',
+      '10.5px',
+      '700',
+    ]);
+  });
+
+  it('moves none of it for a reader who has asked for stillness', () => {
+    for (const sel of [
+      '.cd-daily .cd-band',
+      '.cd-daily .cd-rail-slot',
+      '.cd-daily-plot',
+      '.cd-daily-card',
+      '.cd-daily-bound-across',
+      '.cd-daily-bound-pill-year',
+    ]) {
+      expect(declsIn(sel, REDUCED).get('transition'), sel).toBe('none');
+    }
+  });
+
+  it('dims the Year button at .45 once it is seen or cannot be paid for', () => {
+    expect(declsIn('.cd-daily-clue:disabled', null).get('opacity')).toBe('0.45');
+  });
+
+  it('draws the reader’s place in the streak pill’s box, in the text colour with numbers that line up', () => {
+    const box = declsIn('.cd-daily-streak', null);
+    expect([box.get('height'), box.get('padding'), box.get('border-radius'), box.get('gap')]).toEqual([
+      '24px',
+      '0 9px 0 7px',
+      '8px',
+      '5px',
+    ]);
+    expect([box.get('background'), box.get('box-shadow'), box.get('font-size'), box.get('font-weight')]).toEqual([
+      'var(--c)',
+      'inset 0 0 0 1px var(--ln3)',
+      '12.5px',
+      '700',
+    ]);
+    const own = declsIn('.cd-daily-standing', null);
+    expect([own.get('color'), own.get('font-variant-numeric')]).toEqual(['var(--t)', 'tabular-nums']);
+    expect(declsIn('.cd-daily-streak svg', null).get('color')).toBe('var(--acc)');
+    expect(css).not.toContain('.cd-daily-quote');
+  });
+});
+
 describe('the guess list in forced colours', () => {
   it('keeps the list’s edge, which is otherwise only a shadow', () => {
     expect(declsIn('.cd-daily-options', '(forced-colors: active)').get('outline')).toBe('1px solid ButtonText');
@@ -1438,7 +1774,7 @@ describe('the Daily’s words', () => {
         { type: 'flip', card: 'c4', cost: 55, relative: { shared: 4 } },
         { type: 'person', role: 'director', cost: 150, people: [LANA, LILLY] },
         { type: 'genres', cost: 80, genres: ['Action'] },
-        { type: 'story', cost: 300, opening: 'x' },
+        yearEntry(1999),
         guess(BOUND, 'newer', 'higher', { shared: [LANA] }),
         guess(film('tt9', 'Casablanca', 1942, 8.5), 'newer', 'higher'),
         { type: 'win' },
@@ -1456,6 +1792,8 @@ describe('the Daily’s words', () => {
       cardLabel(today.cards[0], { kind: 'relative', shared: 3 }),
       answerLabel(MATRIX),
       ...['points', 'known', 'unknown', 'day', 'done', 'cookie', 'busy', 'not-ready', null].map((r) => refusalText(r, 'guess')),
+      ...clueButtons(today, gameOf([])).flatMap((b) => [b.label, b.aria]),
+      standingText({ rank: 1204, players: 83500 }),
       boardNote('today', 2, 'x', false),
       boardNote('week', 2, 'x', true),
       hintText(true, 100),

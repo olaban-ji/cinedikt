@@ -8,12 +8,20 @@ import (
 
 // The kinds of move a game records. The four clues a player can buy
 // share their names with the API's "kind" field.
+//
+// The rule for any clue added here: none may give the answer away in a
+// single search. So no plot, no tagline, no quote and no characters'
+// names: any line of a movie's text can be pasted into a search engine,
+// and "How it starts", the first sentence of the synopsis, did exactly
+// that, The Matrix's naming Neo and Morpheus. It was retired for the
+// year. A director or an actor can still be searched, through their
+// filmography, but that takes several steps, and each costs 150.
 const (
 	KindFlip     = "flip"
 	KindDirector = "director"
 	KindActor    = "actor"
 	KindGenres   = "genres"
-	KindStory    = "story"
+	KindYear     = "year"
 	KindGuess    = "guess"
 	KindReveal   = "reveal"
 )
@@ -79,8 +87,9 @@ type State struct {
 	// guesses, as slots, in the order learned. Nobody is in both.
 	Bought []int
 	Found  []int
+	// Genres and Year are whether those clues have been bought.
 	Genres bool
-	Story  bool
+	Year   bool
 	// Wrong is how many wrong guesses there have been.
 	Wrong int
 	// Done is a game that has ended, Won by naming the answer, GaveUp by
@@ -135,9 +144,9 @@ func (s *State) Step(p *Puzzle, m Move) {
 	case KindGenres:
 		s.Pts -= m.Cost
 		s.Genres = true
-	case KindStory:
+	case KindYear:
 		s.Pts -= m.Cost
-		s.Story = true
+		s.Year = true
 	case KindGuess:
 		s.guessed[m.Arg] = true
 		if m.Arg == p.Answer.ID {
@@ -167,6 +176,17 @@ func (s *State) Step(p *Puzzle, m Move) {
 		}
 	case KindReveal:
 		s.Done, s.GaveUp = true, true
+	default:
+		// A kind this engine does not know is refused, as Apply refuses
+		// it, by being taken as nothing: it costs nothing, shows nothing
+		// and has no line in the log. The game still replays, and the
+		// move still counts in seq, so the page can go on from it. None
+		// should ever be met. The only kind retired so far is "story"
+		// ("How it starts"), and no game kept one: nothing had shipped,
+		// production had no daily tables, the local test games were
+		// deleted when the year replaced it, and the moves table's check
+		// now refuses it. So nothing here reads an old game's clue.
+		return
 	}
 	if s.Done && !s.Won {
 		s.Pts = 0
@@ -247,12 +267,12 @@ func Apply(p *Puzzle, s *State, r Request, looked *Looked) (Move, error) {
 			return Move{}, ErrKnown
 		}
 		m.Cost = GenresCost
-	case KindStory:
+	case KindYear:
 		m.Arg = ""
-		if s.Story {
+		if s.Year {
 			return Move{}, ErrKnown
 		}
-		m.Cost = StoryCost
+		m.Cost = YearCost
 	case KindGuess:
 		if s.guessed[r.Arg] {
 			return Move{}, ErrKnown

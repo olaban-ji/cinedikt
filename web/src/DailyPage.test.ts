@@ -1,12 +1,20 @@
 import { createElement, type ComponentProps, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DailyEntry, DailyFilm, DailyGame, DailyPerson, DailyToday } from './api';
+import {
+  fetchDailyWeek,
+  type DailyEntry,
+  type DailyFilm,
+  type DailyGame,
+  type DailyPerson,
+  type DailyToday,
+  type DailyWeek,
+} from './api';
 import { BoardCard } from './DailyBoard';
 import { DailyIntro, nextStop } from './DailyIntro';
-import { DailyGameView, DailyHeaderTail, DailyPage } from './DailyPage';
+import { DailyGameView, DailyHeaderTail, DailyPage, askForStanding, fetchDailyPage } from './DailyPage';
 import { DailyPanel } from './DailyPanel';
-import { boardPayload } from './daily';
+import { YEAR_PLACEHOLDER, boardPayload } from './daily';
 import { layoutGrid } from './grid';
 
 // ---- a small puzzle: The Matrix, on a board of six ----
@@ -94,13 +102,15 @@ function won(): DailyGame {
   });
 }
 
-/** The game for this puzzle, as its first render draws it. Effects never
- *  run on the server renderer, so nothing is fetched, nothing is scrolled
- *  and nothing moves: what is left is what each state draws. */
-function drawn(game: DailyGame | null): string {
+/** The game for this puzzle, as its first render draws it, with the
+ *  reader's place this week as the page asked for it, or none. Effects
+ *  never run on the server renderer, so nothing is fetched, nothing is
+ *  scrolled and nothing moves: what is left is what each state draws. */
+function drawn(game: DailyGame | null, week: DailyWeek | null = null): string {
   return renderToStaticMarkup(
     createElement(DailyGameView, {
       today: todayOf(game),
+      week,
       offset: 0,
       say: () => {},
       reload: () => {},
@@ -150,7 +160,7 @@ describe('the page before Play', () => {
       ['See a director', '150'],
       ['See an actor', '150'],
       ['See its genres', '80'],
-      ['Read how it starts', '300'],
+      ['See its year', '200'],
       ['A wrong guess', '100+'],
     ]) {
       expect(html).toMatch(new RegExp(`${label}</span><span class="cd-daily-tag[^"]*">${tag.replace('+', '\\+')}<`));
@@ -173,7 +183,7 @@ describe('the page before Play', () => {
   it('counts nobody before anyone has played, and still says when the clock starts', () => {
     const today = { ...todayOf(null), played: 0 };
     const html = renderToStaticMarkup(
-      createElement(DailyGameView, { today, offset: 0, say: () => {}, reload: () => {}, rulesSignal: 0 }),
+      createElement(DailyGameView, { today, week: null, offset: 0, say: () => {}, reload: () => {}, rulesSignal: 0 }),
     );
     expect(html).not.toContain('people have played today');
     expect(html).not.toContain('cd-daily-live-n');
@@ -188,6 +198,7 @@ describe('a new name on its way', () => {
     name: 'Tr?ntky K?mble',
     spinning,
     streak: 0,
+    rank: '',
     rules: !!game,
     busy: false,
     dialogRef: { current: null },
@@ -237,7 +248,7 @@ describe('the page while the game is on', () => {
     const html = drawn(gameOf([]));
     expect(html).toContain('aria-label="Clues to buy"');
     expect(html).toContain('aria-label="Directors for 150 points"');
-    expect(html).toContain('aria-label="How it starts for 300 points"');
+    expect(html).toContain('aria-label="Year for 200 points"');
     expect(html).toContain('placeholder="Name the movie"');
     expect(html).toContain('role="combobox"');
     expect(html).toContain('Click a blank card to turn it over. Your next wrong guess costs 100.');
@@ -295,6 +306,221 @@ describe('the page while the game is on', () => {
   });
 });
 
+describe('the page once the year is bought', () => {
+  // No card on this board is from 1999, so a row opens for it.
+  const YEAR: DailyEntry = { type: 'year', cost: 200, year: 1999 };
+  const band = (html: string, year: number) =>
+    html.match(new RegExp(`<div class="cd-band[^"]*" style="[^"]*" data-band="${year}"`))?.[0] ?? '';
+  const label = (html: string, year: number) =>
+    html.match(new RegExp(`data-rail="${year}"><span class="[^"]*"`))?.[0] ?? '';
+
+  it('says the year in the feed, and the button says it has been seen', () => {
+    const html = drawn(gameOf([YEAR], { pts: 800 }));
+    expect(html).toContain('It came out in 1999. The map marks where that year sits.');
+    expect(html).toMatch(/<span>Year<\/span><span class="cd-daily-entry-cost">−200<\/span>/);
+    expect(html).toMatch(/<button type="button" class="cd-daily-clue" disabled="" aria-label="Year: seen">/);
+    expect(html).toContain('<span class="cd-daily-tag cd-daily-tag-muted">Seen</span>');
+    expect(html).toContain('aria-valuenow="800"');
+  });
+
+  it('opens a row for it, washed and labelled in the accent, with no card drawn in it', () => {
+    const html = drawn(gameOf([YEAR], { pts: 800 }));
+    expect(band(html, 1999)).toContain('cd-band-anchor');
+    expect(band(html, 1999)).not.toContain('opacity');
+    expect(label(html, 1999)).toContain('cd-rail-anchor');
+    expect(html).not.toContain(YEAR_PLACEHOLDER);
+    expect(html.match(/data-card="/g)).toHaveLength(6);
+  });
+
+  it('fades every other year to .35, and no card', () => {
+    const html = drawn(gameOf([YEAR], { pts: 800 }));
+    for (const y of [1971, 1993, 1994, 1996, 2000, 2003]) {
+      expect(band(html, y), `${y}`).toContain('opacity:0.35');
+      expect(html, `${y}`).toMatch(new RegExp(`style="[^"]*opacity:0\\.35" data-rail="${y}"`));
+    }
+    // The starting three included: the year rules no card out.
+    expect(html).not.toContain('opacity:0.28');
+  });
+
+  it('rules both edges of the row and names it once', () => {
+    const html = drawn(gameOf([YEAR], { pts: 800 }));
+    expect(html.match(/class="cd-daily-bound-across"/g)).toHaveLength(2);
+    expect(html.match(/cd-daily-bound-pill-year"[^>]*>1999</g)).toHaveLength(1);
+  });
+
+  it('keeps the year on the rows after a wrong guess, adds its rating line, and fades the cards it rules out', () => {
+    const html = drawn(
+      gameOf([YEAR, { type: 'guess', cost: 100, film: BABY, card: 'c3', shared: [], year: 'newer', rating: 'higher' }], {
+        pts: 700,
+      }),
+    );
+    expect(html).toContain('6.4+');
+    expect(html).not.toContain('1995 or later');
+    expect(html.match(/cd-daily-bound-pill-year"[^>]*>1999</g)).toHaveLength(1);
+    // Man and Boy, 1971 and 5.5, is ruled out by the guess; The Matrix
+    // Reloaded's blank card, 2003 and 7.2, is not, though its row is.
+    expect(html).toMatch(/data-card="c1"[^>]*opacity:0\.28/);
+    expect(html).not.toMatch(/data-card="c4"[^>]*opacity:0\.28/);
+  });
+
+  it('keeps the row’s wash once the game is over, with the answer in it', () => {
+    const g = won();
+    const html = drawn({ ...g, log: [g.log[0], YEAR, ...g.log.slice(1)] });
+    expect(band(html, 1999)).toContain('cd-band-anchor');
+    expect(html).toContain('data-answer="1"');
+    expect(html).not.toContain('cd-daily-bound-across');
+    expect(html).toContain('You used 1 card and the year.');
+  });
+});
+
+describe('the reader’s place on the title screen', () => {
+  const props = (game: DailyGame | null, rank: string): ComponentProps<typeof DailyIntro> => ({
+    today: todayOf(game),
+    game,
+    name: 'Trinity Kimble',
+    spinning: false,
+    streak: 3,
+    rank,
+    rules: !!game,
+    busy: false,
+    dialogRef: { current: null },
+    nameRef: { current: null },
+    onGo: () => {},
+    onReroll: () => {},
+    onClose: () => {},
+  });
+  const intro = (game: DailyGame | null, rank: string) =>
+    renderToStaticMarkup(createElement(DailyIntro, props(game, rank)));
+
+  it('follows the streak, in the streak pill’s box, with a podium for the flame', () => {
+    const html = intro(null, '1,204th this week');
+    expect(html).toMatch(
+      /<span class="cd-daily-streak">[\s\S]*?3-day streak<\/span><span class="cd-daily-streak cd-daily-standing"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M4.5 21v-6h5v6M9.5 21V8h5v13M14.5 21v-4h5v4"><\/path><\/svg>1,204th this week<\/span><\/div>/,
+    );
+  });
+
+  it('shows on every visit, the rules after playing included', () => {
+    expect(intro(gameOf([]), '1,204th this week')).toContain('1,204th this week');
+    expect(intro(won(), '1,203rd this week')).toContain('1,203rd this week');
+  });
+
+  it('is not there without a place to show', () => {
+    expect(intro(null, '')).not.toContain('cd-daily-standing');
+  });
+
+  it('is drawn in the title screen’s first frame, from the place the page asked for with the puzzle', () => {
+    // Not a round trip later, when it would re-centre the row it sits in
+    // part way through the entrance.
+    const html = drawn(null, { rank: 1204, players: 83500 });
+    expect(html).toMatch(
+      /<span class="cd-daily-streak cd-daily-standing"><svg[\s\S]*?<\/svg>1,204th this week<\/span>/,
+    );
+    expect(drawn(null)).not.toContain('cd-daily-standing');
+  });
+
+  it('comes with no leaderboard', () => {
+    const page = drawn(null, { rank: 1204, players: 83500 });
+    for (const html of [intro(null, '1,204th this week'), intro(won(), '1,204th this week'), page]) {
+      expect(html).not.toContain('cd-daily-row');
+      expect(html).not.toContain('Leaderboard');
+    }
+  });
+});
+
+describe('asking for the reader’s place', () => {
+  const WEEK: DailyWeek = { rank: 1204, players: 83500 };
+  // The place over the days before today, as the page opened with it.
+  const BEFORE: DailyWeek = { rank: 2048, players: 83500 };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A fetch that answers today's puzzle and the reader's standing by
+   *  address, and remembers what it was asked. A status of 0 is a request
+   *  that never got an answer. */
+  function stub(daily: { status: number; body?: unknown }, me: { status: number; body?: unknown }) {
+    const fetch = vi.fn(async (url: string) => {
+      const a = new URL(url, 'https://cinedikt.test').pathname === '/api/daily/me' ? me : daily;
+      if (a.status === 0) throw new TypeError('Failed to fetch');
+      return {
+        ok: a.status >= 200 && a.status < 300,
+        status: a.status,
+        statusText: '',
+        json: async () => a.body,
+      };
+    });
+    vi.stubGlobal('fetch', fetch);
+    return fetch;
+  }
+
+  it('asks for today’s puzzle and the reader’s place together as the page opens, both in the reader’s zone', async () => {
+    vi.spyOn(Intl, 'DateTimeFormat').mockImplementation((() => ({
+      resolvedOptions: () => ({ timeZone: 'Asia/Tokyo' }),
+    })) as unknown as typeof Intl.DateTimeFormat);
+    const fetch = stub({ status: 200, body: todayOf(null) }, { status: 200, body: { streak: 3, week: WEEK } });
+    await expect(fetchDailyPage(new AbortController().signal)).resolves.toEqual({ today: todayOf(null), week: WEEK });
+    const asked = fetch.mock.calls.map(([url]) => new URL(url, 'https://cinedikt.test'));
+    expect(asked.map((u) => u.pathname).sort()).toEqual(['/api/daily', '/api/daily/me']);
+    for (const u of asked) expect(u.searchParams.get('tz')).toBe('Asia/Tokyo');
+  });
+
+  it('opens the page with no place when the place cannot be had, or there is none', async () => {
+    for (const me of [{ status: 503 }, { status: 0 }, { status: 200, body: { streak: 0, week: null } }]) {
+      stub({ status: 200, body: todayOf(null) }, me);
+      const got = await fetchDailyPage(new AbortController().signal);
+      expect(got.today.no, `${me.status}`).toBe(142);
+      expect(got.week, `${me.status}`).toBeNull();
+    }
+  });
+
+  it('fails the page only when today’s puzzle fails', async () => {
+    stub(
+      { status: 503, body: { error: 'no puzzle yet', reason: 'not-ready' } },
+      { status: 200, body: { streak: 3, week: WEEK } },
+    );
+    await expect(fetchDailyPage(new AbortController().signal)).rejects.toMatchObject({ reason: 'not-ready' });
+  });
+
+  it('takes the place worked out with today in once the game ends here', async () => {
+    stub({ status: 200 }, { status: 200, body: { streak: 4, week: WEEK } });
+    let held: DailyWeek | null = BEFORE;
+    await askForStanding(fetchDailyWeek, new AbortController().signal, (w) => (held = w));
+    expect(held).toEqual(WEEK);
+  });
+
+  it('shows no place, never the one from before today’s game, when the place after it cannot be had', async () => {
+    for (const me of [{ status: 503 }, { status: 0 }]) {
+      stub({ status: 200 }, me);
+      let held: DailyWeek | null = BEFORE;
+      await askForStanding(fetchDailyWeek, new AbortController().signal, (w) => (held = w));
+      expect(held, `${me.status}`).toBeNull();
+    }
+    // Nor with a fetcher that fails outright.
+    let held: DailyWeek | null = BEFORE;
+    await askForStanding(() => Promise.reject(new Error('down')), new AbortController().signal, (w) => (held = w));
+    expect(held).toBeNull();
+  });
+
+  it('lets the place from before go as it asks, so none is shown while the new one is on its way', () => {
+    const told: (DailyWeek | null)[] = [];
+    void askForStanding(() => new Promise(() => {}), new AbortController().signal, (w) => told.push(w));
+    expect(told).toEqual([null]);
+  });
+
+  it('drops an answer that lands after the view has gone', async () => {
+    const ctrl = new AbortController();
+    // The view goes while the place is on its way.
+    const fetcher = async () => {
+      ctrl.abort();
+      return WEEK;
+    };
+    const told: (DailyWeek | null)[] = [];
+    await askForStanding(fetcher, ctrl.signal, (w) => told.push(w));
+    expect(told).toEqual([null]);
+  });
+});
+
 describe('the page once the game is over', () => {
   it('puts the answer in its place, ringed and tagged, with its year lit', () => {
     const html = drawn(won());
@@ -349,6 +575,7 @@ describe('the rules', () => {
     name: 'Trinity Kimble',
     spinning: false,
     streak: 0,
+    rank: '',
     rules: true,
     busy: false,
     dialogRef: { current: null },

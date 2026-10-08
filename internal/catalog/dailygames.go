@@ -441,6 +441,33 @@ const eligibleSQL = `
 
 const listedSQL = `($2 = 0 OR g.player IN (SELECT player FROM eligible))`
 
+// weekSQL is the week's board of puzzle $1 as board, every row of it,
+// ranked: each player listed for $1 (eligibleSQL, $2), and player $3
+// whether or not they are, with the sum of their points over their
+// finished games of the puzzles whose days run from $4 to $5, each
+// day's points by its offset from $4, and their summed time, ranked by
+// points, then time, then who joined first, so a tie always falls the
+// same way. The This week tab reads it (DailyBoard) and so does the
+// standing on the opening screens (DailyStanding), so the two can never
+// rank a player differently.
+const weekSQL = `
+	WITH ` + eligibleSQL + `,
+	week AS (
+	    SELECT g.player, sum(g.pts)::int AS pts, sum(g.ms)::bigint AS ms,
+	           array_agg(z.day - $4::date ORDER BY z.day) AS offsets,
+	           array_agg(g.pts ORDER BY z.day) AS points,
+	           bool_or(` + listedSQL + `) AS listed
+	    FROM meta.daily_games g
+	    JOIN meta.daily_puzzles z ON z.no = g.no
+	    WHERE z.day BETWEEN $4::date AND $5::date AND g.finished_at IS NOT NULL
+	      AND (` + listedSQL + ` OR g.player = $3)
+	    GROUP BY g.player
+	), board AS (
+	    SELECT w.*, pl.name, pl.hue,
+	           row_number() OVER (ORDER BY w.pts DESC, w.ms, w.player) AS rank
+	    FROM week w JOIN meta.daily_players pl ON pl.id = w.player
+	)`
+
 // DailyBoard is one tab of puzzle p's leaderboard, as player sees it; 0
 // is a reader with no player, who sees the top of it.
 //
@@ -457,28 +484,12 @@ func (s *Store) DailyBoard(ctx context.Context, p *daily.Puzzle, tab string, pla
 	var rows pgx.Rows
 	var err error
 	if tab == daily.TabWeek {
-		rows, err = s.pool.Query(ctx, `
-			WITH `+eligibleSQL+`,
-			week AS (
-			    SELECT g.player, sum(g.pts)::int AS pts, sum(g.ms)::bigint AS ms,
-			           array_agg(z.day - $6::date ORDER BY z.day) AS offsets,
-			           array_agg(g.pts ORDER BY z.day) AS points,
-			           bool_or(`+listedSQL+`) AS listed
-			    FROM meta.daily_games g
-			    JOIN meta.daily_puzzles z ON z.no = g.no
-			    WHERE z.day BETWEEN $6::date AND $7::date AND g.finished_at IS NOT NULL
-			      AND (`+listedSQL+` OR g.player = $3)
-			    GROUP BY g.player
-			), board AS (
-			    SELECT w.*, pl.name, pl.hue,
-			           row_number() OVER (ORDER BY w.pts DESC, w.ms, w.player) AS rank
-			    FROM week w JOIN meta.daily_players pl ON pl.id = w.player
-			)
+		rows, err = s.pool.Query(ctx, weekSQL+`
 			SELECT player, name, hue, pts, ms, offsets, points, rank, listed, (SELECT count(*) FROM board)
 			FROM board
-			WHERE rank <= $4 OR abs(rank - (SELECT rank FROM board WHERE player = $3)) <= $5
+			WHERE rank <= $6 OR abs(rank - (SELECT rank FROM board WHERE player = $3)) <= $7
 			ORDER BY rank`,
-			p.No, need, player, daily.TopRows, daily.Around, daily.Monday(p.Day), p.Day)
+			p.No, need, player, daily.Monday(p.Day), p.Day, daily.TopRows, daily.Around)
 	} else {
 		rows, err = s.pool.Query(ctx, `
 			WITH `+eligibleSQL+`,
@@ -546,4 +557,38 @@ func (s *Store) DailyBoard(ctx context.Context, p *daily.Puzzle, tab string, pla
 		}
 	}
 	return b, nil
+}
+
+// DailyStanding is player's place on the week's board of puzzle p, as
+// the opening screens show it before any board: the same players, in
+// the same order, as p's This week tab (weekSQL), listed by p's own
+// rule, so what the opening screens say is what the result shows. Until
+// player has finished p it adds up only the puzzles of p's week before
+// p's day, so not having played yet never counts against them; once
+// they have, it is exactly the tab they are shown (daily.StandingDays).
+// Nil when player is not on that board, or is with nothing, as on a
+// Monday before playing.
+//
+// It ranks the whole board to read one row, which is what the tab does
+// too; the API keeps the answer for a minute.
+func (s *Store) DailyStanding(ctx context.Context, p *daily.Puzzle, player int64, finished bool) (*daily.Week, error) {
+	from, through := daily.StandingDays(p.Day, finished)
+	if through.Before(from) {
+		return nil, nil
+	}
+	var w daily.Week
+	var pts int
+	err := s.pool.QueryRow(ctx, weekSQL+`
+		SELECT rank, pts, (SELECT count(*) FROM board) FROM board WHERE player = $3`,
+		p.No, daily.EarlierGames(p.No), player, from, through).Scan(&w.Rank, &pts, &w.Players)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("catalog: daily standing: %w", err)
+	}
+	if pts <= 0 {
+		return nil, nil
+	}
+	return &w, nil
 }

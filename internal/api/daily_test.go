@@ -55,10 +55,9 @@ func matrixPuzzle() *daily.Puzzle {
 			{ID: "c7", Film: "tt1371111", Title: "Cloud Atlas", Year: 2012, Rating: 7.4, Votes: 380000, People: []int{0, 1}},
 			{ID: "c8", Film: "tt0120601", Title: "Being John Malkovich", Year: 1999, Rating: 7.7, Votes: 400000, People: []int{4}},
 		},
-		Start:   []string{"c2", "c3", "c8"},
-		Opening: "Thomas A. Anderson is a man living two lives.",
-		Era:     1995,
-		Genre:   "Action",
+		Start: []string{"c2", "c3", "c8"},
+		Era:   1995,
+		Genre: "Action",
 	}
 }
 
@@ -76,16 +75,21 @@ type fakeDaily struct {
 	fail    error
 	boards  []string
 	// days are the days DailyPuzzle was asked for, nos the numbers
-	// DailyPuzzleNo was, and streaks the puzzles DailyStreak was, in
+	// DailyPuzzleNo was, streaks the puzzles DailyStreak was, and
+	// standings what DailyStanding was, as "no/player/finished", in
 	// order.
-	days    []string
-	nos     []int
-	streaks []int
+	days      []string
+	nos       []int
+	streaks   []int
+	standings []string
+	// weeks are what DailyStanding answers, before and after the game.
+	weeks map[bool]*daily.Week
 }
 
 func newFakeDaily(puzzles ...*daily.Puzzle) *fakeDaily {
 	f := &fakeDaily{puzzles: map[int]*daily.Puzzle{}, players: map[string]daily.Player{}, names: map[string]bool{},
 		games: map[[2]int64]*daily.Record{},
+		weeks: map[bool]*daily.Week{false: {Rank: 2048, Players: 83500}, true: {Rank: 1204, Players: 83500}},
 		films: map[string]daily.Looked{
 			"tt0111257": {Title: "Speed", Year: 1994, Rating: ptrTo(7.3), Credited: []string{"nm0000206"}},
 			"tt0034583": {Title: "Casablanca", Year: 1942, Rating: ptrTo(8.5)},
@@ -259,11 +263,27 @@ func (f *fakeDaily) DailyPlayed(_ context.Context, no int) (int, error) {
 	return n, f.fail
 }
 
-func (f *fakeDaily) DailyStreak(_ context.Context, _ int64, no int) (daily.Streak, error) {
+// DailyStreak is a run of five ending at No. no once the player has
+// finished it with points, and otherwise one of four they can extend.
+func (f *fakeDaily) DailyStreak(_ context.Context, player int64, no int) (daily.Streak, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.streaks = append(f.streaks, no)
+	rec, p := f.games[[2]int64{player, int64(no)}], f.puzzles[no]
+	if rec != nil && rec.Finished != nil && p != nil && daily.Replay(p, rec.Moves).Pts > 0 {
+		return daily.Streak{Now: 5}, f.fail
+	}
 	return daily.Streak{Before: 4}, f.fail
+}
+
+func (f *fakeDaily) DailyStanding(_ context.Context, p *daily.Puzzle, player int64, finished bool) (*daily.Week, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.standings = append(f.standings, fmt.Sprintf("%d/%d/%v", p.No, player, finished))
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	return f.weeks[finished], nil
 }
 
 func (f *fakeDaily) DailyBoard(_ context.Context, p *daily.Puzzle, tab string, player int64) (daily.Board, error) {
@@ -396,7 +416,7 @@ func ptsOf(t *testing.T, r reply) int { return int(gameOf(t, r)["pts"].(float64)
 func TestDailyIsUnavailableWithoutAStore(t *testing.T) {
 	srv, _ := dailyServer(t, nil)
 	b := newBrowser(t, srv)
-	for _, r := range []reply{b.get("/daily"), b.post("/daily/142/play", map[string]any{}), b.get("/daily/142/board")} {
+	for _, r := range []reply{b.get("/daily"), b.get("/daily/me"), b.post("/daily/142/play", map[string]any{}), b.get("/daily/142/board")} {
 		if r.status != http.StatusServiceUnavailable || r.body["reason"] != "unavailable" {
 			t.Errorf("without a store: %d %s", r.status, r.raw)
 		}
@@ -633,16 +653,18 @@ func TestEachRefusalSaysWhy(t *testing.T) {
 	expect(b.move("flip", 0, map[string]any{"card": "c2"}), http.StatusConflict, "known")
 	expect(b.move("guess", 0, map[string]any{"film": "tt9999999"}), http.StatusNotFound, "unknown")
 	seq := 0
-	for _, kind := range []string{"story", "director", "actor", "actor", "actor"} {
+	for _, kind := range []string{"year", "director", "actor", "actor", "actor", "actor"} {
 		r := b.move("buy", seq, map[string]any{"kind": kind})
 		if r.status != http.StatusOK {
 			t.Fatalf("buy %s: %d %s", kind, r.status, r.raw)
 		}
 		seq++
 	}
-	expect(b.move("buy", seq, map[string]any{"kind": "genres"}), http.StatusOK, "")
-	seq++
+	// Fifty points left.
+	expect(b.move("buy", seq, map[string]any{"kind": "year"}), http.StatusConflict, "known")
+	expect(b.move("buy", seq, map[string]any{"kind": "story"}), http.StatusBadRequest, "bad")
 	expect(b.move("buy", seq, map[string]any{"kind": "director"}), http.StatusConflict, "known")
+	expect(b.move("buy", seq, map[string]any{"kind": "genres"}), http.StatusPaymentRequired, "points")
 	expect(b.move("flip", seq, map[string]any{"card": "c6"}), http.StatusPaymentRequired, "points")
 	expect(b.move("reveal", seq, nil), http.StatusOK, "")
 	seq++
@@ -661,10 +683,64 @@ func TestEachRefusalSaysWhy(t *testing.T) {
 	expect(b.post("/daily/143/reveal", map[string]any{"key": "tomorrow", "seq": 0}), http.StatusNotFound, "no-game")
 }
 
+// yearSaid is everywhere a response says year other than as a movie's
+// own: every number or string that is the year, by its path, unless it
+// is the "year" of an object with an "id", a card or a movie saying its
+// own year, as every card does. The year clue's entry has no id.
+func yearSaid(raw string, year int) []string {
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return []string{"(not JSON)"}
+	}
+	var out []string
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			_, movie := x["id"]
+			for k, e := range x {
+				if !movie || k != "year" {
+					walk(path+"."+k, e)
+				}
+			}
+		case []any:
+			for i, e := range x {
+				walk(fmt.Sprintf("%s[%d]", path, i), e)
+			}
+		case float64:
+			if x == float64(year) {
+				out = append(out, path)
+			}
+		case string:
+			if x == fmt.Sprint(year) {
+				out = append(out, path)
+			}
+		}
+	}
+	walk("", v)
+	slices.Sort(out)
+	return out
+}
+
+// yearEntries are where a response's game logs the year clue.
+func yearEntries(body map[string]any) []string {
+	g, _ := body["game"].(map[string]any)
+	log, _ := g["log"].([]any)
+	var out []string
+	for i, e := range log {
+		if e.(map[string]any)["type"] == "year" {
+			out = append(out, fmt.Sprintf(".game.log[%d].year", i))
+		}
+	}
+	return out
+}
+
 // TestNothingBeforeTheEndNamesTheAnswer: every response a game gets,
 // from the first read through every kind of move short of the end,
-// keeps the answer and every face-down card to itself. The end names
-// it.
+// keeps the answer and every face-down card to itself, and says the
+// answer's year nowhere but in the year clue's entry once it is bought.
+// Being John Malkovich, a starting card, is from the same year, and
+// says so as its own. The end names it.
 func TestNothingBeforeTheEndNamesTheAnswer(t *testing.T) {
 	p := matrixPuzzle()
 	f := newFakeDaily(p)
@@ -691,6 +767,9 @@ func TestNothingBeforeTheEndNamesTheAnswer(t *testing.T) {
 				}
 			}
 		}
+		if got, want := yearSaid(r.raw, p.Answer.Year), yearEntries(r.body); !slices.Equal(got, want) {
+			t.Errorf("%s: the answer's year is said at %v, want %v", when, got, want)
+		}
 	}
 	check(b.get("/daily"), "at load")
 	check(b.post("/daily/142/play", map[string]any{}), "Play")
@@ -708,6 +787,7 @@ func TestNothingBeforeTheEndNamesTheAnswer(t *testing.T) {
 		{"buy", map[string]any{"kind": "genres"}, ""},
 		{"guess", map[string]any{"film": "tt0111257"}, "c4"},
 		{"guess", map[string]any{"film": "tt0034583"}, ""},
+		{"buy", map[string]any{"kind": "year"}, ""},
 	} {
 		if m.ups != "" {
 			up[m.ups] = true
@@ -716,8 +796,12 @@ func TestNothingBeforeTheEndNamesTheAnswer(t *testing.T) {
 		check(r, fmt.Sprintf("%s %v", m.verb, m.body))
 		seq++
 	}
-	check(b.get("/daily"), "reading the game again")
-	stale := b.move("buy", 0, map[string]any{"kind": "story"})
+	read := b.get("/daily")
+	check(read, "reading the game again")
+	if len(yearEntries(read.body)) != 1 {
+		t.Errorf("the year bought is not in the log: %s", read.raw)
+	}
+	stale := b.move("buy", 0, map[string]any{"kind": "year"})
 	if stale.status != http.StatusConflict {
 		t.Fatalf("stale = %d", stale.status)
 	}
@@ -1261,5 +1345,147 @@ func TestOffersAreKeptTwelveHoursAndBounded(t *testing.T) {
 	o.add("Clarice Connor", at.Add(offerLife+2*time.Minute))
 	if len(o.at) != 1 || !o.has("Clarice Connor", at.Add(offerLife+2*time.Minute)) {
 		t.Errorf("past the cap with none stale: %d held", len(o.at))
+	}
+}
+
+// TestMeWithoutAPlayerIsNothingAndReadsNothing: the start screen's
+// banner asks on every visit, so a reader with no player, or a cookie
+// nobody has, is answered with no streak and no week without the store
+// being asked anything, and given no cookie.
+func TestMeWithoutAPlayerIsNothingAndReadsNothing(t *testing.T) {
+	f := newFakeDaily(matrixPuzzle())
+	srv, _ := dailyServer(t, f)
+	b := newBrowser(t, srv)
+	for _, when := range []string{"no cookie", "a cookie nobody has"} {
+		r := b.get("/daily/me?tz=Europe/London")
+		if r.status != http.StatusOK || r.raw != `{"streak":0,"week":null}`+"\n" {
+			t.Errorf("%s: %d %q", when, r.status, r.raw)
+		}
+		if r.header.Get("Set-Cookie") != "" || r.header.Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: Set-Cookie %q, Cache-Control %q", when, r.header.Get("Set-Cookie"), r.header.Get("Cache-Control"))
+		}
+		b.client.Jar.SetCookies(mustURL(t, srv.URL), []*http.Cookie{{Name: "cd_daily", Value: daily.NewToken(), Secure: true}})
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.days)+len(f.nos)+len(f.streaks)+len(f.standings) != 0 || len(f.players) != 0 {
+		t.Errorf("the store was asked for days %v, puzzles %v, streaks %v, standings %v", f.days, f.nos, f.streaks, f.standings)
+	}
+}
+
+// TestMeIsTheTitleScreensStreakAndTheWeeksStanding: before the game,
+// the run today can extend and the standing over the days before
+// today; once the game is finished, today's run and the standing
+// through today, worked out at once, since finishing is a new key. In
+// between each is kept a minute, and the cookie is renewed as GET
+// /daily renews it.
+func TestMeIsTheTitleScreensStreakAndTheWeeksStanding(t *testing.T) {
+	f := newFakeDaily(matrixPuzzle())
+	srv, clk := dailyAt(t, f, todayAt)
+	b := newBrowser(t, srv)
+	b.post("/daily/142/play", map[string]any{})
+	asked := func() (streaks []int, standings []string) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return slices.Clone(f.streaks), slices.Clone(f.standings)
+	}
+	me := func(when, want string) {
+		t.Helper()
+		r := b.get("/daily/me")
+		if r.status != http.StatusOK || r.raw != want+"\n" {
+			t.Errorf("%s: %d %s, want %s", when, r.status, r.raw, want)
+		}
+		if !strings.Contains(r.header.Get("Set-Cookie"), "cd_daily=") {
+			t.Errorf("%s: the cookie was not renewed", when)
+		}
+	}
+
+	me("before the game", `{"streak":4,"week":{"rank":2048,"players":83500}}`)
+	me("again within the minute", `{"streak":4,"week":{"rank":2048,"players":83500}}`)
+	if streaks, standings := asked(); !slices.Equal(streaks, []int{142}) || !slices.Equal(standings, []string{"142/1/false"}) {
+		t.Errorf("within the minute the store was asked for streaks %v and standings %v, want each once", streaks, standings)
+	}
+
+	b.move("flip", 0, map[string]any{"card": "c4"})
+	me("a game in play", `{"streak":4,"week":{"rank":2048,"players":83500}}`)
+	if r := b.move("guess", 1, map[string]any{"film": "tt0133093"}); r.status != http.StatusOK {
+		t.Fatalf("the right guess: %d %s", r.status, r.raw)
+	}
+	me("after the game", `{"streak":5,"week":{"rank":1204,"players":83500}}`)
+	me("after the game, again", `{"streak":5,"week":{"rank":1204,"players":83500}}`)
+	if _, standings := asked(); !slices.Equal(standings, []string{"142/1/false", "142/1/true"}) {
+		t.Errorf("standings asked for %v, want before and after the game once each", standings)
+	}
+	clk.set(todayAt.Add(standingLife))
+	me("a minute on", `{"streak":5,"week":{"rank":1204,"players":83500}}`)
+	if _, standings := asked(); len(standings) != 3 {
+		t.Errorf("a minute on the standing was not asked again: %v", standings)
+	}
+
+	// No points this week: no week.
+	f.mu.Lock()
+	f.weeks[true] = nil
+	f.mu.Unlock()
+	clk.set(todayAt.Add(2 * standingLife))
+	me("with no points this week", `{"streak":5,"week":null}`)
+}
+
+// TestMeIsForTheReadersOwnPuzzle: at 23:30 UTC on 8 October, a player
+// whose game of the 8th's puzzle was played in UTC gets the 9th's
+// standing in Tokyo, where it is the 9th and they have not played, and
+// the 8th's in Los Angeles and with no zone. Each is kept under its own
+// puzzle. A day with no puzzle yet is not ready.
+func TestMeIsForTheReadersOwnPuzzle(t *testing.T) {
+	f := newFakeDaily(puzzleOn(142, "2026-10-08"), puzzleOn(143, "2026-10-09"))
+	srv, clk := dailyAt(t, f, time.Date(2026, 10, 8, 23, 30, 0, 0, time.UTC))
+	b := newBrowser(t, srv)
+	b.post("/daily/142/play", map[string]any{})
+	b.move("reveal", 0, nil)
+	for _, query := range []string{"?tz=Asia/Tokyo", "?tz=America/Los_Angeles", "", "?tz=Pacific/Kiritimati"} {
+		if r := b.get("/daily/me" + query); r.status != http.StatusOK {
+			t.Errorf("GET /daily/me%s: %d %s", query, r.status, r.raw)
+		}
+	}
+	f.mu.Lock()
+	if want := []string{"143/1/false", "142/1/true"}; !slices.Equal(f.standings, want) {
+		t.Errorf("standings asked for %v, want %v", f.standings, want)
+	}
+	if want := []int{143, 142}; !slices.Equal(f.streaks, want) {
+		t.Errorf("streaks asked for %v, want %v", f.streaks, want)
+	}
+	f.mu.Unlock()
+	clk.set(time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC))
+	if r := b.get("/daily/me?tz=Asia/Tokyo"); r.status != http.StatusServiceUnavailable || r.body["reason"] != "not-ready" {
+		t.Errorf("a day with no puzzle: %d %s", r.status, r.raw)
+	}
+}
+
+// TestStandingsAreKeptAMinuteAndBounded: an answer is good until it is
+// a minute old; past standingMax the stale ones are dropped, and if
+// none is stale, all of them.
+func TestStandingsAreKeptAMinuteAndBounded(t *testing.T) {
+	c := newStandings()
+	at := todayAt
+	first := standingKey{player: 1, no: 142}
+	c.put(first, dailyMe{Streak: 3}, at)
+	if me, ok := c.get(first, at.Add(standingLife-time.Second)); !ok || me.Streak != 3 {
+		t.Error("an answer is not kept for its minute")
+	}
+	if _, ok := c.get(first, at.Add(standingLife)); ok {
+		t.Error("an answer is kept past its minute")
+	}
+	if _, ok := c.get(standingKey{player: 1, no: 142, finished: true}, at); ok {
+		t.Error("finishing the game found the answer kept from before it")
+	}
+	for i := len(c.at); i < standingMax; i++ {
+		c.put(standingKey{player: int64(100 + i), no: 142}, dailyMe{}, at.Add(30*time.Second))
+	}
+	c.put(standingKey{player: 2, no: 142}, dailyMe{}, at.Add(standingLife+time.Second))
+	if _, ok := c.at[first]; ok || len(c.at) != standingMax {
+		t.Errorf("past the cap with one stale answer: %d held, the stale one kept %v", len(c.at), ok)
+	}
+	c.put(standingKey{player: 3, no: 142}, dailyMe{}, at.Add(standingLife+2*time.Second))
+	if len(c.at) != 1 {
+		t.Errorf("past the cap with none stale: %d held", len(c.at))
 	}
 }
