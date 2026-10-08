@@ -145,14 +145,34 @@ func (j *DailyJob) pick(ctx context.Context, day time.Time, no int, cands []dail
 		return nil, err
 	}
 	order := daily.Order(day, cands, recent)
+	p, err := j.Store.firstFair(ctx, j.Logger, no, day, order)
+	if errors.Is(err, errNoneFair) {
+		return nil, fmt.Errorf("catalog: none of %d candidates can be the daily answer for %s", len(order), daily.DayString(day))
+	}
+	return p, err
+}
+
+// errNoneFair is an order with no candidate in it that makes a fair
+// puzzle.
+var errNoneFair = errors.New("catalog: no candidate makes a fair puzzle")
+
+// firstFair deals puzzle No. no on day from the first candidate in order
+// that makes a fair one, reading each one's map only when it is reached,
+// or is errNoneFair. It is the pick, for the job and for development's
+// Play again alike, so a day dealt again is held to every rule the day
+// was. logger, when there is one, hears why a candidate was passed over,
+// by its place in the order and never by name.
+func (s *Store) firstFair(ctx context.Context, logger *slog.Logger, no int, day time.Time, order []daily.Candidate) (*daily.Puzzle, error) {
 	for i, c := range order {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		p, err := j.Store.dailyPuzzleOf(ctx, no, day, c)
+		p, err := s.dailyPuzzleOf(ctx, no, day, c)
 		var unfit daily.Unfit
 		if errors.As(err, &unfit) {
-			j.Logger.Debug("not a daily answer", "day", daily.DayString(day), "candidate", i+1, "why", unfit)
+			if logger != nil {
+				logger.Debug("not a daily answer", "day", daily.DayString(day), "candidate", i+1, "why", unfit)
+			}
 			continue
 		}
 		if err != nil {
@@ -160,7 +180,7 @@ func (j *DailyJob) pick(ctx context.Context, day time.Time, no int, cands []dail
 		}
 		return p, nil
 	}
-	return nil, fmt.Errorf("catalog: none of %d candidates can be the daily answer for %s", len(order), daily.DayString(day))
+	return nil, errNoneFair
 }
 
 // unnamed is an error about a candidate with the candidate taken out of
@@ -360,13 +380,32 @@ func (s *Store) dailyRecent(ctx context.Context, day time.Time) (daily.Recent, e
 // means the numbering has gone wrong, and a day left without a puzzle
 // for good should be heard about.
 func (s *Store) putDailyPuzzle(ctx context.Context, p *daily.Puzzle) (bool, error) {
-	people, err := json.Marshal(p.People)
+	cols, err := puzzleColumns(p)
 	if err != nil {
 		return false, err
 	}
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO meta.daily_puzzles
+		    (no, day, answer, title, year, rating, md, people, genres, cards, start, era, genre, picked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+		ON CONFLICT (day) DO NOTHING`,
+		append([]any{p.No, p.Day}, cols...)...)
+	if err != nil {
+		return false, fmt.Errorf("catalog: keep the daily puzzle for %s: %w", daily.DayString(p.Day), err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// puzzleColumns is what a puzzle keeps besides its number and day, in
+// the columns' order from answer to genre.
+func puzzleColumns(p *daily.Puzzle) ([]any, error) {
+	people, err := json.Marshal(p.People)
+	if err != nil {
+		return nil, err
+	}
 	cards, err := json.Marshal(p.Cards)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	// A nil list is a SQL null, which the columns refuse; none is empty.
 	genres, start := p.Answer.Genres, p.Start
@@ -376,17 +415,8 @@ func (s *Store) putDailyPuzzle(ctx context.Context, p *daily.Puzzle) (bool, erro
 	if start == nil {
 		start = []string{}
 	}
-	tag, err := s.pool.Exec(ctx, `
-		INSERT INTO meta.daily_puzzles
-		    (no, day, answer, title, year, rating, md, people, genres, cards, start, era, genre, picked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
-		ON CONFLICT (day) DO NOTHING`,
-		p.No, p.Day, p.Answer.ID, p.Answer.Title, p.Answer.Year, p.Answer.Rating, p.Answer.MD,
-		people, genres, cards, start, p.Era, p.Genre)
-	if err != nil {
-		return false, fmt.Errorf("catalog: keep the daily puzzle for %s: %w", daily.DayString(p.Day), err)
-	}
-	return tag.RowsAffected() == 1, nil
+	return []any{p.Answer.ID, p.Answer.Title, p.Answer.Year, p.Answer.Rating, p.Answer.MD,
+		people, genres, cards, start, p.Era, p.Genre}, nil
 }
 
 // DailyPuzzle is the puzzle for a day, or ErrNotFound when none has been

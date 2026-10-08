@@ -58,6 +58,15 @@ const (
 // The candidates are sorted by id before the shuffle, so the order the
 // database happened to return them in changes nothing.
 func Order(day time.Time, cands []Candidate, recent Recent) []Candidate {
+	return OrderBy(Seeded(DayString(day)), cands, recent)
+}
+
+// OrderBy is Order with the shuffle drawn from r rather than from the
+// day, every other rule the same. Only development's Play again uses
+// it, to deal a day afresh: seeded from the day, the movie it replaced,
+// no longer that day's answer, would head the list again, and pressing
+// it twice would only swap the same two movies back and forth.
+func OrderBy(r *Rand, cands []Candidate, recent Recent) []Candidate {
 	out := make([]Candidate, 0, len(cands))
 	for _, c := range cands {
 		if !recent.Answers[c.ID] {
@@ -65,7 +74,7 @@ func Order(day time.Time, cands []Candidate, recent Recent) []Candidate {
 		}
 	}
 	slices.SortFunc(out, func(a, b Candidate) int { return cmp.Compare(a.ID, b.ID) })
-	Shuffle(Seeded(DayString(day)), out)
+	Shuffle(r, out)
 	tier := func(c Candidate) int {
 		t := 0
 		if recent.Eras[c.Era] {

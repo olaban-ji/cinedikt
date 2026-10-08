@@ -1290,6 +1290,15 @@ export const UNREACHABLE = 'Couldn’t reach Cinedikt. Try again.';
 /** Said while today's puzzle has not been picked yet. */
 export const NOT_READY = 'Today’s map isn’t ready yet. Try again in a few minutes.';
 
+/** The button that starts the reader again, as a new player on a newly
+ *  picked movie. Development only, and it says so: a server in
+ *  production never offers it (DailyToday's `dev`). */
+export const PLAY_AGAIN = 'Play again (development only)';
+
+/** Said when Play again could not start the reader again. The page is
+ *  left as it was, and pressing again is safe. */
+export const AGAIN_FAILED = 'Couldn’t start again. Try again.';
+
 /** The game a "stale" refusal hands back, or null. */
 export function staleGame(body: unknown): DailyGame | null {
   const g = (body as { game?: unknown } | null)?.game;

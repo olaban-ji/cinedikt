@@ -6,6 +6,7 @@ import {
   fetchDailyWeek,
   playDaily,
   renameDaily,
+  resetDaily,
   sendDailyMove,
   type DailyGame,
   type DailyMove,
@@ -17,6 +18,7 @@ import { DailyBoard, NO_FX, useBoardView, type BoardFx } from './DailyBoard';
 import { DailyIntro } from './DailyIntro';
 import { DailyPanel } from './DailyPanel';
 import {
+  AGAIN_FAILED,
   CLUE_COST,
   CONFETTI_AFTER_MS,
   CONFETTI_COLOURS,
@@ -133,6 +135,21 @@ export function askForStanding(
   );
 }
 
+/** Play again, in development: asks the server to start the reader
+ *  again (resetDaily, as `reset`), and once it has, starts the page
+ *  again from nothing, `restart`, as though it had just been opened: the
+ *  intro, with a new name proposed, over the new movie's board. A reset
+ *  that is refused changed nothing, and one that never got an answer
+ *  changed nothing the page can know of, so either leaves the page as it
+ *  was and tells the reader, who can simply press again. */
+export function playAgain(
+  reset: () => Promise<void>,
+  restart: () => void,
+  say: (text: string) => void,
+): Promise<void> {
+  return reset().then(restart, () => say(AGAIN_FAILED));
+}
+
 /** Cinedikt Daily, under the app's header: the board, the panel, the
  *  intro that is also the rules, the toast and the confetti. It asks for
  *  today's puzzle, and the reader's place this week with it, as it
@@ -170,9 +187,30 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day]);
 
-  const { show } = toast;
+  const { show, hide } = toast;
   const say = useCallback((text: string) => show({ text }), [show]);
   const reload = useCallback(() => setAsked((n) => n + 1), []);
+
+  // Play again (development only). Not a reload, which keeps the old game
+  // up until the new puzzle lands: that game is gone on the server, so
+  // the view drawing it goes at once, and with it all it had running —
+  // its timers, a reel or a confetti burst mid-flight, a guess half typed
+  // — and any toast it raised. The page then asks afresh, as when it
+  // opened, puzzle and place together. A press while one is on its way
+  // is the same press.
+  const restart = useCallback(() => {
+    hide();
+    setLoad({ state: 'loading' });
+    setAsked((n) => n + 1);
+  }, [hide]);
+  const resetting = useRef(false);
+  const again = useCallback(() => {
+    if (resetting.current) return;
+    resetting.current = true;
+    void playAgain(resetDaily, restart, say).finally(() => {
+      resetting.current = false;
+    });
+  }, [restart, say]);
 
   return (
     <div className={`cd-daily${dim ? ' cd-daily-dim' : ''}`}>
@@ -186,6 +224,7 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
           offset={load.offset}
           say={say}
           reload={reload}
+          again={again}
           rulesSignal={rulesSignal}
         />
       ) : load.state === 'failed' ? (
@@ -233,12 +272,15 @@ interface GameProps {
   offset: number;
   say: (text: string) => void;
   reload: () => void;
+  /** Play again, offered only when today's puzzle says `dev`: a server in
+   *  production never does. */
+  again: () => void;
   rulesSignal: number;
 }
 
 /** The game for one loaded puzzle. Exported for its tests, which draw it
  *  from a fixture; the page draws it once today's puzzle has arrived. */
-export function DailyGameView({ today, week, offset, say, reload, rulesSignal }: GameProps) {
+export function DailyGameView({ today, week, offset, say, reload, again, rulesSignal }: GameProps) {
   const screen = useScreen();
   const theme = useResolvedTheme();
   const tap = useTapGuard();
@@ -803,6 +845,7 @@ export function DailyGameView({ today, week, offset, say, reload, rulesSignal }:
           }}
           onCopy={copy}
           say={say}
+          onAgain={today.dev ? again : undefined}
         />
       )}
       {dialogUp && (

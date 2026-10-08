@@ -84,6 +84,10 @@ type fakeDaily struct {
 	standings []string
 	// weeks are what DailyStanding answers, before and after the game.
 	weeks map[bool]*daily.Week
+	// repicks are the puzzles RepickDailyPuzzle dealt again, in order,
+	// and noOther makes it find no other movie (dailydev_test.go).
+	repicks []int
+	noOther bool
 }
 
 func newFakeDaily(puzzles ...*daily.Puzzle) *fakeDaily {
@@ -1304,16 +1308,36 @@ func TestANewPlayerKeepsOnlyANameTheyWereOffered(t *testing.T) {
 		return r.body["player"].(map[string]any)["name"].(string), draws.Load()
 	}
 
+	// The fake's pool is a few dozen names, so an offer is now and then
+	// one a player here already has, and Play rightly draws another for
+	// it: a name taken, which is not what this asks about, and which
+	// failed it about one run in fifteen. So an offer is asked for until
+	// it is one nobody has.
+	untaken := func(offer func() string) string {
+		t.Helper()
+		for range 100 {
+			name := offer()
+			f.mu.Lock()
+			taken := f.names[name]
+			f.mu.Unlock()
+			if !taken {
+				return name
+			}
+		}
+		t.Fatal("every name offered was taken")
+		return ""
+	}
+
 	if name, drawn := play(newBrowser(t, srv), chosen); drawn == 0 {
 		t.Errorf("a name nobody was offered: kept %q without a draw", name)
 	}
 	read := newBrowser(t, srv)
-	offered := read.get("/daily").body["player"].(map[string]any)["name"].(string)
+	offered := untaken(func() string { return read.get("/daily").body["player"].(map[string]any)["name"].(string) })
 	if name, drawn := play(read, offered); name != offered || drawn != 0 {
 		t.Errorf("the name GET /daily offered: kept %q, %d draws, want %q", name, drawn, offered)
 	}
 	spun := newBrowser(t, srv)
-	another := spun.post("/daily/name", map[string]any{}).body["name"].(string)
+	another := untaken(func() string { return spun.post("/daily/name", map[string]any{}).body["name"].(string) })
 	if name, drawn := play(spun, another); name != another || drawn != 0 {
 		t.Errorf("the name New name offered: kept %q, %d draws, want %q", name, drawn, another)
 	}

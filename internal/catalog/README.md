@@ -259,8 +259,29 @@ candidates there were and how long it took. A `daily.Unfit` is logged
 at debug by the candidate's place in the day's order rather than its
 id, since a later catalog could grow it a map fit to be an answer. The
 store's errors name the movie they were reading by its `tconst`, so
-`pick` hands one on as `unnamed`, which says "a candidate" in its
-place and still unwraps to the error it was.
+`firstFair`, the loop that tries the candidates in turn, hands one on
+as `unnamed`, which says "a candidate" in its place and still unwraps
+to the error it was.
+
+Development's Play again is `RepickDailyPuzzle`, in `dailydev.go`,
+the only thing that ever deals a picked day again. The API offers it
+only outside production (`WithDailyDev`); nothing here knows which it
+is in, so nothing else may call it. It reads the puzzle, the
+candidates and `dailyRecent` for its day, adds the answer it is
+replacing to the answers left out, though the day's own is among them
+already, and orders the candidates with `daily.OrderBy` from a
+generator seeded at random rather than from the day: in the day's
+order each press would only swap the same two movies back and forth.
+The same `firstFair` deals the board, so a day dealt again is held to
+every rule the job holds it to. `replaceDailyPuzzle` then writes it
+over the old one in one transaction, keeping `no` and `day`, with an
+`UPDATE` guarded on the answer it read, so a second reset of the same
+puzzle at once fails rather than perhaps dealing back the answer the
+first just dealt, and deletes every game of the puzzle, the moves
+going with them by cascade: a game is moves made on one board, and
+replayed on another it would be nonsense. The players stay. When no
+other candidate fits it is `ErrNoOtherAnswer` and nothing changes, and
+nothing it returns names the answer it dealt or any candidate.
 
 A puzzle's number is its day's distance from No. 1's day, plus one.
 No. 1's day is worked back from the lowest-numbered puzzle

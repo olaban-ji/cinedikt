@@ -6881,6 +6881,49 @@ button {
     color 0.15s ease;
 }
 
+/* Play again, in development only. Last in the result, as the
+   prototype's own "Play again" was, and dressed as it was: the quietest
+   thing there, centred under the leaderboard. */
+.cd-daily-again {
+  align-self: center;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--t3);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+/* And while the game is on, beside "Show the answer" and dressed as it
+   is. The two will not fit beside the hint as well, so the hint has the
+   row to itself and the two sit under it at the end, where the way out
+   always is, their own padding all the room between them, so they keep
+   to one line on a 360px phone. Only where it is offered: in production
+   the row is as it was. */
+.cd-daily-hintrow-dev {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 0;
+}
+
+.cd-daily-hintrow-dev .cd-daily-hint {
+  flex-basis: 100%;
+}
+
+.cd-daily-hintrow .cd-daily-again {
+  align-self: auto;
+  height: 30px;
+  padding: 0 8px;
+  color: var(--t2);
+}
+
 /* The result. */
 .cd-daily-res {
   flex: 1 1 auto;
@@ -7665,6 +7708,7 @@ button {
 .cd-daily-clue:focus-visible,
 .cd-daily-guess:focus-visible,
 .cd-daily-reveal:focus-visible,
+.cd-daily-again:focus-visible,
 .cd-daily-res-answer:focus-visible,
 .cd-daily-soft:focus-visible,
 .cd-daily-tab:focus-visible {
@@ -7679,7 +7723,8 @@ button {
 
 @media (hover: hover) {
   .cd-daily-min:hover,
-  .cd-daily-reveal:hover {
+  .cd-daily-reveal:hover,
+  .cd-daily-again:hover {
     background: var(--ln2);
     color: var(--t);
   }

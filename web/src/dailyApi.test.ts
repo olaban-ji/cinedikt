@@ -135,6 +135,26 @@ describe('the Daily’s requests', () => {
     expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ key: 'k-1', seq: 2, kind: 'year' });
   });
 
+  it('start the reader again, in development, with an empty JSON write in their zone, and take the 204 as done', async () => {
+    // A 204 has nothing in it to read: reading it as JSON would throw.
+    const fetch = stubFetch([{ status: 204 }]);
+    const { resetDaily } = await load();
+    await expect(resetDaily()).resolves.toBeUndefined();
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe(`/api/daily/dev/reset?${NY}`);
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(init?.body).toBe('{}');
+  });
+
+  it('carry a reset the server cannot make as a refusal, with its reason', async () => {
+    stubFetch([{ status: 503, body: { error: 'no other movie fits', reason: 'unavailable' } }]);
+    const { ApiError, resetDaily } = await load();
+    const err = await resetDaily().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 503, reason: 'unavailable' });
+  });
+
   it('ask for a leaderboard by puzzle and tab', async () => {
     const fetch = stubFetch([{ status: 200, body: { tab: 'week' } }]);
     const { fetchDailyBoard } = await load();
@@ -151,7 +171,7 @@ describe('the reader’s time zone', () => {
 
   /** Every Daily request there is, once each, and the addresses asked. */
   async function everyRequest(): Promise<string[]> {
-    const fetch = stubFetch(Array.from({ length: 9 }, () => ({ status: 200, body: {} })));
+    const fetch = stubFetch([...Array.from({ length: 9 }, () => ({ status: 200, body: {} })), { status: 204 }]);
     const api = await load();
     await api.fetchDaily();
     await api.fetchDailyMe();
@@ -162,13 +182,14 @@ describe('the reader’s time zone', () => {
     await api.sendDailyMove(142, { kind: 'guess', film: 'tt0133093' }, 'k-3', 3);
     await api.sendDailyMove(142, { kind: 'reveal' }, 'k-4', 4);
     await api.fetchDailyBoard(142, 'today');
+    await api.resetDaily();
     return fetch.mock.calls.map(([url]) => url);
   }
 
   it('goes with every Daily request, reads and writes alike, so the server knows the reader’s date', async () => {
     stubZone('Asia/Tokyo');
     const urls = await everyRequest();
-    expect(urls).toHaveLength(9);
+    expect(urls).toHaveLength(10);
     for (const url of urls) {
       expect(new URL(url, 'https://cinedikt.test').searchParams.get('tz')).toBe('Asia/Tokyo');
     }
@@ -202,6 +223,7 @@ describe('the reader’s time zone', () => {
         '/api/daily/142/guess',
         '/api/daily/142/reveal',
         '/api/daily/142/board?tab=today',
+        '/api/daily/dev/reset',
       ]);
     }
   });

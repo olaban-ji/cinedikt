@@ -55,6 +55,10 @@ async function refusal(res: Response): Promise<ApiError> {
 async function getJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, init);
   if (!res.ok) throw await refusal(res);
+  // No Content is an answer with nothing in it to read, and reading one
+  // throws: the Daily's development-only reset says it has done what it
+  // was asked, and no more.
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -541,6 +545,10 @@ export interface DailyToday {
   played: number;
   streak: { now: number; before: number };
   game: DailyGame | null;
+  /** True from a server that is not in production, where the page offers
+   *  Play again (development only): resetDaily. Never there in
+   *  production, where nothing offers it and the address is not served. */
+  dev?: boolean;
 }
 
 /** The clues the panel sells. */
@@ -725,6 +733,21 @@ export function sendDailyMove(
     case 'reveal':
       return dailyPost(`/daily/${no}/reveal`, base, signal);
   }
+}
+
+/** Development only, for trying the Daily again and again on one day:
+ *  starts the reader again as a brand-new player, on a movie newly
+ *  picked for the puzzle of their date, the one GET /daily shows them
+ *  once they are nobody again. The server picks it as the daily job
+ *  would, never today's answer again, and tells nobody which; it deletes
+ *  every game on that puzzle, lets go of the reader's cookie and answers
+ *  204, with nothing in it. In production the address is not there at
+ *  all (404), and today's puzzle never says `dev`. It goes through the
+ *  Daily's helpers with the rest, so it carries the reader's zone, which
+ *  is how the server finds their date, and it is a JSON write like every
+ *  other, so another site cannot make it in the reader's name. */
+export function resetDaily(signal?: AbortSignal): Promise<void> {
+  return dailyPost<void>('/daily/dev/reset', {}, signal);
 }
 
 /** A leaderboard for puzzle `no`: today's, which is everyone who has

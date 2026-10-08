@@ -758,3 +758,30 @@ func TestTheAnalyticsConfigRouteIsGone(t *testing.T) {
 		t.Errorf("GET /api/analytics-config = %d, want 404", resp.StatusCode)
 	}
 }
+
+// TestPlayAgainIsOnlyOutsideProduction: Daily's development reset is a
+// route only a server that is not production's has. Production's router
+// has never heard of it, so it is 404 as any other unknown API path is,
+// not the page and not a refusal; a development server's is there, and
+// refuses a body that is not JSON before it asks the store anything,
+// which is why no store is needed to tell the two apart.
+func TestPlayAgainIsOnlyOutsideProduction(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for env, want := range map[string]int{
+		config.EnvProduction:  http.StatusNotFound,
+		config.EnvDevelopment: http.StatusUnsupportedMediaType,
+	} {
+		server := apiServer(config.Config{Environment: env}, api.NewCatalogServer(nil, logger), nil, logger)
+		srv := httptest.NewServer(routes(server.Handler(), plainIndexDir(t), nil, nil, nil, logger))
+		resp, err := http.Post(srv.URL+"/api/daily/dev/reset", "text/plain", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		srv.Close()
+		if resp.StatusCode != want || strings.Contains(string(body), "<html") {
+			t.Errorf("%s: POST /api/daily/dev/reset = %d %q, want %d", env, resp.StatusCode, body, want)
+		}
+	}
+}

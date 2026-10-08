@@ -1,7 +1,8 @@
-import { createElement, type ComponentProps, type ReactElement } from 'react';
+import { createElement, isValidElement, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ApiError,
   fetchDailyWeek,
   type DailyEntry,
   type DailyFilm,
@@ -12,7 +13,7 @@ import {
 } from './api';
 import { BoardCard } from './DailyBoard';
 import { DailyIntro, nextStop } from './DailyIntro';
-import { DailyGameView, DailyHeaderTail, DailyPage, askForStanding, fetchDailyPage } from './DailyPage';
+import { DailyGameView, DailyHeaderTail, DailyPage, askForStanding, fetchDailyPage, playAgain } from './DailyPage';
 import { DailyPanel } from './DailyPanel';
 import { YEAR_PLACEHOLDER, boardPayload } from './daily';
 import { layoutGrid } from './grid';
@@ -102,21 +103,31 @@ function won(): DailyGame {
   });
 }
 
+/** The game view's props for this puzzle, from a server in development
+ *  when `dev` is set. */
+function viewProps(
+  game: DailyGame | null,
+  week: DailyWeek | null = null,
+  dev = false,
+  again: () => void = () => {},
+): ComponentProps<typeof DailyGameView> {
+  return {
+    today: dev ? { ...todayOf(game), dev: true } : todayOf(game),
+    week,
+    offset: 0,
+    say: () => {},
+    reload: () => {},
+    again,
+    rulesSignal: 0,
+  };
+}
+
 /** The game for this puzzle, as its first render draws it, with the
  *  reader's place this week as the page asked for it, or none. Effects
  *  never run on the server renderer, so nothing is fetched, nothing is
  *  scrolled and nothing moves: what is left is what each state draws. */
-function drawn(game: DailyGame | null, week: DailyWeek | null = null): string {
-  return renderToStaticMarkup(
-    createElement(DailyGameView, {
-      today: todayOf(game),
-      week,
-      offset: 0,
-      say: () => {},
-      reload: () => {},
-      rulesSignal: 0,
-    }),
-  );
+function drawn(game: DailyGame | null, week: DailyWeek | null = null, dev = false): string {
+  return renderToStaticMarkup(createElement(DailyGameView, viewProps(game, week, dev)));
 }
 
 /** What a reader can read: the text, and the words the page says out
@@ -183,7 +194,7 @@ describe('the page before Play', () => {
   it('counts nobody before anyone has played, and still says when the clock starts', () => {
     const today = { ...todayOf(null), played: 0 };
     const html = renderToStaticMarkup(
-      createElement(DailyGameView, { today, week: null, offset: 0, say: () => {}, reload: () => {}, rulesSignal: 0 }),
+      createElement(DailyGameView, { ...viewProps(null), today }),
     );
     expect(html).not.toContain('people have played today');
     expect(html).not.toContain('cd-daily-live-n');
@@ -564,6 +575,117 @@ describe('the Daily’s words on the page', () => {
       won(),
     ]) {
       expect(words(drawn(game))).not.toMatch(/\bfilms?\b/i);
+      // And in development, Play again's own.
+      expect(words(drawn(game, null, true))).not.toMatch(/\bfilms?\b/i);
+    }
+  });
+});
+
+/** The handlers on every element of `el` with class `cls`, every
+ *  component in it drawn out, as one server render would draw it. Called
+ *  inside a render of its own, so the hooks they use have one to belong
+ *  to, and no DOM is needed to press what they draw. */
+function pressesIn(el: ReactElement, cls: string): (() => void)[] {
+  const found: (() => void)[] = [];
+  const walk = (node: ReactNode): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (!isValidElement(node)) return;
+    const { type, props } = node as ReactElement<{ className?: string; onClick?: () => void; children?: ReactNode }>;
+    if (typeof type === 'function') return walk((type as (p: unknown) => ReactNode)(props));
+    if (typeof type === 'string' && props.className?.split(' ').includes(cls) && props.onClick) found.push(props.onClick);
+    walk(props.children);
+  };
+  function Probe() {
+    walk(el);
+    return null;
+  }
+  renderToStaticMarkup(createElement(Probe));
+  return found;
+}
+
+describe('Play again, in development', () => {
+  const AGAIN = '<button type="button" class="cd-daily-again">Play again (development only)</button>';
+
+  it('sits beside “Show the answer” while the game is on, so starting again never takes giving the answer away', () => {
+    const html = drawn(gameOf([]), null, true);
+    expect(html).toContain(`${AGAIN}<button type="button" class="cd-daily-reveal">Show the answer</button>`);
+    expect(html).toContain('<div class="cd-daily-hintrow cd-daily-hintrow-dev"><span class="cd-daily-hint">');
+  });
+
+  it('comes last in the result, where the prototype had its own', () => {
+    const html = drawn(won(), null, true);
+    expect(html).toContain(`${AGAIN}</div><div class="cd-daily-res-foot">`);
+    expect(html.match(/cd-daily-again/g)).toHaveLength(1);
+  });
+
+  it('stays while the panel is folded away during the game, with the rest of what the reader can do', () => {
+    const html = renderToStaticMarkup(
+      createElement(DailyPanel, { ...folded(gameOf([]), false), onAgain: () => {} }),
+    );
+    expect(html).toContain(AGAIN);
+  });
+
+  it('is never offered unless the server says it is not in production', () => {
+    for (const game of [null, gameOf([]), won()]) {
+      const html = drawn(game);
+      expect(html).not.toContain('cd-daily-again');
+      expect(words(html)).not.toContain('development only');
+      // And the row beside the hint is as it always was.
+      expect(html).not.toContain('cd-daily-hintrow-dev');
+    }
+    const no = renderToStaticMarkup(
+      createElement(DailyGameView, { ...viewProps(gameOf([])), today: { ...todayOf(gameOf([])), dev: false } }),
+    );
+    expect(no).not.toContain('cd-daily-again');
+  });
+
+  it('is not on the intro, which starts a game rather than ending one', () => {
+    expect(drawn(null, null, true)).not.toContain('cd-daily-again');
+  });
+
+  it('asks the page to start again when pressed, from either place', () => {
+    for (const game of [gameOf([]), won()]) {
+      const again = vi.fn();
+      const presses = pressesIn(createElement(DailyGameView, viewProps(game, null, true, again)), 'cd-daily-again');
+      expect(presses).toHaveLength(1);
+      presses[0]();
+      expect(again).toHaveBeenCalledTimes(1);
+    }
+  });
+});
+
+describe('starting again', () => {
+  it('starts the page again from nothing once the server has started the reader again, and not before', async () => {
+    // Before, the page would ask for today's puzzle and be handed the old
+    // movie's game back.
+    const order: string[] = [];
+    let answer = () => {};
+    const done = playAgain(
+      () =>
+        new Promise<void>((resolve) => {
+          order.push('reset');
+          answer = resolve;
+        }),
+      () => order.push('restart'),
+      (text) => order.push(`say ${text}`),
+    );
+    await Promise.resolve();
+    expect(order).toEqual(['reset']);
+    answer();
+    await done;
+    expect(order).toEqual(['reset', 'restart']);
+  });
+
+  it('leaves the page as it was, and says so, when the reset is refused or never answered', async () => {
+    for (const failure of [
+      new ApiError('no other movie fits today’s puzzle', 503, 'unavailable', {}),
+      new TypeError('Failed to fetch'),
+    ]) {
+      const restart = vi.fn();
+      const said: string[] = [];
+      await playAgain(() => Promise.reject(failure), restart, (text) => said.push(text));
+      expect(restart, failure.name).not.toHaveBeenCalled();
+      expect(said, failure.name).toEqual(['Couldn’t start again. Try again.']);
     }
   });
 });
@@ -634,8 +756,9 @@ describe('the page as it opens', () => {
   });
 });
 
-describe('the panel folded away', () => {
-  const base = (game: DailyGame, results: boolean): ComponentProps<typeof DailyPanel> => ({
+/** The panel's props, folded away. */
+function folded(game: DailyGame, results: boolean): ComponentProps<typeof DailyPanel> {
+  return {
     today: todayOf(game),
     game,
     results,
@@ -658,10 +781,12 @@ describe('the panel folded away', () => {
     onFindAnswer: () => {},
     onCopy: () => {},
     say: () => {},
-  });
+  };
+}
 
+describe('the panel folded away', () => {
   it('keeps what the reader can do while the game is on, and hides the feed', () => {
-    const html = renderToStaticMarkup(createElement(DailyPanel, base(gameOf([]), false)));
+    const html = renderToStaticMarkup(createElement(DailyPanel, folded(gameOf([]), false)));
     expect(html).toContain('aria-label="Show the panel"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('Three movies from its map are showing.');
@@ -669,7 +794,7 @@ describe('the panel folded away', () => {
   });
 
   it('keeps the countdown and the way back to the result', () => {
-    const html = renderToStaticMarkup(createElement(DailyPanel, base(won(), true)));
+    const html = renderToStaticMarkup(createElement(DailyPanel, folded(won(), true)));
     expect(html).toContain('Show results');
     expect(html).not.toContain('Leaderboard');
   });

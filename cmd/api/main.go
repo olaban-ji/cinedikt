@@ -160,9 +160,7 @@ func run(logger *slog.Logger) error {
 	// Cinedikt Daily is always on: its puzzles, players and games are kept
 	// in the same Postgres the catalog is, and the runner below picks the
 	// puzzles.
-	server := api.New(catalogServer, logger).
-		WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping}).
-		WithDaily(store)
+	server := apiServer(cfg, catalogServer, store, logger)
 	// The share card. Its assets are read once, here, so a missing font is
 	// a process that will not start rather than a link that will not
 	// unfurl.
@@ -254,6 +252,19 @@ func run(logger *slog.Logger) error {
 		<-stopped
 		return err
 	}
+}
+
+// apiServer is the API over the catalog's handlers and store: the health
+// check, and Cinedikt Daily with its development tools, Play again among
+// them, on only outside production. In production their route is never
+// registered, so nothing deployed can deal a day again or wipe its
+// games, however it is asked; the Docker image sets APP_ENV=production,
+// so only a server run from a checkout has them.
+func apiServer(cfg config.Config, cs *api.CatalogServer, store *catalog.Store, logger *slog.Logger) *api.Server {
+	return api.New(cs, logger).
+		WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping}).
+		WithDaily(store).
+		WithDailyDev(!cfg.Production())
 }
 
 // whereToWatch builds the where-to-watch service, places readers with

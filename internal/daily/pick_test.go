@@ -81,6 +81,43 @@ func TestTheOrderMixesTheWeek(t *testing.T) {
 	}
 }
 
+// TestAnOrderDrawnFromAnotherGeneratorKeepsTheRules: development's Play
+// again shuffles with a generator of its own rather than the day's, so
+// two draws differ from the day's order and from each other, while the
+// week's mix still comes first and a recent answer is still left out.
+func TestAnOrderDrawnFromAnotherGeneratorKeepsTheRules(t *testing.T) {
+	cands := candidates()
+	recent := Recent{Answers: map[string]bool{"tt0000100": true}, Eras: map[int]bool{1960: true}, Genres: map[string]bool{"Drama": true}}
+	ids := func(cs []Candidate) string {
+		var out []string
+		for _, c := range cs {
+			out = append(out, c.ID)
+		}
+		return strings.Join(out, " ")
+	}
+	day := ids(Order(oct8, cands, recent))
+	if same := ids(OrderBy(Seeded(DayString(oct8)), cands, recent)); same != day {
+		t.Errorf("the day's own generator ordered %s, Order %s", same, day)
+	}
+	one, two := OrderBy(Seeded("one draw"), cands, recent), OrderBy(Seeded("another"), cands, recent)
+	if ids(one) == day || ids(two) == day || ids(one) == ids(two) {
+		t.Errorf("the day ordered %s; two draws %s and %s", day, ids(one), ids(two))
+	}
+	for _, got := range [][]Candidate{one, two} {
+		if len(got) != len(cands)-1 || strings.Contains(ids(got), "tt0000100") {
+			t.Errorf("a draw kept %s", ids(got))
+		}
+		stale := false
+		for _, c := range got {
+			old := recent.Eras[c.Era] || recent.Genres[c.Genres[0]]
+			if !old && stale {
+				t.Errorf("a fresh candidate comes after a used era or genre in %s", ids(got))
+			}
+			stale = stale || old
+		}
+	}
+}
+
 // matrixPeople are slots for a candidate: one director and four cast.
 var matrixPeople = []Slot{
 	{ID: "nm1", Name: "Director One", Role: RoleDirector},

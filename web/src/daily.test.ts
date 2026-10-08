@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DailyBoard, DailyEntry, DailyFilm, DailyGame, DailyPerson, DailyToday } from './api';
 import {
+  AGAIN_FAILED,
   ANSWER_POP_MS,
   CLUE_COST,
   CONFETTI_AFTER_MS,
@@ -18,6 +19,7 @@ import {
   INTRO_PART_MS,
   MIDNIGHT_STEP_MS,
   OPEN_BOUNDS,
+  PLAY_AGAIN,
   PULSE_MS,
   REEL_STEPS,
   RESULTS_AFTER_MS,
@@ -1754,6 +1756,41 @@ describe('the year’s marks in the stylesheet', () => {
   });
 });
 
+describe('Play again in the stylesheet', () => {
+  const HOVER = '(hover: hover)';
+  /** What a declaration list sets, of these properties. */
+  const of = (decls: Map<string, string>, names: string[]) => names.map((n) => decls.get(n));
+
+  it('is dressed as the prototype’s own at the foot of the result: the quietest thing there, centred', () => {
+    // Cinedikt Daily.dc.html, "Play again (prototype only)".
+    const own = declsIn('.cd-daily-again', null);
+    expect(
+      of(own, ['align-self', 'height', 'padding', 'border', 'border-radius', 'background', 'color', 'font-size', 'font-weight']),
+    ).toEqual(['center', '32px', '0 10px', '0', '9px', 'none', 'var(--t3)', '12.5px', '600']);
+    expect(own.get('transition')).toBe('background-color 0.15s ease, color 0.15s ease');
+  });
+
+  it('is dressed as “Show the answer” beside it while the game is on', () => {
+    const reveal = declsIn('.cd-daily-reveal', null);
+    const beside = new Map([...declsIn('.cd-daily-again', null), ...declsIn('.cd-daily-hintrow .cd-daily-again', null)]);
+    for (const name of ['height', 'padding', 'border', 'border-radius', 'background', 'color', 'font-size', 'font-weight', 'white-space']) {
+      expect(beside.get(name), name).toBe(reveal.get(name));
+    }
+  });
+
+  it('gives the hint its own line only where Play again is offered, and puts the two buttons under it at the end', () => {
+    expect(declsIn('.cd-daily-hintrow', null).get('flex-wrap')).toBeUndefined();
+    const dev = declsIn('.cd-daily-hintrow-dev', null);
+    expect(of(dev, ['flex-wrap', 'justify-content'])).toEqual(['wrap', 'flex-end']);
+    expect(declsIn('.cd-daily-hintrow-dev .cd-daily-hint', null).get('flex-basis')).toBe('100%');
+  });
+
+  it('lights up under the pointer as “Show the answer” does, and takes the focus ring', () => {
+    expect(of(declsIn('.cd-daily-again:hover', HOVER), ['background', 'color'])).toEqual(['var(--ln2)', 'var(--t)']);
+    expect(declsIn('.cd-daily-again:focus-visible', null).get('outline')).toBe('2px solid var(--acc)');
+  });
+});
+
 describe('the guess list in forced colours', () => {
   it('keeps the list’s edge, which is otherwise only a shadow', () => {
     expect(declsIn('.cd-daily-options', '(forced-colors: active)').get('outline')).toBe('1px solid ButtonText');
@@ -1798,6 +1835,8 @@ describe('the Daily’s words', () => {
       boardNote('week', 2, 'x', true),
       hintText(true, 100),
       midnightText(gameOf([])),
+      PLAY_AGAIN,
+      AGAIN_FAILED,
     ];
     for (const w of words) expect(w).not.toMatch(/\bfilms?\b/i);
   });

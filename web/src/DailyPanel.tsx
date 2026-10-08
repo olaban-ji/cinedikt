@@ -25,6 +25,7 @@ import {
   LIST_CLOSE_MS,
   LOW_POINTS,
   MAX_SUGGESTIONS,
+  PLAY_AGAIN,
   RESULTS_IN_MS,
   ROLL_MS,
   SEARCH_WAIT_MS,
@@ -178,6 +179,10 @@ interface PanelProps {
   onFindAnswer: () => void;
   onCopy: () => void;
   say: (text: string) => void;
+  /** Play again, in development only: the reader starts again as a new
+   *  player, on a newly picked movie. Absent from a server in production,
+   *  and then nothing offers it. */
+  onAgain?: () => void;
 }
 
 /** The game's panel: the points along the top, then either the feed and
@@ -380,8 +385,11 @@ function PlayFoot(p: PanelProps) {
         inputRef={p.inputRef}
         theme={p.theme}
       />
-      <div className="cd-daily-hintrow">
+      <div className={`cd-daily-hintrow${p.onAgain ? ' cd-daily-hintrow-dev' : ''}`}>
         <span className="cd-daily-hint">{hintText(p.touch, p.game.nextCost)}</span>
+        {/* Beside the way out, so starting again never takes giving the
+            answer away first. */}
+        {p.onAgain && <AgainButton onAgain={p.onAgain} />}
         <button type="button" className="cd-daily-reveal" onClick={p.onReveal}>
           Show the answer
         </button>
@@ -871,6 +879,8 @@ function Results(p: PanelProps) {
               <p className="cd-daily-note">Loading the leaderboard…</p>
             )}
           </div>
+          {/* Last in the result, where the prototype had its own. */}
+          {p.onAgain && <AgainButton onAgain={p.onAgain} />}
         </div>
       )}
       <div className="cd-daily-res-foot">
@@ -883,6 +893,17 @@ function Results(p: PanelProps) {
         </button>
       </div>
     </>
+  );
+}
+
+/** Play again, in development only, at the foot of the result and
+ *  beside "Show the answer" while the game is on: quieter than anything
+ *  near it, and saying what it is. */
+function AgainButton({ onAgain }: { onAgain: () => void }) {
+  return (
+    <button type="button" className="cd-daily-again" onClick={onAgain}>
+      {PLAY_AGAIN}
+    </button>
   );
 }
 
