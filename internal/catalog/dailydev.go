@@ -22,12 +22,12 @@ import (
 var ErrNoOtherAnswer = errors.New("catalog: no other movie can be that day's answer")
 
 // RepickDailyPuzzle deals puzzle No. no again on its own day, from
-// another answer: the job's candidates, its rules and its board, the
-// order drawn at random rather than from the day (daily.OrderBy), and
-// the answer it has now left out with the other answers within
-// daily.RepeatDays. The puzzle keeps its number and day, and every game
-// of it, with their moves, goes in the same transaction: a game is moves
-// made on one board, and replayed on another it would be nonsense. The
+// another answer: the job's candidates and its rules, the order drawn at
+// random rather than from the day (daily.OrderBy), and the answer it has
+// now left out with the other answers within daily.RepeatDays. The
+// puzzle keeps its number and day, and every game of it, with their
+// moves, goes in the same transaction: a game is moves made on one
+// movie's cast, and replayed on another's it would be nonsense. The
 // players stay, on the other days' boards.
 //
 // When no other movie fits it is ErrNoOtherAnswer, and nothing changes.
@@ -51,7 +51,7 @@ func (s *Store) RepickDailyPuzzle(ctx context.Context, no int) error {
 	// be a reset that changed nothing.
 	recent.Answers[was.Answer.ID] = true
 	order := daily.OrderBy(daily.Seeded(strconv.FormatUint(rand.Uint64(), 36)), cands, recent)
-	p, err := s.firstFair(ctx, nil, no, was.Day, order)
+	p, err := s.firstFair(ctx, nil, nil, no, was.Day, order)
 	if errors.Is(err, errNoneFair) {
 		return ErrNoOtherAnswer
 	}
@@ -79,9 +79,9 @@ func (s *Store) replaceDailyPuzzle(ctx context.Context, was string, p *daily.Puz
 	defer tx.Rollback(context.WithoutCancel(ctx))
 	tag, err := tx.Exec(ctx, `
 		UPDATE meta.daily_puzzles
-		SET answer = $3, title = $4, year = $5, rating = $6, md = $7, people = $8, genres = $9,
-		    cards = $10, start = $11, era = $12, genre = $13, picked_at = now()
-		WHERE no = $1 AND day = $2 AND answer = $14`,
+		SET answer = $3, title = $4, year = $5, rating = $6, md = $7, length = $8, colour = $9, genres = $10,
+		    directors = $11, billed = $12, movies = $13, era = $14, genre = $15, picked_at = now()
+		WHERE no = $1 AND day = $2 AND answer = $16`,
 		append(append([]any{p.No, p.Day}, cols...), was)...)
 	if err != nil {
 		return fmt.Errorf("catalog: re-pick daily puzzle %d: %w", p.No, err)

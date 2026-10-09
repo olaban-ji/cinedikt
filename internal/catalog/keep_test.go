@@ -39,6 +39,18 @@ func TestOnlyMoviesAreKept(t *testing.T) {
 	}
 }
 
+// TestARuntimeIsKeptInMinutes, the Daily's Length fact, and none is
+// nothing: IMDb's \N, a stray value, or a runtime of no minutes or less.
+func TestARuntimeIsKeptInMinutes(t *testing.T) {
+	for field, want := range map[string]int{"136": 136, "90": 90, "\\N": 0, "": 0, "abc": 0, "0": 0, "-5": 0} {
+		r := row(t, basicsHeader, "tt0133093\tmovie\tThe Matrix\tThe Matrix\t0\t1999\t\\N\t"+field+"\tAction,Sci-Fi")
+		got, ok := ReadTitle(r)
+		if !ok || got.Runtime != want {
+			t.Errorf("runtimeMinutes %q: %d, %v; want %d", field, got.Runtime, ok, want)
+		}
+	}
+}
+
 func TestAdultAndDocumentaryAreStoredNotDropped(t *testing.T) {
 	// Both are movies, so they are loaded. The grid leaves them out when
 	// it builds a map, and search excludes adult through its own index.

@@ -3,78 +3,138 @@ package daily
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
-func ranked(n int) []Ranked {
-	out := make([]Ranked, n)
-	for i := range out {
-		out[i] = Ranked{Rank: i + 1, Player: int64(100 + i), Name: fmt.Sprintf("Player %d", i+1), Pts: 1000 - 10*i, MS: int64(60000 + 1000*i)}
+// board is a whole board of players with these points, joined in that
+// order, placed as the store places them.
+func board(pts ...int) []Ranked {
+	out := make([]Ranked, len(pts))
+	for i, p := range pts {
+		out[i] = Ranked{Player: int64(100 + i), Name: fmt.Sprintf("P%d", i), Pts: p}
 	}
+	Place(out)
 	return out
 }
 
 func layout(rows []Row) string {
-	s := ""
+	var out []string
 	for _, r := range rows {
-		switch {
-		case r.Gap:
-			s += "··· "
-		case r.You:
-			s += fmt.Sprintf("[%d] ", r.Rank)
-		default:
-			s += fmt.Sprintf("%d ", r.Rank)
+		place := fmt.Sprint(r.Place)
+		if r.Tied {
+			place = "=" + place
 		}
+		who := r.Name
+		if r.You {
+			who = "[" + who + "]"
+		}
+		out = append(out, fmt.Sprintf("%s %s %d", place, who, r.Pts))
 	}
-	return s
+	return strings.Join(out, ", ")
 }
 
-// TestABoardShowsTheTopAndAroundYou, with a gap wherever the ranks jump
-// and none where they meet.
-func TestABoardShowsTheTopAndAroundYou(t *testing.T) {
+// TestPlacesAreCompetitionRanks: one more than the players with more
+// points, so equal scores share a place and the next one skips.
+func TestPlacesAreCompetitionRanks(t *testing.T) {
+	b := board(900, 800, 800, 800, 700, 0)
+	var got []string
+	for _, r := range b {
+		got = append(got, fmt.Sprintf("%d %v", r.Place, r.Tied))
+	}
+	if want := []string{"1 false", "2 true", "2 true", "2 true", "5 false", "6 false"}; !slices.Equal(got, want) {
+		t.Errorf("places = %v, want %v", got, want)
+	}
+}
+
+// TestTodaysBoardIsThePlayersAroundYourScore: two just above, you, one
+// on your score and one just below, never the top; at the top or the
+// bottom, fewer; and nothing at all for a reader not on it.
+func TestTodaysBoardIsThePlayersAroundYourScore(t *testing.T) {
 	for _, c := range []struct {
-		total int
-		me    int64
-		want  string
+		name string
+		pts  []int
+		me   int64
+		want string
 	}{
-		{20, 0, "1 2 3 4 5 "},
-		{3, 0, "1 2 3 "},
-		{20, 101, "1 [2] 3 4 5 "},
-		{20, 106, "1 2 3 4 5 6 [7] 8 9 "},
-		{20, 107, "1 2 3 4 5 6 7 [8] 9 10 "},
-		{20, 108, "1 2 3 4 5 ··· 7 8 [9] 10 11 "},
-		{20, 119, "1 2 3 4 5 ··· 18 19 [20] "},
-		{20, 999, "1 2 3 4 5 "},
+		{"the middle", []int{1000, 950, 900, 850, 800, 800, 800, 750, 700}, 105,
+			"3 P2 900, 4 P3 850, =5 [P5] 800, =5 P4 800, 8 P7 750"},
+		// The two above are the nearest two, not the top two, and the one
+		// on your score is whoever joined first of the rest.
+		{"a crowd above", []int{1000, 1000, 1000, 900, 900, 900}, 104,
+			"=1 P1 1000, =1 P2 1000, =4 [P4] 900, =4 P3 900"},
+		{"the top", []int{1000, 900, 850}, 100, "1 [P0] 1000, 2 P1 900"},
+		{"the bottom", []int{1000, 900, 850, 0}, 103, "2 P1 900, 3 P2 850, 4 [P3] 0"},
+		{"alone", []int{600}, 100, "1 [P0] 600"},
+		{"not on it", []int{1000, 900}, 999, ""},
+		{"no player", []int{1000, 900}, 0, ""},
 	} {
-		if got := layout(Lay(ranked(c.total), c.me, TabToday)); got != c.want {
-			t.Errorf("%d players, me %d: %q, want %q", c.total, c.me, got, c.want)
+		if got := layout(Around(board(c.pts...), c.me, TabToday)); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
-	// The rows the store selects lay out the same as all of them.
-	all := ranked(40)
-	some := append(append([]Ranked{}, all[:5]...), all[18:23]...)
-	if a, b := layout(Lay(all, 120, TabToday)), layout(Lay(some, 120, TabToday)); a != b {
-		t.Errorf("all the rows lay out as %q, the store's as %q", a, b)
+	// The rows the store reads lay out as the whole board does.
+	all := board(1000, 950, 900, 850, 800, 800, 800, 750, 700)
+	some := []Ranked{all[2], all[3], all[4], all[5], all[7]}
+	if a, b := layout(Around(all, 105, TabToday)), layout(Around(some, 105, TabToday)); a != b {
+		t.Errorf("the whole board lays out as %q, the store's rows as %q", a, b)
+	}
+}
+
+// TestTheWeeksBoardIsTwoAheadAndTwoBehind, as the week's order has them,
+// ties included, with each day's points.
+func TestTheWeeksBoardIsTwoAheadAndTwoBehind(t *testing.T) {
+	b := board(2400, 2300, 2300, 2200, 2100, 2000, 1900)
+	for i := range b {
+		b[i].Days = []int{b[i].Pts - 100, 100, 0}
+	}
+	for me, want := range map[int64]string{
+		103: "=2 P1 2300, =2 P2 2300, 4 [P3] 2200, 5 P4 2100, 6 P5 2000",
+		100: "1 [P0] 2400, =2 P1 2300, =2 P2 2300",
+		106: "5 P4 2100, 6 P5 2000, 7 [P6] 1900",
+		999: "",
+	} {
+		if got := layout(Around(b, me, TabWeek)); got != want {
+			t.Errorf("me %d: %q, want %q", me, got, want)
+		}
+	}
+	rows := Around(b, 103, TabWeek)
+	if !slices.Equal(rows[2].Days, []int{2100, 100, 0}) {
+		t.Errorf("your week's days = %v", rows[2].Days)
 	}
 }
 
 func TestARowSaysWhatItsTabShows(t *testing.T) {
-	r := ranked(1)
-	pts := 610
-	r[0].Days = []*int{&pts, nil, nil, nil, nil, nil, nil}
-	r[0].MS = 95400
-	today, _ := json.Marshal(Lay(r, 100, TabToday))
-	if want := `[{"rank":1,"name":"Player 1","hue":0,"pts":1000,"secs":95,"you":true}]`; string(today) != want {
+	b := board(610, 500)
+	b[0].Days = []int{610, 0, 0}
+	today, _ := json.Marshal(Around(b, 100, TabToday))
+	if want := `[{"place":1,"tied":false,"name":"P0","hue":0,"pts":610,"you":true},{"place":2,"tied":false,"name":"P1","hue":0,"pts":500,"you":false}]`; string(today) != want {
 		t.Errorf("today = %s, want %s", today, want)
 	}
-	week, _ := json.Marshal(Lay(r, 0, TabWeek))
-	if want := `[{"rank":1,"name":"Player 1","hue":0,"pts":1000,"you":false,"days":[610,null,null,null,null,null,null]}]`; string(week) != want {
+	week, _ := json.Marshal(Around(b[:1], 100, TabWeek))
+	if want := `[{"place":1,"tied":false,"name":"P0","hue":0,"pts":610,"days":[610,0,0],"you":true}]`; string(week) != want {
 		t.Errorf("week = %s, want %s", week, want)
 	}
-	gap, _ := json.Marshal(Row{Gap: true, Rank: 9})
-	if string(gap) != `{"gap":true}` {
-		t.Errorf("gap = %s", gap)
+	you, _ := json.Marshal(You{Place: 7804, Tied: true, Pts: 800})
+	if string(you) != `{"place":7804,"tied":true,"pts":800}` {
+		t.Errorf("you = %s", you)
+	}
+	if rows, _ := json.Marshal(Around(nil, 100, TabToday)); string(rows) != "[]" {
+		t.Errorf("a reader not on the board has rows %s", rows)
+	}
+}
+
+// TestTheChartHasABarForEachHundredAndOneForAThousand.
+func TestTheChartHasABarForEachHundredAndOneForAThousand(t *testing.T) {
+	for pts, want := range map[int]int{0: 0, 99: 0, 100: 1, 450: 4, 999: 9, 1000: 10, 1200: 10, -5: 0} {
+		if got := Bar(pts); got != want {
+			t.Errorf("Bar(%d) = %d, want %d", pts, got, want)
+		}
+	}
+	if ChartBars != 11 {
+		t.Errorf("%d bars", ChartBars)
 	}
 }
 

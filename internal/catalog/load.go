@@ -91,7 +91,7 @@ func (s *Store) LoadTitles(ctx context.Context, logger *slog.Logger, r io.Reader
 	}
 	defer reader.Close()
 	if err := reader.Require("tconst", "titleType", "primaryTitle", "originalTitle",
-		"isAdult", "startYear", "genres"); err != nil {
+		"isAdult", "startYear", "runtimeMinutes", "genres"); err != nil {
 		return nil, 0, err
 	}
 	// Sized for the movie count rather than the file's twelve million
@@ -111,11 +111,11 @@ func (s *Store) LoadTitles(ctx context.Context, logger *slog.Logger, r io.Reader
 			genres = []string{}
 		}
 		return one([]any{t.TConst, t.Primary, t.Original, t.IsAdult,
-			nullInt(t.StartYear), genres}, true)
+			nullInt(t.StartYear), genres, nullInt(t.Runtime)}, true)
 	}}
 	n, err := s.copyRows(ctx, "titles",
 		[]string{"tconst", "primary_title", "original_title", "is_adult",
-			"start_year", "genres"}, src)
+			"start_year", "genres", "runtime_minutes"}, src)
 	if err != nil {
 		return nil, n, err
 	}
@@ -234,8 +234,9 @@ func (s *Store) LoadNames(ctx context.Context, logger *slog.Logger, r io.Reader,
 	return n, src.Err()
 }
 
-// nullInt writes 0 as NULL: the datasets have no year zero, and a null
-// column says "not known" where a zero would say "the year 0".
+// nullInt writes 0 as NULL: the datasets have no year zero and no movie
+// of no minutes, and a null column says "not known" where a zero would
+// say "the year 0".
 func nullInt(v int) any {
 	if v == 0 {
 		return nil

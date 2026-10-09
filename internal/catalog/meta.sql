@@ -319,27 +319,55 @@ CREATE TABLE IF NOT EXISTS meta.geoip (
     fetched_at    timestamptz NOT NULL
 );
 
--- Cinedikt Daily: one hidden movie a day, its map as the board. Kept in
--- meta like everything that must outlive a generation, with tconsts and
--- nconsts as plain text and no key into catalog: that schema is renamed
--- every night, and a game played last month still has to replay.
+-- Cinedikt Daily: one hidden movie a day, its cast shown one name at a
+-- time. Kept in meta like everything that must outlive a generation,
+-- with tconsts and nconsts as plain text and no key into catalog: that
+-- schema is renamed every night, and a game played last month still has
+-- to replay.
+
+-- Name Drop replaced Point Blank, whose board of blank cards these tables
+-- were first made for: its puzzles held the board (cards, and the cards
+-- face up from the start), and its games' moves turned cards over. None
+-- of it was ever released (production has no daily tables), and a
+-- Point Blank game means nothing replayed as Name Drop, so a database
+-- still holding that shape has its puzzles, games and moves dropped here,
+-- once, and the CREATEs below make them anew. A puzzle with a cards
+-- column is that shape and nothing else is: the check reads the catalog,
+-- so on a fresh database and on one already in the new shape this does
+-- nothing, every time this file runs. The players are kept: a player is
+-- only a cookie and a name, and is the same player in either game.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'meta' AND table_name = 'daily_puzzles' AND column_name = 'cards'
+    ) THEN
+        DROP TABLE IF EXISTS meta.daily_moves, meta.daily_games, meta.daily_puzzles;
+    END IF;
+END $$;
 
 -- One row a day, the puzzle as it was picked. Everything a game needs is
 -- copied in when the daily job picks it, and nothing about it is read
 -- from the catalog again: ratings and votes move with every import,
--- titles are withdrawn, and a card's price is its rating, so a live read
--- would change prices halfway through a day.
+-- titles are withdrawn and filmographies grow, so a live read would
+-- change the Movies sheets halfway through a day.
 --
 -- no is the day's number, the first puzzle ever being No. 1; a day
--- nothing was picked for still uses its number up. people is the
--- answer's people in slot order, directors then billed cast, as
--- [{id, name, role}]; cards is the board, every rated movie on the
--- answer's map but the answer, as [{id, film, title, year, rating, md,
--- votes, people}] in card id order, with each card's people as slots;
--- start is the three card ids face up from the beginning. era and genre
--- are the answer's era in the opening screen's pool and its first IMDb
--- genre, which the next days' picks are mixed against. Nothing of the
--- answer's synopsis is kept: no clue may be a line of its text.
+-- nothing was picked for still uses its number up. The answer is its id,
+-- title, year, rating, month-day (md), runtime in minutes (length), the
+-- poster's average colour as "#rrggbb" and its IMDb genres. directors are
+-- [{id, name}] in crew order. billed is the six cast the game shows, in
+-- reveal order, sixth-billed first and the star last, as [{id, name,
+-- billing, also}], billing their place in the cast and also another
+-- movie of theirs, {id, title, year}, or absent. movies are the Movies
+-- sheets: every movie on one of the six's, [{id, title, year, rating,
+-- md, genres, cast, sheets, dir}], cast the slots of the six it
+-- credits, sheets the slots whose own sheet it is on (each one's 400
+-- most voted), and dir whether a director is on it, the answer among
+-- them. era and genre are the answer's era in the opening screen's pool
+-- and its first IMDb genre, which the next days' picks are mixed
+-- against. Nothing of the answer's synopsis is kept: no fact may be a
+-- line of its text.
 CREATE TABLE IF NOT EXISTS meta.daily_puzzles (
     no        int PRIMARY KEY,
     day       date UNIQUE NOT NULL,
@@ -348,23 +376,16 @@ CREATE TABLE IF NOT EXISTS meta.daily_puzzles (
     year      int NOT NULL,
     rating    numeric(3,1) NOT NULL,
     md        int NOT NULL,
-    people    jsonb NOT NULL,
+    length    int NOT NULL,
+    colour    char(7) NOT NULL,
     genres    text[] NOT NULL,
-    cards     jsonb NOT NULL,
-    start     text[] NOT NULL,
+    directors jsonb NOT NULL,
+    billed    jsonb NOT NULL,
+    movies    jsonb NOT NULL,
     era       int NOT NULL,
     genre     text NOT NULL,
     picked_at timestamptz NOT NULL DEFAULT now()
 );
-
--- opening was the first sentence of the answer's synopsis, the "How it
--- starts" clue. Any sentence of a synopsis can be pasted into a search
--- engine, and The Matrix's names Neo and Morpheus, so one search gave
--- the answer away. The year clue replaced it, and needs nothing kept:
--- it is the year column above. Dropped here as well as left out of the
--- CREATE, so a database made before the year, whose column is NOT NULL,
--- stops asking every new puzzle for one; on any other this does nothing.
-ALTER TABLE meta.daily_puzzles DROP COLUMN IF EXISTS opening;
 
 -- A player is a cookie, with a name the server gave them. token is the
 -- SHA-256 of the cookie, which is the player's only credential, so the
@@ -382,11 +403,15 @@ CREATE TABLE IF NOT EXISTS meta.daily_players (
 -- One game per player per puzzle, made when they press Play. A game is
 -- its moves (daily_moves), and everything about it is worked out by
 -- replaying them; the columns here are only what the boards and the
--- streak read, kept in step with every move. pts is the points left,
--- moves how many are recorded, and ms the time from Play to the end,
--- set with finished_at when it ends. A game nobody finished by the
--- midnight of its zone (below) is abandoned: it scores nothing and is on
--- no board.
+-- streak read, kept in step with every move. pts is the points left and
+-- moves how many are recorded; finished_at is set when it ends. There is
+-- no clock: the boards rank by points alone. zone is the IANA time zone
+-- Play was pressed in, as the page named it: each reader plays the
+-- puzzle for their own date, and a game may be played only while its
+-- puzzle's day is the date in this zone, checked against the zone kept
+-- here and never the one a move names, so a tab cannot hop zones to play
+-- on past its midnight. A game nobody finished by then is abandoned: it
+-- scores nothing and is on no board.
 CREATE TABLE IF NOT EXISTS meta.daily_games (
     id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     player      bigint NOT NULL REFERENCES meta.daily_players (id) ON DELETE CASCADE,
@@ -397,26 +422,17 @@ CREATE TABLE IF NOT EXISTS meta.daily_games (
     finished_at timestamptz,
     won         boolean NOT NULL DEFAULT false,
     gave_up     boolean NOT NULL DEFAULT false,
-    ms          int,
+    zone        text NOT NULL DEFAULT 'UTC',
     UNIQUE (player, no)
 );
 
--- zone is the IANA time zone Play was pressed in, as the page named it.
--- Each reader plays the puzzle for their own date, and a game may be
--- played only while its puzzle's day is the date in this zone: a move is
--- checked against the zone kept here, never the one the move names, so
--- a tab cannot hop zones to play on past its midnight. Added rather than
--- created with the table, so a database that already holds the table
--- gains it; the games before it were all on UTC's day.
-ALTER TABLE meta.daily_games ADD COLUMN IF NOT EXISTS zone text NOT NULL DEFAULT 'UTC';
-
--- Today's board in its own order: points, then time. Partial, so it
--- holds only the games that can be on a board. The streak and the week
--- read a player's games by (player, no), which the unique constraint
--- already indexes, and DailyPlayed counts every game of one puzzle,
--- finished or not, by daily_games_no below.
+-- Today's board in its own order, by points. Partial, so it holds only
+-- the games that can be on a board. The streak and the week read a
+-- player's games by (player, no), which the unique constraint already
+-- indexes, and DailyPlayed counts every game of one puzzle, finished or
+-- not, by daily_games_no below.
 CREATE INDEX IF NOT EXISTS daily_games_board
-    ON meta.daily_games (no, pts DESC, ms) WHERE finished_at IS NOT NULL;
+    ON meta.daily_games (no, pts DESC) WHERE finished_at IS NOT NULL;
 
 -- One puzzle's games, finished or not: DailyPlayed's count, which the
 -- opening screen's banner asks for on every visit. Neither index above
@@ -427,16 +443,17 @@ CREATE INDEX IF NOT EXISTS daily_games_no ON meta.daily_games (no);
 
 -- A game's moves, in order. key is the page's own name for the request
 -- that made the move, so a retry is answered with the game rather than
--- charged twice. arg is the card turned over or the movie guessed, cost
--- what the move cost, and detail, for a wrong guess, what it learned
--- when it was made: the movie's title, year and rating, who it shares
--- with the answer and where the answer sits from it, so a replay never
--- needs the live catalog.
+-- charged twice. arg is the person an overlap adds or the movie guessed,
+-- cost what the move cost, and detail, for a wrong guess, what it
+-- learned when it was made: the movie's title and year, the slots of the
+-- six it credits, and whether it shares the answer's decade and a genre,
+-- so a replay never needs the live catalog.
 CREATE TABLE IF NOT EXISTS meta.daily_moves (
     game   bigint NOT NULL REFERENCES meta.daily_games (id) ON DELETE CASCADE,
     seq    int NOT NULL,
     key    text NOT NULL,
-    kind   text NOT NULL CHECK (kind IN ('flip', 'director', 'actor', 'genres', 'year', 'guess', 'reveal')),
+    kind   text NOT NULL CHECK (kind IN ('next', 'length', 'rating', 'genre', 'decade', 'years',
+                                         'director', 'overlap', 'guess', 'reveal')),
     arg    text,
     cost   int NOT NULL,
     detail jsonb,
@@ -444,25 +461,3 @@ CREATE TABLE IF NOT EXISTS meta.daily_moves (
     PRIMARY KEY (game, seq),
     UNIQUE (game, key)
 );
-
--- The kinds a move can be, made to match the CREATE on a database whose
--- table was made before the year replaced "story": CREATE TABLE IF NOT
--- EXISTS leaves an existing table's check as it was, and that one would
--- refuse every year bought. No game recorded "story" outside
--- development, so the new check has nothing to refuse. Guarded, once,
--- because this file runs on every process start and ADD CONSTRAINT is
--- not free: it reads every move ever made, holding the table, while it
--- checks them.
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'meta.daily_moves'::regclass
-          AND conname  = 'daily_moves_kind_check'
-          AND pg_get_constraintdef(oid) LIKE '%''year''%'
-    ) THEN
-        ALTER TABLE meta.daily_moves DROP CONSTRAINT IF EXISTS daily_moves_kind_check;
-        ALTER TABLE meta.daily_moves ADD CONSTRAINT daily_moves_kind_check
-            CHECK (kind IN ('flip', 'director', 'actor', 'genres', 'year', 'guess', 'reveal'));
-    END IF;
-END $$;

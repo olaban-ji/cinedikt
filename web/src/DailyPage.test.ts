@@ -3,799 +3,205 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
-  fetchDailyWeek,
+  type DailyAlso,
+  type DailyBoard,
   type DailyEntry,
-  type DailyFilm,
   type DailyGame,
+  type DailyGuess,
   type DailyPerson,
+  type DailySlot,
   type DailyToday,
-  type DailyWeek,
+  type SearchHit,
 } from './api';
-import { BoardCard } from './DailyBoard';
-import { DailyIntro, enterIntro, nextStop } from './DailyIntro';
-import { DailyGameView, DailyHeaderTail, DailyPage, askForStanding, fetchDailyPage, playAgain } from './DailyPage';
-import { DailyPanel } from './DailyPanel';
+import { DailyBar, HitList, MessageBox } from './DailyBar';
+import { DailyCast } from './DailyCast';
+import { DailyFace } from './DailyFace';
+import { DailyGameView, DailyHeaderTail, DailyPage, playAgain } from './DailyPage';
+import { DailyLeaderboard, DailyResult } from './DailyResult';
+import { DailyRules, nextStop } from './DailyRules';
 import {
-  CLUE_COST,
-  DAILY_START,
-  FLIP_MAX,
-  FLIP_MIN,
-  STEPS_WIDE_QUERY,
-  WRONG_BASE,
-  WRONG_STEP,
-  YEAR_PLACEHOLDER,
-  boardPayload,
-  introDelay,
+  HIT_INSETS,
+  castRows,
+  codesOf,
+  guessMessage,
+  openingRows,
+  revealDelays,
+  todaysPeople,
 } from './daily';
-import { layoutGrid } from './grid';
+import css from './grid.css?raw';
 
-// ---- a small puzzle: The Matrix, on a board of six ----
+// ---- today's movie: The Matrix, No. 143 ----
 
-const film = (id: string, title: string, year: number, rating: number): DailyFilm => ({
-  id,
-  title,
-  year,
-  rating,
-  md: 0,
-});
+const person = (id: string, name: string, hue: number, photo?: string): DailyPerson =>
+  photo ? { id, name, hue, photo } : { id, name, hue };
 
-const MAN_AND_BOY = film('tt0068907', 'Man and Boy', 1971, 5.5);
-const BOBBY = film('tt0108065', 'Searching for Bobby Fischer', 1993, 7.3);
-const BABY = film('tt0109190', 'Baby’s Day Out', 1994, 6.3);
-const RELOADED = film('tt0234215', 'The Matrix Reloaded', 2003, 7.2);
-const BOUND = film('tt0115736', 'Bound', 1996, 7.3);
-const MATRIX = { ...film('tt0133093', 'The Matrix', 1999, 8.7), genres: ['Action', 'Sci-Fi'] };
-const LANA: DailyPerson = { id: 'nm0905154', name: 'Lana Wachowski', role: 'director', slot: 0, cards: ['c4', 'c5'] };
+// The cast in reveal order, sixth-billed first, each in the hue of their
+// place on the movie, the star first, then the directors.
+const JOE = person('nm0001592', 'Joe Pantoliano', 205, 'https://image.tmdb.org/t/p/w185/joe.jpg');
+const GLORIA = person('nm0287825', 'Gloria Foster', 78);
+const HUGO = person('nm0915989', 'Hugo Weaving', 150);
+const CARRIE = person('nm0005251', 'Carrie-Anne Moss', 345);
+const LAURENCE = person('nm0000401', 'Laurence Fishburne', 28);
+const KEANU = person('nm0000206', 'Keanu Reeves', 232);
+const LANA = person('nm0905154', 'Lana Wachowski', 118);
+const LILLY = person('nm0905152', 'Lilly Wachowski', 255);
+const CAST = [JOE, GLORIA, HUGO, CARRIE, LAURENCE, KEANU];
 
-function todayOf(game: DailyGame | null = null): DailyToday {
-  return {
-    no: 142,
-    date: '2026-10-08',
-    now: '2026-10-08T12:00:00Z',
-    next: '2026-10-09T00:00:00Z',
-    cards: [
-      { id: 'c1', year: 1971, rating: 5.5, md: 0 },
-      { id: 'c2', year: 1993, rating: 7.3, md: 0 },
-      { id: 'c3', year: 1994, rating: 6.3, md: 0 },
-      { id: 'c4', year: 2003, rating: 7.2, md: 0 },
-      { id: 'c5', year: 1996, rating: 7.3, md: 0 },
-      { id: 'c6', year: 2000, rating: 7.0, md: 0 },
-    ],
-    start: [
-      { card: 'c1', film: MAN_AND_BOY },
-      { card: 'c2', film: BOBBY },
-      { card: 'c3', film: BABY },
-    ],
-    clues: { directors: 2, cast: 6 },
-    player: { name: 'Trinity Kimble', saved: false },
-    played: 61240,
-    streak: { now: 0, before: 3 },
-    game,
-  };
+const ALSO: DailyAlso[] = [
+  { id: 'tt0106977', title: 'The Fugitive', year: 1993 },
+  { id: 'tt0068907', title: 'Man and Boy', year: 1971 },
+  { id: 'tt0434409', title: 'V for Vendetta', year: 2005 },
+  { id: 'tt0241303', title: 'Chocolat', year: 2000 },
+  { id: 'tt0078788', title: 'Apocalypse Now', year: 1979 },
+  { id: 'tt2911666', title: 'John Wick', year: 2014 },
+];
+
+const MATRIX = {
+  id: 'tt0133093',
+  title: 'The Matrix',
+  year: 1999,
+  rating: 8.7,
+  length: 136,
+  genres: ['Action', 'Sci-Fi'],
+  colour: '#26382d',
+  poster: 'https://m.media-amazon.com/images/M/matrix.jpg',
+};
+
+/** The six slots, each shown as `shown` says, or hidden. */
+function slotsOf(shown: Record<number, 'start' | 'next' | 'guess'>): DailySlot[] {
+  return CAST.map((p, slot): DailySlot => {
+    const via = shown[slot];
+    return via ? { slot, shown: true, person: p, also: ALSO[slot], via } : { slot, shown: false };
+  });
 }
 
-function gameOf(log: DailyEntry[], over: Partial<DailyGame> = {}): DailyGame {
+const ALL_SHOWN = slotsOf({ 0: 'start', 1: 'next', 2: 'next', 3: 'guess', 4: 'next', 5: 'next' });
+
+function wrong(
+  id: string,
+  title: string,
+  year: number,
+  over: Partial<Pick<DailyGuess, 'shared' | 'sameDecade' | 'sharesGenre' | 'cost' | 'warmth'>> = {},
+): Extract<DailyEntry, { type: 'guess' }> {
+  const guess: DailyGuess = {
+    id,
+    title,
+    year,
+    cost: over.cost ?? 100,
+    shared: over.shared ?? [],
+    sameDecade: over.sameDecade ?? false,
+    sharesGenre: over.sharesGenre ?? false,
+    warmth: over.warmth ?? 0,
+  };
+  return { type: 'guess', cost: guess.cost, guess };
+}
+
+const THIRTEENTH = wrong('tt0139809', 'The Thirteenth Floor', 1999, { sameDecade: true, sharesGenre: true, warmth: 1 });
+// Keanu Reeves is in it, and it is an action movie: hot.
+const SPEED = wrong('tt0111257', 'Speed', 1994, { shared: [5], sharesGenre: true, cost: 150, warmth: 2 });
+
+/** A game just started: the sixth-billed showing, nothing bought. */
+function gameOf(over: Partial<DailyGame> = {}): DailyGame {
   return {
     phase: 'play',
     pts: 1000,
-    seq: log.length,
-    startedAt: '2026-10-08T11:58:00Z',
+    seq: 0,
+    startedAt: '2026-10-09T11:58:00Z',
     finishedAt: null,
-    secs: null,
     won: false,
     gaveUp: false,
     nextCost: 100,
-    log: [{ type: 'start' }, ...log],
-    known: [],
+    slots: slotsOf({ 0: 'start' }),
+    facts: {},
+    overlaps: [],
+    log: [],
     end: null,
     ...over,
   };
 }
 
-function won(): DailyGame {
-  return gameOf([{ type: 'flip', card: 'c5', cost: 55, film: BOUND }, { type: 'win' }], {
+/** The screenshots' game in progress: two extra names, the decade, and one
+ *  wrong guess, which showed a fourth. */
+const PLAYING = gameOf({
+  pts: 600,
+  seq: 4,
+  nextCost: 150,
+  slots: slotsOf({ 0: 'start', 1: 'next', 2: 'next', 3: 'guess' }),
+  facts: { decade: 1990 },
+  log: [
+    { type: 'next', cost: 100, slot: 1 },
+    { type: 'next', cost: 100, slot: 2 },
+    { type: 'fact', kind: 'decade', cost: 100 },
+    THIRTEENTH,
+  ],
+});
+
+function ended(log: DailyEntry[], over: Partial<DailyGame> = {}): DailyGame {
+  return gameOf({
     phase: 'done',
-    pts: 695,
-    won: true,
-    secs: 192,
-    finishedAt: '2026-10-08T12:01:12Z',
-    end: {
-      answer: MATRIX,
-      cards: [
-        { id: 'c1', film: MAN_AND_BOY, people: [] },
-        { id: 'c2', film: BOBBY, people: [] },
-        { id: 'c3', film: BABY, people: [] },
-        { id: 'c4', film: RELOADED, people: [0] },
-        { id: 'c5', film: BOUND, people: [0] },
-        { id: 'c6', film: film('tt0000006', 'Six', 2000, 7.0), people: [] },
-      ],
-      people: [LANA],
-    },
+    finishedAt: '2026-10-09T12:04:00Z',
+    slots: ALL_SHOWN,
+    log,
+    end: { answer: MATRIX, directors: [LANA, LILLY] },
+    ...over,
   });
 }
 
-/** The game view's props for this puzzle, from a server in development
+/** The screenshots' solve, at 600 points. */
+const SOLVED = ended([...PLAYING.log, { type: 'win' }], { pts: 600, won: true, facts: { decade: 1990 } });
+const OUT = ended([THIRTEENTH, { type: 'out' }], { pts: 0 });
+const GAVE_UP = ended([{ type: 'gaveup' }], { pts: 0, gaveUp: true });
+
+/** Today's puzzle, with this game in it, from a server in development
  *  when `dev` is set. */
-function viewProps(
-  game: DailyGame | null,
-  week: DailyWeek | null = null,
-  dev = false,
-  again: () => void = () => {},
-): ComponentProps<typeof DailyGameView> {
+function todayOf(game: DailyGame | null, dev = false, played = 61240): DailyToday {
   return {
-    today: dev ? { ...todayOf(game), dev: true } : todayOf(game),
-    week,
+    no: 143,
+    date: '2026-10-09',
+    now: '2026-10-09T12:00:00Z',
+    next: '2026-10-10T00:00:00Z',
+    colour: '#26382d',
+    player: { name: 'Trinity Kimble', saved: game != null },
+    played,
+    streak: { now: 0, before: 1 },
+    game,
+    ...(dev ? { dev: true } : {}),
+  };
+}
+
+function viewProps(game: DailyGame | null, dev = false, again: () => void = () => {}): ComponentProps<typeof DailyGameView> {
+  return {
+    today: todayOf(game, dev),
     offset: 0,
     say: () => {},
     reload: () => {},
     again,
     rulesSignal: 0,
+    onOpenMovie: () => {},
   };
 }
 
-/** The game for this puzzle, as its first render draws it, with the
- *  reader's place this week as the page asked for it, or none. Effects
- *  never run on the server renderer, so nothing is fetched, nothing is
- *  scrolled and nothing moves: what is left is what each state draws. */
-function drawn(game: DailyGame | null, week: DailyWeek | null = null, dev = false): string {
-  return renderToStaticMarkup(createElement(DailyGameView, viewProps(game, week, dev)));
+/** The game for this puzzle as its first render draws it. Effects never
+ *  run on the server renderer, so nothing is fetched, nothing is scrolled
+ *  and nothing moves: what is left is what each state draws. */
+function drawn(game: DailyGame | null, dev = false): string {
+  return renderToStaticMarkup(createElement(DailyGameView, viewProps(game, dev)));
 }
 
-/** What a reader can read: the text, and the words the page says out
- *  loud or as a placeholder. Class names are code, and may say film. */
+/** What a reader can read: the text, and the words the page says out loud
+ *  or as a placeholder. Class names are code. */
 function words(markup: string): string {
   const said = [...markup.matchAll(/(?:aria-label|placeholder|title)="([^"]*)"/g)].map((m) => m[1]);
   return `${markup.replace(/<[^>]*>/g, ' ')} ${said.join(' ')}`;
 }
 
-beforeEach(() => {
-  vi.stubGlobal('window', { innerWidth: 1366, innerHeight: 768 });
-});
+/** Where each part starts in the markup, for their order. */
+const at = (html: string, cls: string) => html.indexOf(`class="${cls}`);
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-describe('the page before Play', () => {
-  it('opens on the intro, over a board of blank cards', () => {
-    const html = drawn(null);
-    expect(html).toContain('role="dialog"');
-    expect(html).toContain('aria-modal="true"');
-    expect(html).toContain('<h1 id="cd-daily-title" class="cd-daily-intro-title">Point Blank</h1>');
-    expect(html).toContain(
-      '<p class="cd-daily-goal">Name today’s hidden movie. Keep as many of your 1,000 points as you can.</p>',
-    );
-    expect(html).toContain('Hidden movie from 1971. Turn it over for 35 points');
-    // The starting three turn over when the clock starts, not before.
-    expect(html).not.toContain('Man and Boy');
-    expect(html).not.toContain('Today’s game');
-  });
-
-  it('keeps the board out of reach behind it', () => {
-    expect(drawn(null)).toMatch(/aria-label="Today’s map" aria-hidden="true" inert=""/);
-  });
-
-  it('says who the reader is playing as, the day, the streak, and how many have played', () => {
-    const html = drawn(null);
-    expect(html).toContain('Playing as');
-    expect(html).toContain('Trinity Kimble');
-    expect(html).toContain('New name');
-    expect(html).toContain('Thursday 8 October');
-    expect(html).toContain('3-day streak');
-    expect(html).toContain('Play No. 142');
-    expect(words(html)).toMatch(/61,240\s*people have played today\. The clock starts when you press Play\./);
-  });
-
-  it('counts nobody before anyone has played, and still says when the clock starts', () => {
-    const today = { ...todayOf(null), played: 0 };
-    const html = renderToStaticMarkup(
-      createElement(DailyGameView, { ...viewProps(null), today }),
-    );
-    expect(html).not.toContain('people have played today');
-    expect(html).not.toContain('cd-daily-live-n');
-    expect(html).toContain('<p class="cd-daily-live" data-in="1">The clock starts when you press Play.</p>');
-  });
-});
-
-describe('how to play, on the title screen', () => {
-  const props = (over: Partial<ComponentProps<typeof DailyIntro>> = {}): ComponentProps<typeof DailyIntro> => ({
-    today: todayOf(null),
-    game: null,
-    name: 'Trinity Kimble',
-    spinning: false,
-    streak: 3,
-    rank: '1,204th this week',
-    rules: false,
-    busy: false,
-    dialogRef: { current: null },
-    nameRef: { current: null },
-    onGo: () => {},
-    onReroll: () => {},
-    onClose: () => {},
-    theme: 'dark',
-    ...over,
-  });
-  const intro = (over: Partial<ComponentProps<typeof DailyIntro>> = {}) =>
-    renderToStaticMarkup(createElement(DailyIntro, props(over)));
-  /** The list, and each of its items. */
-  const list = (html: string) => /<ol class="cd-daily-steps[^"]*" aria-label="How to play">[\s\S]*?<\/ol>/.exec(html)?.[0] ?? '';
-  const steps = (html: string) => [...list(html).matchAll(/<li class="cd-daily-step" data-in="1">([\s\S]*?)<\/li>/g)].map((m) => m[1]);
-  /** What a screen reader is given of a step: the pictures and the
-   *  numbers are hidden, which leaves its name and its line. */
-  const heard = (step: string) =>
-    step
-      .replace(/<div class="cd-daily-step-pic[^"]*" aria-hidden="true">[\s\S]*?<\/div>/g, '')
-      .replace(/<span class="cd-daily-step-n" aria-hidden="true">\d<\/span>/g, '')
-      .replace(/<span class="cd-daily-step-name">([^<]*)<\/span>/, '$1. ')
-      .replace(/<[^>]*>/g, '');
-  const texts = (html: string, cls: string) =>
-    [...html.matchAll(new RegExp(`<span class="${cls}"[^>]*>(?:<span[^>]*></span>)?([^<]*)</span>`, 'g'))].map((m) => m[1]);
-  const CAPTIONS = [
-    'Every movie here shares an actor or director with the hidden one. Three start face up.',
-    'Turn over cards and buy clues. Higher-rated cards cost more.',
-    'Wrong guesses cost 100, then 150, 200… Each shows who it shares and narrows the year and rating.',
-    'The points you keep are your score. Time breaks ties.',
-  ];
-
-  it('is a list of four steps a screen reader hears in order, each its name and its line', () => {
-    const got = steps(intro());
-    expect(got).toHaveLength(4);
-    expect(got.map(heard)).toEqual(['Look', 'Spend', 'Guess', 'Score'].map((name, i) => `${name}. ${CAPTIONS[i]}`));
-    // Numbered by the list itself; the circles say it again for the eye.
-    expect(got.map((s) => /<span class="cd-daily-step-n" aria-hidden="true">(\d)<\/span>/.exec(s)?.[1])).toEqual(['1', '2', '3', '4']);
-  });
-
-  it('hides every picture from a screen reader', () => {
-    const pics = [...list(intro()).matchAll(/<div class="cd-daily-step-pic ([^"]*)"([^>]*)>/g)];
-    expect(pics.map((m) => m[1])).toEqual(['cd-daily-step-look', 'cd-daily-step-spend', 'cd-daily-step-guess', 'cd-daily-step-score']);
-    for (const m of pics) expect(m[2]).toBe(' aria-hidden="true"');
-  });
-
-  it('draws Look as a board of fifteen, three face up and the hidden one dashed in the middle, under its axes', () => {
-    const [look] = steps(intro());
-    expect(look).toContain('<span class="cd-daily-step-axis cd-daily-step-axis-year">Year ↓</span>');
-    expect(look).toContain('<span class="cd-daily-step-axis cd-daily-step-axis-rating">Rating →</span>');
-    const cards = [...look.matchAll(/<span class="cd-daily-step-card cd-daily-step-card-(\w+)">([^<]*)<\/span>/g)];
-    expect(cards.map((m) => m[1])).toEqual([
-      ...['blank', 'up', 'blank', 'blank', 'blank'],
-      ...['blank', 'blank', 'hidden', 'blank', 'up'],
-      ...['blank', 'up', 'blank', 'blank', 'blank'],
-    ]);
-    expect(cards.filter((m) => m[2]).map((m) => m[2])).toEqual(['?']);
-  });
-
-  it('draws Spend as the thousand, full, and what each thing costs', () => {
-    const spend = steps(intro())[1];
-    expect(spend).toContain('<span class="cd-daily-step-total">1,000</span><span class="cd-daily-step-full"></span>');
-    expect(texts(spend, 'cd-daily-step-chip')).toEqual(['Card 20–80', 'Person 150', 'Genres 80', 'Year 200']);
-    // Each read from the rules, so a new price cannot leave this saying
-    // the old one.
-    expect(texts(spend, 'cd-daily-step-chip')).toEqual([
-      `Card ${FLIP_MIN}–${FLIP_MAX}`,
-      `Person ${CLUE_COST.director}`,
-      `Genres ${CLUE_COST.genres}`,
-      `Year ${CLUE_COST.year}`,
-    ]);
-    expect(CLUE_COST.actor).toBe(CLUE_COST.director);
-  });
-
-  it('draws Guess as a wrong guess and what it told: who it shares, in their colour, and which way to go', () => {
-    const guess = steps(intro())[2];
-    expect(guess).toContain(
-      '<span class="cd-daily-step-field"><span class="cd-daily-step-typed">John Wick</span><span class="cd-daily-step-chip cd-daily-step-chip-down">−100</span></span>',
-    );
-    expect(texts(guess, 'cd-daily-step-chip cd-daily-step-chip-plain')).toEqual(['Keanu Reeves', 'Older', 'Rated higher']);
-    // The first person on a board's colour, worked out for the theme and
-    // set inline, as every person's is.
-    expect(guess).toContain('<span class="cd-daily-step-dot" style="--tone:oklch(0.78 0.12 205)"></span>Keanu Reeves');
-    expect(steps(intro({ theme: 'light' }))[2]).toContain('style="--tone:oklch(0.55 0.15 205)"');
-    expect(heard(guess)).toContain(
-      `cost ${WRONG_BASE}, then ${WRONG_BASE + WRONG_STEP}, ${WRONG_BASE + 2 * WRONG_STEP}…`,
-    );
-  });
-
-  it('draws Score as the points kept over a bar filled to their share of the start', () => {
-    const score = steps(intro())[3];
-    expect(score).toContain(
-      '<span class="cd-daily-step-kept"><span class="cd-daily-step-kept-n">640</span><span class="cd-daily-step-kept-words">points left</span></span>',
-    );
-    expect(score).toContain('<span class="cd-daily-step-bar-fill" style="width:64%"></span>');
-    expect(DAILY_START).toBe(1000);
-  });
-
-  it('replaces the cost tiles and the paragraph of rules', () => {
-    for (const html of [intro(), intro({ game: gameOf([]), rules: true }), drawn(null)]) {
-      expect(html).not.toContain('What things cost');
-      expect(html).not.toContain('cd-daily-cost');
-      expect(html).not.toContain('cd-daily-tag');
-      expect(html).not.toContain('cd-daily-rules');
-      expect(html).not.toContain('cd-daily-lead');
-      expect(html).not.toContain('You start with three');
-      expect(html).not.toContain('Each wrong guess costs');
-    }
-  });
-
-  it('keeps the name row, Play, the count and both pills, the steps between the goal line and the name', () => {
-    const html = drawn(null, { rank: 1204, players: 83500 });
-    expect(html).toContain('<span class="cd-daily-player-kicker">Playing as</span>');
-    expect(html).toContain('New name');
-    expect(html).toContain('Play No. 142');
-    expect(html).toContain('people have played today. The clock starts when you press Play.');
-    expect(html).toContain('3-day streak');
-    expect(html).toContain('1,204th this week');
-    const at = (needle: string) => html.indexOf(needle);
-    expect(at('cd-daily-goal')).toBeLessThan(at('aria-label="How to play"'));
-    expect(at('aria-label="How to play"')).toBeLessThan(at('cd-daily-player'));
-    // The rules say the same, and lead back.
-    expect(steps(intro({ game: gameOf([]), rules: true }))).toHaveLength(4);
-  });
-
-  it('goes four across in a window 760px wide or more, and two by two below it', () => {
-    const cls = () => /<ol class="([^"]*)" aria-label="How to play">/.exec(intro())?.[1];
-    // As the window says through matchMedia, which measures it as the
-    // design's 760 does…
-    const media = (wide: boolean) => ({
-      innerWidth: wide ? 760 : 759,
-      innerHeight: 900,
-      matchMedia: (q: string) => ({ matches: q === STEPS_WIDE_QUERY && wide }),
-    });
-    vi.stubGlobal('window', media(true));
-    expect(cls()).toBe('cd-daily-steps');
-    vi.stubGlobal('window', media(false));
-    expect(cls()).toBe('cd-daily-steps cd-daily-steps-pairs');
-    // …or by its width alone where there is no matchMedia.
-    vi.stubGlobal('window', { innerWidth: 760, innerHeight: 900 });
-    expect(cls()).toBe('cd-daily-steps');
-    vi.stubGlobal('window', { innerWidth: 375, innerHeight: 812 });
-    expect(cls()).toBe('cd-daily-steps cd-daily-steps-pairs');
-  });
-
-  it('joins the screen’s entrance a step at a time, between the goal line and the name', () => {
-    const parts = [...intro().matchAll(/class="([^"]*)" data-in="1"/g)].map((m) => m[1]);
-    expect(parts).toEqual([
-      'cd-daily-fan',
-      'cd-daily-meta',
-      'cd-daily-intro-words',
-      'cd-daily-step',
-      'cd-daily-step',
-      'cd-daily-step',
-      'cd-daily-step',
-      'cd-daily-player',
-      'cd-daily-play',
-      'cd-daily-live',
-    ]);
-    // Played on stand-ins for the parts, as the dialog would find them.
-    const enter = (still: boolean) => {
-      vi.stubGlobal('window', {
-        innerWidth: 1366,
-        innerHeight: 768,
-        matchMedia: (q: string) => ({ matches: still && q === '(prefers-reduced-motion: reduce)' }),
-      });
-      const found = parts.map(() => ({ animate: vi.fn() }));
-      const dialog = { animate: vi.fn(), querySelectorAll: () => found };
-      enterIntro(dialog as unknown as Element);
-      return { dialog, found };
-    };
-    const { dialog, found } = enter(false);
-    expect(dialog.animate).toHaveBeenCalledTimes(1);
-    const waits = found.map((p) => (p.animate.mock.calls[0][1] as KeyframeAnimationOptions).delay);
-    expect(waits).toEqual(parts.map((_, i) => introDelay(i)));
-    // The steps rise in turn, 70ms apart.
-    expect(waits.slice(3, 7)).toEqual([290, 360, 430, 500]);
-    // Asked for stillness, nothing plays: everything is simply there.
-    const still = enter(true);
-    expect(still.dialog.animate).not.toHaveBeenCalled();
-    for (const p of still.found) expect(p.animate).not.toHaveBeenCalled();
-  });
-});
-
-describe('the game’s name', () => {
-  // Every source file and stylesheet in the app, and the page they load
-  // into. The old name is spelt out in pieces so this file is not one of
-  // the places it is found.
-  const sources = {
-    ...import.meta.glob('./**/*.{ts,tsx,css}', { query: '?raw', import: 'default', eager: true }),
-    ...import.meta.glob('../index.html', { query: '?raw', import: 'default', eager: true }),
-  } as Record<string, string>;
-  const OLD_NAME = new RegExp(['whose', 'map', 'is', 'it'].join('\\s+'), 'i');
-
-  it('reads the whole app', () => {
-    expect(Object.keys(sources).length).toBeGreaterThan(80);
-    expect(Object.keys(sources)).toContain('./DailyIntro.tsx');
-    expect(Object.keys(sources)).toContain('../index.html');
-  });
-
-  it('is Point Blank, and the old one is nowhere: not in the copy, the labels, the tests or the styles', () => {
-    expect([...Object.entries(sources)].filter(([, text]) => OLD_NAME.test(text)).map(([file]) => file)).toEqual([]);
-    expect(drawn(null)).toContain('>Point Blank</h1>');
-  });
-});
-
-describe('a new name on its way', () => {
-  const props = (game: DailyGame | null, spinning: boolean): ComponentProps<typeof DailyIntro> => ({
-    today: todayOf(game),
-    game,
-    name: 'Tr?ntky K?mble',
-    spinning,
-    streak: 0,
-    rank: '',
-    rules: !!game,
-    busy: false,
-    dialogRef: { current: null },
-    nameRef: { current: null },
-    onGo: () => {},
-    onReroll: () => {},
-    onClose: () => {},
-    theme: 'dark',
-  });
-  const playButton = (html: string) => html.match(/<button[^>]*class="cd-daily-play-button"[^>]*>/)?.[0] ?? '';
-
-  it('holds Play until it lands, so the game starts under the name the reader ends up seeing', () => {
-    // Play sends the name shown. Pressed mid-spin it would start the game
-    // under the old name, and the reel would then land on one the server
-    // never kept.
-    const button = playButton(renderToStaticMarkup(createElement(DailyIntro, props(null, true))));
-    expect(button).toContain('disabled=""');
-    expect(button).toContain('aria-busy="true"');
-    expect(playButton(renderToStaticMarkup(createElement(DailyIntro, props(null, false))))).not.toContain('disabled');
-  });
-
-  it('never holds the way back to a game, which sends no name', () => {
-    const button = playButton(renderToStaticMarkup(createElement(DailyIntro, props(gameOf([]), true))));
-    expect(button).not.toContain('disabled');
-  });
-});
-
-describe('the page while the game is on', () => {
-  it('shows the starting three, the panel and nothing of the intro', () => {
-    const html = drawn(gameOf([]));
-    expect(html).not.toContain('role="dialog"');
-    expect(html).toContain('aria-label="Today’s game"');
-    expect(html).toContain('Searching for Bobby Fischer');
-    expect(html).toContain('Three movies from its map are showing.');
-    expect(html).toContain('aria-label="Show Man and Boy on the map"');
-    expect(html).toContain('aria-label="Points left"');
-    expect(html).toContain('aria-valuenow="1000"');
-  });
-
-  it('makes every blank card a button that says its price', () => {
-    const html = drawn(gameOf([]));
-    expect(html).toMatch(/role="button" tabindex="0" aria-label="Hidden movie from 2003\. Turn it over for 55 points"/);
-    expect(html).toMatch(/role="img" tabindex="-1" aria-label="Man and Boy, 1971, rated 5\.5"/);
-    expect(html).toContain('<span class="cd-daily-cost">55</span>');
-  });
-
-  it('offers the clues, the guess and the way out', () => {
-    const html = drawn(gameOf([]));
-    expect(html).toContain('aria-label="Clues to buy"');
-    expect(html).toContain('aria-label="Directors for 150 points"');
-    expect(html).toContain('aria-label="Year for 200 points"');
-    expect(html).toContain('placeholder="Name the movie"');
-    expect(html).toContain('role="combobox"');
-    expect(html).toContain('Click a blank card to turn it over. Your next wrong guess costs 100.');
-    expect(html).toContain('Show the answer');
-  });
-
-  it('turns a close relative over without its title', () => {
-    const html = drawn(gameOf([{ type: 'flip', card: 'c4', cost: 55, relative: { shared: 4 } }]));
-    expect(html).toContain('A close relative');
-    expect(html).toContain('4 in common');
-    expect(html).toContain('A close relative of today’s movie, from 2003, rated 7.2. It shares 4 people with it');
-    expect(html).not.toContain('Reloaded');
-  });
-
-  it('dots a blank card for each known person on it', () => {
-    const html = drawn(gameOf([{ type: 'person', role: 'director', cost: 150, people: [LANA] }], { known: [LANA] }));
-    expect(html.match(/class="cd-daily-dot"/g)).toHaveLength(2);
-    expect(html).toContain('It was directed by:');
-    expect(html).toContain('Lana Wachowski');
-  });
-
-  it('fades what the guesses rule out and draws where the answer can be', () => {
-    const html = drawn(
-      gameOf([
-        {
-          type: 'guess',
-          cost: 100,
-          film: BABY,
-          card: 'c3',
-          shared: [],
-          year: 'newer',
-          rating: 'higher',
-        },
-      ]),
-    );
-    expect(html).toContain('1995 or later');
-    expect(html).toContain('6.4+');
-    expect(html).toContain('Baby’s Day Out (1994) shares no one with today’s movie.');
-    expect(html).toContain('Today’s movie is newer and rated higher.');
-    // Man and Boy, from 1971 and rated 5.5, cannot be the answer's neighbour.
-    expect(html).toMatch(/data-card="c1"[^>]*opacity:0\.28/);
-    expect(html).not.toMatch(/data-card="c4"[^>]*opacity:0\.28/);
-  });
-
-  it('never holds the answer', () => {
-    const html = drawn(
-      gameOf([
-        { type: 'flip', card: 'c4', cost: 55, relative: { shared: 4 } },
-        { type: 'person', role: 'director', cost: 150, people: [LANA] },
-      ]),
-    );
-    expect(html).not.toContain(MATRIX.id);
-    expect(html).not.toContain('The Matrix');
-    expect(html).not.toContain('Today’s movie:');
-  });
-});
-
-describe('the page once the year is bought', () => {
-  // No card on this board is from 1999, so a row opens for it.
-  const YEAR: DailyEntry = { type: 'year', cost: 200, year: 1999 };
-  const band = (html: string, year: number) =>
-    html.match(new RegExp(`<div class="cd-band[^"]*" style="[^"]*" data-band="${year}"`))?.[0] ?? '';
-  const label = (html: string, year: number) =>
-    html.match(new RegExp(`data-rail="${year}"><span class="[^"]*"`))?.[0] ?? '';
-
-  it('says the year in the feed, and the button says it has been seen', () => {
-    const html = drawn(gameOf([YEAR], { pts: 800 }));
-    expect(html).toContain('It came out in 1999. The map marks where that year sits.');
-    expect(html).toMatch(/<span>Year<\/span><span class="cd-daily-entry-cost">−200<\/span>/);
-    expect(html).toMatch(/<button type="button" class="cd-daily-clue" disabled="" aria-label="Year: seen">/);
-    expect(html).toContain('<span class="cd-daily-tag cd-daily-tag-muted">Seen</span>');
-    expect(html).toContain('aria-valuenow="800"');
-  });
-
-  it('opens a row for it, washed and labelled in the accent, with no card drawn in it', () => {
-    const html = drawn(gameOf([YEAR], { pts: 800 }));
-    expect(band(html, 1999)).toContain('cd-band-anchor');
-    expect(band(html, 1999)).not.toContain('opacity');
-    expect(label(html, 1999)).toContain('cd-rail-anchor');
-    expect(html).not.toContain(YEAR_PLACEHOLDER);
-    expect(html.match(/data-card="/g)).toHaveLength(6);
-  });
-
-  it('fades every other year to .35, and no card', () => {
-    const html = drawn(gameOf([YEAR], { pts: 800 }));
-    for (const y of [1971, 1993, 1994, 1996, 2000, 2003]) {
-      expect(band(html, y), `${y}`).toContain('opacity:0.35');
-      expect(html, `${y}`).toMatch(new RegExp(`style="[^"]*opacity:0\\.35" data-rail="${y}"`));
-    }
-    // The starting three included: the year rules no card out.
-    expect(html).not.toContain('opacity:0.28');
-  });
-
-  it('rules both edges of the row and names it once', () => {
-    const html = drawn(gameOf([YEAR], { pts: 800 }));
-    expect(html.match(/class="cd-daily-bound-across"/g)).toHaveLength(2);
-    expect(html.match(/cd-daily-bound-pill-year"[^>]*>1999</g)).toHaveLength(1);
-  });
-
-  it('keeps the year on the rows after a wrong guess, adds its rating line, and fades the cards it rules out', () => {
-    const html = drawn(
-      gameOf([YEAR, { type: 'guess', cost: 100, film: BABY, card: 'c3', shared: [], year: 'newer', rating: 'higher' }], {
-        pts: 700,
-      }),
-    );
-    expect(html).toContain('6.4+');
-    expect(html).not.toContain('1995 or later');
-    expect(html.match(/cd-daily-bound-pill-year"[^>]*>1999</g)).toHaveLength(1);
-    // Man and Boy, 1971 and 5.5, is ruled out by the guess; The Matrix
-    // Reloaded's blank card, 2003 and 7.2, is not, though its row is.
-    expect(html).toMatch(/data-card="c1"[^>]*opacity:0\.28/);
-    expect(html).not.toMatch(/data-card="c4"[^>]*opacity:0\.28/);
-  });
-
-  it('keeps the row’s wash once the game is over, with the answer in it', () => {
-    const g = won();
-    const html = drawn({ ...g, log: [g.log[0], YEAR, ...g.log.slice(1)] });
-    expect(band(html, 1999)).toContain('cd-band-anchor');
-    expect(html).toContain('data-answer="1"');
-    expect(html).not.toContain('cd-daily-bound-across');
-    expect(html).toContain('You used 1 card and the year.');
-  });
-});
-
-describe('the reader’s place on the title screen', () => {
-  const props = (game: DailyGame | null, rank: string): ComponentProps<typeof DailyIntro> => ({
-    today: todayOf(game),
-    game,
-    name: 'Trinity Kimble',
-    spinning: false,
-    streak: 3,
-    rank,
-    rules: !!game,
-    busy: false,
-    dialogRef: { current: null },
-    nameRef: { current: null },
-    onGo: () => {},
-    onReroll: () => {},
-    onClose: () => {},
-    theme: 'dark',
-  });
-  const intro = (game: DailyGame | null, rank: string) =>
-    renderToStaticMarkup(createElement(DailyIntro, props(game, rank)));
-
-  it('follows the streak, in the streak pill’s box, with a podium for the flame', () => {
-    const html = intro(null, '1,204th this week');
-    expect(html).toMatch(
-      /<span class="cd-daily-streak">[\s\S]*?3-day streak<\/span><span class="cd-daily-streak cd-daily-standing"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M4.5 21v-6h5v6M9.5 21V8h5v13M14.5 21v-4h5v4"><\/path><\/svg>1,204th this week<\/span><\/div>/,
-    );
-  });
-
-  it('shows on every visit, the rules after playing included', () => {
-    expect(intro(gameOf([]), '1,204th this week')).toContain('1,204th this week');
-    expect(intro(won(), '1,203rd this week')).toContain('1,203rd this week');
-  });
-
-  it('is not there without a place to show', () => {
-    expect(intro(null, '')).not.toContain('cd-daily-standing');
-  });
-
-  it('is drawn in the title screen’s first frame, from the place the page asked for with the puzzle', () => {
-    // Not a round trip later, when it would re-centre the row it sits in
-    // part way through the entrance.
-    const html = drawn(null, { rank: 1204, players: 83500 });
-    expect(html).toMatch(
-      /<span class="cd-daily-streak cd-daily-standing"><svg[\s\S]*?<\/svg>1,204th this week<\/span>/,
-    );
-    expect(drawn(null)).not.toContain('cd-daily-standing');
-  });
-
-  it('comes with no leaderboard', () => {
-    const page = drawn(null, { rank: 1204, players: 83500 });
-    for (const html of [intro(null, '1,204th this week'), intro(won(), '1,204th this week'), page]) {
-      expect(html).not.toContain('cd-daily-row');
-      expect(html).not.toContain('Leaderboard');
-    }
-  });
-});
-
-describe('asking for the reader’s place', () => {
-  const WEEK: DailyWeek = { rank: 1204, players: 83500 };
-  // The place over the days before today, as the page opened with it.
-  const BEFORE: DailyWeek = { rank: 2048, players: 83500 };
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  /** A fetch that answers today's puzzle and the reader's standing by
-   *  address, and remembers what it was asked. A status of 0 is a request
-   *  that never got an answer. */
-  function stub(daily: { status: number; body?: unknown }, me: { status: number; body?: unknown }) {
-    const fetch = vi.fn(async (url: string) => {
-      const a = new URL(url, 'https://cinedikt.test').pathname === '/api/daily/me' ? me : daily;
-      if (a.status === 0) throw new TypeError('Failed to fetch');
-      return {
-        ok: a.status >= 200 && a.status < 300,
-        status: a.status,
-        statusText: '',
-        json: async () => a.body,
-      };
-    });
-    vi.stubGlobal('fetch', fetch);
-    return fetch;
-  }
-
-  it('asks for today’s puzzle and the reader’s place together as the page opens, both in the reader’s zone', async () => {
-    vi.spyOn(Intl, 'DateTimeFormat').mockImplementation((() => ({
-      resolvedOptions: () => ({ timeZone: 'Asia/Tokyo' }),
-    })) as unknown as typeof Intl.DateTimeFormat);
-    const fetch = stub({ status: 200, body: todayOf(null) }, { status: 200, body: { streak: 3, week: WEEK } });
-    await expect(fetchDailyPage(new AbortController().signal)).resolves.toEqual({ today: todayOf(null), week: WEEK });
-    const asked = fetch.mock.calls.map(([url]) => new URL(url, 'https://cinedikt.test'));
-    expect(asked.map((u) => u.pathname).sort()).toEqual(['/api/daily', '/api/daily/me']);
-    for (const u of asked) expect(u.searchParams.get('tz')).toBe('Asia/Tokyo');
-  });
-
-  it('opens the page with no place when the place cannot be had, or there is none', async () => {
-    for (const me of [{ status: 503 }, { status: 0 }, { status: 200, body: { streak: 0, week: null } }]) {
-      stub({ status: 200, body: todayOf(null) }, me);
-      const got = await fetchDailyPage(new AbortController().signal);
-      expect(got.today.no, `${me.status}`).toBe(142);
-      expect(got.week, `${me.status}`).toBeNull();
-    }
-  });
-
-  it('fails the page only when today’s puzzle fails', async () => {
-    stub(
-      { status: 503, body: { error: 'no puzzle yet', reason: 'not-ready' } },
-      { status: 200, body: { streak: 3, week: WEEK } },
-    );
-    await expect(fetchDailyPage(new AbortController().signal)).rejects.toMatchObject({ reason: 'not-ready' });
-  });
-
-  it('takes the place worked out with today in once the game ends here', async () => {
-    stub({ status: 200 }, { status: 200, body: { streak: 4, week: WEEK } });
-    let held: DailyWeek | null = BEFORE;
-    await askForStanding(fetchDailyWeek, new AbortController().signal, (w) => (held = w));
-    expect(held).toEqual(WEEK);
-  });
-
-  it('shows no place, never the one from before today’s game, when the place after it cannot be had', async () => {
-    for (const me of [{ status: 503 }, { status: 0 }]) {
-      stub({ status: 200 }, me);
-      let held: DailyWeek | null = BEFORE;
-      await askForStanding(fetchDailyWeek, new AbortController().signal, (w) => (held = w));
-      expect(held, `${me.status}`).toBeNull();
-    }
-    // Nor with a fetcher that fails outright.
-    let held: DailyWeek | null = BEFORE;
-    await askForStanding(() => Promise.reject(new Error('down')), new AbortController().signal, (w) => (held = w));
-    expect(held).toBeNull();
-  });
-
-  it('lets the place from before go as it asks, so none is shown while the new one is on its way', () => {
-    const told: (DailyWeek | null)[] = [];
-    void askForStanding(() => new Promise(() => {}), new AbortController().signal, (w) => told.push(w));
-    expect(told).toEqual([null]);
-  });
-
-  it('drops an answer that lands after the view has gone', async () => {
-    const ctrl = new AbortController();
-    // The view goes while the place is on its way.
-    const fetcher = async () => {
-      ctrl.abort();
-      return WEEK;
-    };
-    const told: (DailyWeek | null)[] = [];
-    await askForStanding(fetcher, ctrl.signal, (w) => told.push(w));
-    expect(told).toEqual([null]);
-  });
-});
-
-describe('the page once the game is over', () => {
-  it('puts the answer in its place, ringed and tagged, with its year lit', () => {
-    const html = drawn(won());
-    expect(html).toContain('data-answer="1"');
-    expect(html).toContain('aria-label="Today’s movie: The Matrix, 1999, rated 8.7"');
-    expect(html).toContain('<span class="cd-searched-tag"');
-    expect(html).toContain('cd-band-anchor');
-    // Every card is face up.
-    expect(html).not.toContain('Hidden movie from');
-  });
-
-  it('shows the result: the score, what it took, the answer and the card to share', () => {
-    const html = drawn(won());
-    expect(html).toContain('<h2 class="cd-daily-res-title">695 points</h2>');
-    expect(html).toContain('Solved in 3:12. You used 1 card.');
-    expect(html).toContain('aria-label="Show The Matrix on the map"');
-    expect(html).toContain('1999 · rated 8.7');
-    expect(html).toContain('Cinedikt Daily No. 142');
-    expect(html).toContain('695 points · 3:12');
-    expect(html).toContain('Copy');
-    expect(html).toContain('Leaderboard');
-    expect(html).toContain('Loading the leaderboard…');
-    expect(words(html)).toContain('Next map in');
-    expect(html).toContain('Explore the map');
-  });
-
-  it('waits for the board before saying how the reader did', () => {
-    const html = drawn(won());
-    expect(html).toContain('<span class="cd-daily-stat-n">–</span><span class="cd-daily-stat-caption">of players scored less</span>');
-    // Today's solve adds to the three days coming in.
-    expect(html).toContain('<span class="cd-daily-stat-n">4</span><span class="cd-daily-stat-caption">days in a row</span>');
-  });
-});
-
-describe('the Daily’s words on the page', () => {
-  it('say "movie", never "film", in every state', () => {
-    for (const game of [
-      null,
-      gameOf([]),
-      gameOf([{ type: 'flip', card: 'c4', cost: 55, relative: { shared: 4 } }]),
-      won(),
-    ]) {
-      expect(words(drawn(game))).not.toMatch(/\bfilms?\b/i);
-      // And in development, Play again's own.
-      expect(words(drawn(game, null, true))).not.toMatch(/\bfilms?\b/i);
-    }
-  });
-});
-
-/** The handlers on every element of `el` with class `cls`, every
- *  component in it drawn out, as one server render would draw it. Called
- *  inside a render of its own, so the hooks they use have one to belong
- *  to, and no DOM is needed to press what they draw. */
+/** The handlers on every element of `el` with class `cls`, every component
+ *  in it drawn out, as one server render would draw it. Called inside a
+ *  render of its own, so the hooks they use have one to belong to, and no
+ *  DOM is needed to press what they draw. */
 function pressesIn(el: ReactElement, cls: string): (() => void)[] {
   const found: (() => void)[] = [];
   const walk = (node: ReactNode): void => {
@@ -814,54 +220,713 @@ function pressesIn(el: ReactElement, cls: string): (() => void)[] {
   return found;
 }
 
-describe('Play again, in development', () => {
-  const AGAIN = '<button type="button" class="cd-daily-again">Play again (development only)</button>';
+beforeEach(() => {
+  vi.stubGlobal('window', { innerWidth: 1366, innerHeight: 768 });
+});
 
-  it('sits beside “Show the answer” while the game is on, so starting again never takes giving the answer away', () => {
-    const html = drawn(gameOf([]), null, true);
-    expect(html).toContain(`${AGAIN}<button type="button" class="cd-daily-reveal">Show the answer</button>`);
-    expect(html).toContain('<div class="cd-daily-hintrow cd-daily-hintrow-dev"><span class="cd-daily-hint">');
-  });
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
-  it('comes last in the result, where the prototype had its own', () => {
-    const html = drawn(won(), null, true);
-    expect(html).toContain(`${AGAIN}</div><div class="cd-daily-res-foot">`);
-    expect(html.match(/cd-daily-again/g)).toHaveLength(1);
-  });
-
-  it('stays while the panel is folded away during the game, with the rest of what the reader can do', () => {
-    const html = renderToStaticMarkup(
-      createElement(DailyPanel, { ...folded(gameOf([]), false), onAgain: () => {} }),
+describe('the title screen', () => {
+  it('draws the game in one picture, then the pill and day, the name, the lead, three steps, the fine print and Play', () => {
+    const html = drawn(null);
+    // The card in today's poster colour, beside three rows: shown, next,
+    // hidden. For the eye only.
+    expect(html).toContain('<div class="cd-nd-title-pic" aria-hidden="true">');
+    expect(html).toContain('<span class="cd-nd-title-card" style="--tone:#26382d">?</span>');
+    for (const row of ['shown', 'next', 'hidden']) expect(html).toContain(`cd-nd-title-row-${row}`);
+    // The shown row's face is tinted in hue 118, in the theme drawn.
+    expect(html).toContain('<span class="cd-nd-title-face" style="--tone:oklch(0.76 0.13 118)"></span>');
+    expect(html).toContain('<span class="cd-daily-pill">Cinedikt Daily</span><span class="cd-nd-title-day">Friday 9 October</span>');
+    expect(html).toContain('<h1 class="cd-nd-title-heading">Name Drop</h1>');
+    expect(html).toContain(
+      'Today’s movie is hidden. Its cast shows up one name at a time, working up to the star. Name the movie in as few names as you can.',
     );
-    expect(html).toContain(AGAIN);
-  });
-
-  it('is never offered unless the server says it is not in production', () => {
-    for (const game of [null, gameOf([]), won()]) {
-      const html = drawn(game);
-      expect(html).not.toContain('cd-daily-again');
-      expect(words(html)).not.toContain('development only');
-      // And the row beside the hint is as it always was.
-      expect(html).not.toContain('cd-daily-hintrow-dev');
+    expect(html).toContain('<ol class="cd-nd-steps" aria-label="How to play">');
+    for (const [i, step] of ['See who’s in it', 'Guess, or show the next name', 'Fewer names, more points'].entries()) {
+      expect(html).toContain(`<span class="cd-nd-badge" aria-hidden="true">${i + 1}</span>${step}</li>`);
     }
-    const no = renderToStaticMarkup(
-      createElement(DailyGameView, { ...viewProps(gameOf([])), today: { ...todayOf(gameOf([])), dev: false } }),
+    expect(html).toContain(
+      'You start with 1,000 points. Extra names, facts and wrong guesses cost points. There’s no clock.',
     );
-    expect(no).not.toContain('cd-daily-again');
+    expect(html).toMatch(/<button type="button" class="cd-nd-play">Play<svg [^>]*aria-hidden="true">/);
+    expect(html).toContain('<span class="cd-nd-title-count">61,240</span> people have played today.');
+    // The order the design gives them.
+    const order = ['cd-nd-title-pic', 'cd-nd-title-meta', 'cd-nd-title-words', 'cd-nd-steps', 'cd-nd-title-fine', 'cd-nd-play', 'cd-nd-title-played'];
+    const found = order.map((c) => at(html, c));
+    expect(found.every((n) => n >= 0)).toBe(true);
+    expect([...found].sort((a, b) => a - b)).toEqual(found);
   });
 
-  it('is not on the intro, which starts a game rather than ending one', () => {
-    expect(drawn(null, null, true)).not.toContain('cd-daily-again');
+  it('leaves the players line out before anyone has played', () => {
+    const html = renderToStaticMarkup(createElement(DailyGameView, { ...viewProps(null), today: todayOf(null, false, 0) }));
+    expect(html).not.toContain('cd-nd-title-played');
+    expect(words(html)).not.toContain('have played');
+  });
+
+  it('opens on the game page, not the title screen, for a game already begun', () => {
+    for (const g of [gameOf(), SOLVED]) {
+      const html = drawn(g);
+      expect(html).not.toContain('cd-nd-title');
+      expect(html).toContain('<div class="cd-nd">');
+    }
+  });
+});
+
+describe('the game page while the game is on', () => {
+  it('heads it with the game’s name, the task and the line, beside the hidden card in today’s poster colour', () => {
+    const html = drawn(gameOf());
+    expect(html).toContain(
+      '<div class="cd-nd-card" aria-hidden="true"><div class="cd-nd-card-in"><div class="cd-nd-card-front" style="--tone:#26382d"><span class="cd-nd-card-q">?</span></div></div></div>',
+    );
+    expect(html).toContain('<span class="cd-nd-kicker">Name Drop</span>');
+    expect(html).toContain('<h1 class="cd-nd-heading">Name today’s movie</h1>');
+    expect(html).toContain('<p class="cd-nd-line">Its cast shows up one name at a time, working up to the star.</p>');
+    // The poster is not drawn before the end: the page is not told it.
+    expect(html).not.toContain('cd-nd-card-back');
+    expect(html).not.toContain('cd-nd-card-over');
+  });
+
+  it('puts the top block first, then the cast, then the facts, with the guess bar under them', () => {
+    const html = drawn(PLAYING);
+    const order = ['cd-nd-top', 'cd-nd-cast', 'cd-nd-facts', 'cd-nd-bar'].map((c) => at(html, c));
+    expect(order.every((n) => n >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // Nothing of the end.
+    for (const c of ['cd-nd-res', 'cd-nd-board', 'cd-nd-cast-head']) expect(html).not.toContain(`class="${c}`);
+  });
+
+  it('lists the cast as “Today’s names”: shown rows, the next row as a button, and hidden rows with no name at all', () => {
+    const html = drawn(PLAYING);
+    expect(html).toContain('<ol class="cd-nd-cast" aria-label="Today’s names">');
+    expect(html.match(/<li class="cd-nd-row cd-nd-row-shown">/g)).toHaveLength(4);
+    expect(html.match(/<li class="cd-nd-row cd-nd-row-next">/g)).toHaveLength(1);
+    expect(html.match(/<li class="cd-nd-row cd-nd-row-hidden">/g)).toHaveLength(1);
+    expect(html).toContain('<span class="cd-nd-name">Joe Pantoliano</span><span class="cd-nd-also">Also in The Fugitive (1993)</span>');
+    expect(html).toContain(
+      '<button type="button" class="cd-nd-row-go" aria-label="Show the next name. It costs 100 points."></button>',
+    );
+    expect(html).toContain('<span class="cd-nd-next-word">Next</span>');
+    // Four names and no more: the hidden two are not on the page, and the
+    // hidden row says only that it is not out yet.
+    expect(html.match(/class="cd-nd-name"/g)).toHaveLength(4);
+    expect(html.match(/<span class="cd-sr-live">Not shown yet<\/span>/g)).toHaveLength(1);
+    for (const p of [LAURENCE, KEANU]) expect(html).not.toContain(p.name);
+  });
+
+  it('offers each shown name’s Movies, named for a screen reader', () => {
+    const html = drawn(PLAYING);
+    for (const p of [JOE, GLORIA, HUGO, CARRIE]) {
+      expect(html).toContain(`<button type="button" class="cd-nd-movies" aria-label="See ${p.name}’s movies on a Cinedikt map">`);
+    }
+    expect(html.match(/class="cd-nd-movies"/g)).toHaveLength(4);
+  });
+
+  it('draws each face in the person’s colour, with their photo or their initials', () => {
+    const html = drawn(PLAYING);
+    expect(html).toContain(
+      '<span class="cd-nd-face cd-nd-face-row" style="--tone:oklch(0.76 0.13 205)" aria-hidden="true"><span class="cd-nd-face-code">JP</span><img class="cd-nd-face-photo" src="https://image.tmdb.org/t/p/w185/joe.jpg" alt="" decoding="async"/></span>',
+    );
+    expect(html).toContain(
+      '<span class="cd-nd-face cd-nd-face-row" style="--tone:oklch(0.76 0.13 78)" aria-hidden="true"><span class="cd-nd-face-code">GF</span></span>',
+    );
+  });
+
+  it('draws faces in the stronger colours on paper', () => {
+    const face = renderToStaticMarkup(createElement(DailyFace, { person: GLORIA, code: 'GF', size: 'row', theme: 'light' }));
+    expect(face).toContain('style="--tone:oklch(0.56 0.16 78)"');
+    const dim = renderToStaticMarkup(createElement(DailyFace, { person: GLORIA, code: 'GF', size: 'result', theme: 'dark', dim: true }));
+    expect(dim).toContain('class="cd-nd-face cd-nd-face-result cd-nd-face-dim"');
+  });
+
+  it('puts a bigger photo by each shown face, opening down for the first three rows and up for the rest', () => {
+    const html = drawn(PLAYING);
+    expect(html).toContain(
+      '<span class="cd-nd-peek" style="--tone:oklch(0.76 0.13 205)" aria-hidden="true"><span class="cd-nd-peek-photo"><span class="cd-nd-peek-code">JP</span><img class="cd-nd-peek-img"',
+    );
+    expect(html).toContain('<span class="cd-nd-peek-name">Gloria Foster</span><span class="cd-nd-peek-line">Also in Man and Boy (1971)</span>');
+    // Carrie-Anne Moss is the fourth row.
+    expect(html).toContain('<span class="cd-nd-peek cd-nd-peek-up" style="--tone:oklch(0.76 0.13 345)"');
+    expect(html.match(/class="cd-nd-peek[ "]/g)).toHaveLength(4);
+    // Only shown faces answer the pointer.
+    expect(html.match(/data-peek="1"/g)).toHaveLength(4);
+  });
+
+  it('offers the facts in order, each with its price, what it shows and costs for a screen reader, and the decade bought', () => {
+    const html = drawn(PLAYING);
+    expect(html).toContain('<h2 id="cd-nd-facts-head" class="cd-nd-facts-head">Buy a fact. Each one also marks the map</h2>');
+    expect(html).toContain(
+      '<button type="button" class="cd-nd-fact" aria-label="Show its genre. It costs 100 points.">Genre<span class="cd-nd-cost">−100</span></button>',
+    );
+    // The years only after the decade: Decade bought, then Narrow the years.
+    expect(html).toContain(
+      '<span class="cd-nd-fact-got"><span class="cd-nd-fact-label">Decade</span><span class="cd-nd-fact-value">1990s</span></span><button type="button" class="cd-nd-fact" aria-label="Narrow the years to five. It costs 100 points.">Narrow the years<span class="cd-nd-cost">−100</span></button>',
+    );
+    const labels = [...html.matchAll(/class="cd-nd-fact"[^>]*>([^<]+)</g)].map((m) => m[1]);
+    expect(labels).toEqual(['Length range', 'Rating range', 'Genre', 'Narrow the years', 'Director']);
+  });
+
+  it('puts the five years in the decade’s place once they are bought', () => {
+    const html = drawn(gameOf({ pts: 800, facts: { decade: 1990, years: 1995 } }));
+    expect(html).toContain('<span class="cd-nd-fact-label">Years</span><span class="cd-nd-fact-value">1995–1999</span>');
+    expect(html).not.toContain('Narrow the years');
+    expect(html).not.toContain('>Decade<');
+  });
+
+  it('holds back a fact the points would not leave one over from', () => {
+    const html = drawn(gameOf({ pts: 100 }));
+    expect(html).toContain('<button type="button" class="cd-nd-fact" aria-label="Show roughly how long it is. It costs 50 points.">');
+    expect(html).toContain('<button type="button" class="cd-nd-fact" disabled="" aria-label="Show its genre. It costs 100 points.">');
+    expect(html).toContain('<button type="button" class="cd-nd-fact" disabled="" aria-label="Show the director. It costs 250 points.">');
+    // And Next name, which would leave nothing, with no next row.
+    expect(html).toContain('<button type="button" class="cd-nd-nextbtn" disabled="">Next name<span class="cd-nd-cost">−100</span></button>');
+    expect(html).not.toContain('cd-nd-row-next');
+  });
+
+  it('pins the guess bar: the points line, Next name and the field, with Guess held until something matches', () => {
+    const html = drawn(gameOf());
+    expect(html).toContain(
+      '<p class="cd-nd-points" aria-live="polite">Get it now for <span class="cd-nd-points-n">1,000</span> points · wrong guess −100</p>',
+    );
+    expect(html).toContain('<button type="button" class="cd-nd-nextbtn">Next name<span class="cd-nd-cost">−100</span></button>');
+    expect(html).toMatch(
+      /<input class="cd-nd-input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="[^"]+" aria-label="Name the movie" placeholder="Name the movie"/,
+    );
+    expect(html).toContain('<button type="button" class="cd-nd-guess" disabled="">Guess</button>');
+    // The message box's region is there, empty, with no guess to tell of.
+    expect(html).toContain('<div class="cd-nd-msgwrap" aria-live="polite"></div>');
+  });
+
+  it('says the next wrong guess is the last when the points cannot cover it', () => {
+    const html = drawn(gameOf({ pts: 100, nextCost: 150 }));
+    expect(html).toContain('Last guess, for <span class="cd-nd-points-n">100</span> points</p>');
+  });
+
+  it('says everyone is showing once all six are out', () => {
+    const html = drawn(gameOf({ pts: 500, slots: ALL_SHOWN }));
+    expect(html).toContain('<button type="button" class="cd-nd-nextbtn" disabled="">Everyone’s showing</button>');
+  });
+
+  it('offers Show the answer under the wrong guesses', () => {
+    const html = drawn(PLAYING);
+    expect(html).toContain('<button type="button" class="cd-nd-giveup">Show the answer</button>');
+  });
+
+  it('draws the guess bar beside the cast on a landscape phone', () => {
+    vi.stubGlobal('window', { innerWidth: 844, innerHeight: 390 });
+    expect(drawn(PLAYING)).toContain('<div class="cd-nd cd-nd-land">');
+    vi.stubGlobal('window', { innerWidth: 390, innerHeight: 844 });
+    expect(drawn(PLAYING)).toContain('<div class="cd-nd">');
+  });
+});
+
+describe('after a wrong guess', () => {
+  it('keeps a chip for it in the top block, in its warmth, that says what pressing it does', () => {
+    const html = drawn(PLAYING);
+    expect(html).toContain('<div class="cd-nd-tried" role="group" aria-label="Wrong guesses">');
+    expect(html).toContain(
+      '<button type="button" class="cd-nd-tried-chip" style="--tone:oklch(0.82 0.13 78)" aria-label="The Thirteenth Floor, warm. Show what it told you"><span class="cd-nd-tried-dot" aria-hidden="true"></span><span class="cd-nd-tried-title">The Thirteenth Floor</span></button>',
+    );
+  });
+
+  it('says what the next one costs, dearer than the last', () => {
+    expect(drawn(PLAYING)).toContain('Get it now for <span class="cd-nd-points-n">600</span> points · wrong guess −150</p>');
+  });
+
+  it('tells what it learned in one row: the title, the warmth, the faces it shares and the three chips', () => {
+    const game = gameOf({ pts: 850, nextCost: 150, slots: slotsOf({ 0: 'start', 1: 'next', 5: 'guess' }), log: [SPEED] });
+    const codes = codesOf(todaysPeople(game));
+    const html = renderToStaticMarkup(
+      createElement(MessageBox, { message: guessMessage(SPEED.guess, game), codes, theme: 'dark' }),
+    );
+    expect(html).toBe(
+      '<div class="cd-nd-msg"><span class="cd-nd-msg-title">Not Speed</span>' +
+        '<span class="cd-nd-warmth" style="--tone:oklch(0.74 0.17 32)"><span class="cd-nd-warmth-dot" aria-hidden="true"></span>Hot</span>' +
+        '<span class="cd-nd-msg-faces"><span class="cd-nd-face cd-nd-face-message" style="--tone:oklch(0.76 0.13 232)" aria-hidden="true"><span class="cd-nd-face-code">KR</span></span></span>' +
+        '<span class="cd-nd-msg-chip">Different decade</span><span class="cd-nd-msg-chip">Shares a genre</span><span class="cd-nd-msg-chip">Shares Keanu Reeves</span></div>',
+    );
+  });
+
+  it('shows the message in the bar’s live region, and none for a game opened later', () => {
+    const codes = codesOf(todaysPeople(PLAYING));
+    const bar = renderToStaticMarkup(
+      createElement(DailyBar, {
+        game: PLAYING,
+        message: guessMessage(THIRTEENTH.guess, PLAYING),
+        codes,
+        theme: 'dark',
+        phone: false,
+        opening: false,
+        guessed: new Set([THIRTEENTH.guess.id]),
+        inputRef: { current: null },
+        onNext: () => {},
+        onGuess: async () => true,
+        say: () => {},
+      }),
+    );
+    expect(bar).toContain(
+      '<div class="cd-nd-msgwrap" aria-live="polite"><div class="cd-nd-msg"><span class="cd-nd-msg-title">Not The Thirteenth Floor</span><span class="cd-nd-warmth" style="--tone:oklch(0.82 0.13 78)">',
+    );
+    expect(bar).toContain('<span class="cd-nd-msg-chip">No one from today’s cast</span>');
+    // Reopened, the page starts with no message up, as the design does.
+    expect(drawn(PLAYING)).toContain('<div class="cd-nd-msgwrap" aria-live="polite"></div>');
+  });
+});
+
+describe('the results list', () => {
+  const hits: SearchHit[] = [
+    { id: 'tt0133093', title: 'The Matrix', year: 1999 },
+    { id: 'tt10838180', title: 'The Matrix', year: 2021 },
+    { id: 'tt0234215', title: 'The Matrix Reloaded', year: 2003 },
+    { id: 'tt0139809', title: 'The Thirteenth Floor', year: 1999 },
+  ];
+  const list = (over: Partial<ComponentProps<typeof HitList>> = {}) =>
+    renderToStaticMarkup(
+      createElement(HitList, {
+        id: 'hits',
+        rows: hits,
+        held: [],
+        note: '',
+        at: 0,
+        guessed: new Set(['tt0139809']),
+        theme: 'dark',
+        onPick: () => {},
+        ...over,
+      }),
+    );
+
+  it('is a listbox of movies, the highlighted one selected, each a poster and a title', () => {
+    const html = list({ at: 2 });
+    expect(html).toMatch(/^<div id="hits" class="cd-nd-hits" role="listbox" aria-label="Movies">/);
+    expect(html).toContain('<div id="hits-2" role="option" aria-selected="true" class="cd-nd-hit cd-nd-hit-at">');
+    expect(html).toContain('<span class="cd-nd-hit-poster" style="--poster-fill:linear-gradient(165deg, oklch(0.45 0.07');
+  });
+
+  it('shows a year only where two results share a title', () => {
+    const html = list();
+    expect(html.match(/class="cd-nd-hit-year"/g)).toHaveLength(2);
+    expect(html).toContain('<span class="cd-nd-hit-title">The Matrix</span><span class="cd-nd-hit-year">1999</span>');
+    expect(html).toContain('<span class="cd-nd-hit-title">The Matrix</span><span class="cd-nd-hit-year">2021</span>');
+    expect(html).toContain('<span class="cd-nd-hit-title">The Matrix Reloaded</span></span>');
+  });
+
+  it('tags a movie already tried', () => {
+    const html = list();
+    expect(html).toContain('class="cd-nd-hit cd-nd-hit-tried"');
+    expect(html).toContain('<span class="cd-nd-hit-tag">Tried</span>');
+    expect(html.match(/>Tried</g)).toHaveLength(1);
+  });
+
+  it('says nothing matched, and holds the last rows faded and out of reach while the next answer comes', () => {
+    expect(list({ rows: [], note: 'No movies match “zzz”' })).toContain(
+      '<div class="cd-nd-hits-note">No movies match “zzz”</div>',
+    );
+    const held = list({ rows: [], held: hits.slice(0, 1) });
+    expect(held).toContain('<div role="option" aria-selected="false" aria-disabled="true" class="cd-nd-hit cd-nd-hit-held">');
+    expect(held).not.toContain('id="hits-0"');
+  });
+
+  it('guesses the movie pressed', () => {
+    const picked: string[] = [];
+    const presses = pressesIn(
+      createElement(HitList, {
+        id: 'hits',
+        rows: hits,
+        held: [],
+        note: '',
+        at: 0,
+        guessed: new Set<string>(),
+        theme: 'dark',
+        onPick: (h: SearchHit) => picked.push(h.id),
+      }),
+      'cd-nd-hit',
+    );
+    presses[2]();
+    expect(picked).toEqual(['tt0234215']);
+  });
+});
+
+describe('the cast list', () => {
+  const codes = codesOf(todaysPeople(SOLVED));
+
+  it('holds every name back while Play hides them, so the first comes in from nothing', () => {
+    const html = renderToStaticMarkup(
+      createElement(DailyCast, {
+        rows: openingRows(),
+        playing: true,
+        delays: new Map(),
+        codes,
+        theme: 'dark',
+        onNext: () => {},
+        onMovies: () => {},
+      }),
+    );
+    expect(html.match(/cd-nd-row-hidden/g)).toHaveLength(6);
+    expect(html).not.toContain('cd-nd-name');
+    expect(html).not.toContain('cd-nd-row-go');
+  });
+
+  it('brings the names the reader didn’t see in one after another at the end, 350ms in and 140ms apart', () => {
+    const rows = castRows(SOLVED);
+    const html = renderToStaticMarkup(
+      createElement(DailyCast, {
+        rows,
+        playing: false,
+        delays: revealDelays(rows),
+        codes,
+        theme: 'dark',
+        onNext: () => {},
+        onMovies: () => {},
+      }),
+    );
+    // Laurence Fishburne and Keanu Reeves were not seen: each one's
+    // placeholder, face and name wait their turn.
+    expect(html.match(/transition-delay:350ms/g)).toHaveLength(4);
+    expect(html.match(/transition-delay:490ms/g)).toHaveLength(4);
+    expect(html).not.toContain('transition-delay:630ms');
+    // And nothing is offered once it is over.
+    expect(html).not.toContain('cd-nd-movies');
+  });
+
+  it('asks for the next name, and opens a shown name’s Movies, when pressed', () => {
+    const asked: string[] = [];
+    const el = createElement(DailyCast, {
+      rows: castRows(PLAYING),
+      playing: true,
+      delays: new Map(),
+      codes,
+      theme: 'dark',
+      onNext: () => asked.push('next'),
+      onMovies: (p: DailyPerson) => asked.push(p.id),
+    });
+    pressesIn(el, 'cd-nd-row-go').forEach((press) => press());
+    pressesIn(el, 'cd-nd-movies')[1]();
+    expect(asked).toEqual(['next', GLORIA.id]);
+  });
+});
+
+describe('the page once the game is over', () => {
+  it('turns the card over to the poster, and heads the page with the answer’s title and no line', () => {
+    const html = drawn(SOLVED);
+    expect(html).toContain('<div class="cd-nd-card-in cd-nd-card-over">');
+    expect(html).toMatch(/<div class="cd-nd-card-back" style="--poster-fill:linear-gradient\(165deg, oklch\(0\.45 0\.07 \d+\), oklch\(0\.28 0\.05 \d+\)\)">/);
+    expect(html).toContain('<h1 class="cd-nd-heading">The Matrix</h1>');
+    expect(html).not.toContain('cd-nd-line');
+    // The wrong guess stays, as words, not a control.
+    expect(html).toContain('<span class="cd-nd-tried-chip" style="--tone:oklch(0.82 0.13 78)">');
+    expect(html).not.toContain('Show what it told you');
+    expect(html).not.toContain('Show the answer');
+  });
+
+  it('writes the stand-in poster’s title on a movie the catalog has no picture of', () => {
+    const html = drawn(ended([{ type: 'win' }], { pts: 1000, won: true, end: { answer: { ...MATRIX, poster: undefined }, directors: [LANA, LILLY] } }));
+    expect(html).toContain('<span class="cd-nd-card-standin">The Matrix</span>');
+  });
+
+  it('reorders the page: the top block, About the movie, the result, the leaderboard, “The cast” and the names', () => {
+    const html = drawn(SOLVED);
+    const order = ['cd-nd-top', 'cd-nd-facts', 'cd-nd-res', 'cd-nd-board', 'cd-nd-cast-head', 'cd-nd-cast'].map((c) =>
+      at(html, c),
+    );
+    expect(order.every((n) => n >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(html).toContain('<h2 class="cd-nd-cast-head">The cast</h2>');
+    // No guess bar, and no Movies.
+    expect(html).not.toContain('cd-nd-bar');
+    expect(html).not.toContain('cd-nd-movies');
+  });
+
+  it('says every fact exactly, as About the movie', () => {
+    const html = drawn(SOLVED);
+    expect(html).toContain('<h2 id="cd-nd-about-head" class="cd-nd-facts-head">About the movie</h2>');
+    const facts = [...html.matchAll(/<span class="cd-nd-fact-label">([^<]+)<\/span><span class="cd-nd-fact-value">([^<]+)<\/span>/g)].map(
+      (m) => `${m[1]} ${m[2]}`,
+    );
+    expect(facts).toEqual([
+      'Length 2h 16m',
+      'Genre Action, Sci-Fi',
+      'IMDb rating 8.7',
+      'Year 1999',
+      'Director Lana Wachowski and Lilly Wachowski',
+    ]);
+    expect(html).not.toContain('class="cd-nd-fact"');
+  });
+
+  it('shows all six names, with no next row', () => {
+    const html = drawn(OUT);
+    expect(html.match(/cd-nd-row-shown/g)).toHaveLength(6);
+    expect(html).not.toContain('cd-nd-row-go');
+  });
+});
+
+describe('the result', () => {
+  const codes = codesOf(todaysPeople(SOLVED));
+  const result = (game: DailyGame, over: Partial<ComponentProps<typeof DailyResult>> = {}) =>
+    renderToStaticMarkup(
+      createElement(DailyResult, {
+        today: todayOf(game),
+        game,
+        board: null,
+        fresh: false,
+        offset: 0,
+        codes,
+        theme: 'dark',
+        onShare: () => {},
+        onOpenMovie: () => {},
+        ...over,
+      }),
+    );
+  const BOARD: DailyBoard = {
+    tab: 'today',
+    total: 61240,
+    you: { place: 12427, tied: true, pts: 600 },
+    rows: [],
+    beat: 78,
+    solved: 92,
+    chart: [40, 60, 80, 100, 120, 140, 160, 120, 60, 20, 5],
+  };
+
+  it('heads a solve with how it ended, the score, and the streak', () => {
+    const html = result(SOLVED);
+    expect(html).toContain('<section class="cd-nd-res" aria-label="Your result">');
+    expect(html).toContain('<span class="cd-nd-res-kicker">Got it</span>');
+    expect(html).toContain(
+      '<span class="cd-nd-res-n" aria-hidden="true">600</span><span class="cd-sr-live">600</span><span class="cd-nd-res-word">points</span>',
+    );
+    expect(html).toMatch(/<span class="cd-nd-streak"><svg [^>]*aria-hidden="true">[\s\S]*?<\/svg>2-day streak<\/span>/);
+  });
+
+  it('counts the score up from nought when the game has just ended here, and simply shows it otherwise', () => {
+    expect(result(SOLVED, { fresh: true })).toContain('<span class="cd-nd-res-n" aria-hidden="true">0</span><span class="cd-sr-live">600</span>');
+    expect(result(SOLVED, { fresh: false })).toContain('<span class="cd-nd-res-n" aria-hidden="true">600</span>');
+    // With stillness asked for the score doesn't count.
+    const media = (q: string) => ({ matches: q === '(prefers-reduced-motion: reduce)' });
+    vi.stubGlobal('window', { innerWidth: 1366, innerHeight: 768, matchMedia: media });
+    vi.stubGlobal('matchMedia', media);
+    expect(result(SOLVED, { fresh: true })).toContain('<span class="cd-nd-res-n" aria-hidden="true">600</span>');
+  });
+
+  it('counts the names it took as six faces, the ones not seen faded and grey, and lists what was paid for', () => {
+    const html = result(SOLVED);
+    expect(html).toContain('<span class="cd-nd-res-line">You needed 4 of the 6 names</span>');
+    expect(html.match(/class="cd-nd-res-face"/g)).toHaveLength(6);
+    expect(html.match(/cd-nd-face-dim/g)).toHaveLength(2);
+    expect(html).toContain('<span class="cd-nd-res-face" title="Keanu Reeves"><span class="cd-nd-face cd-nd-face-result cd-nd-face-dim"');
+    expect(html).toContain(
+      '<div class="cd-nd-paid"><span class="cd-nd-paid-chip">Decade<span class="cd-nd-paid-cost">−100</span></span><span class="cd-nd-paid-chip">1 wrong guess<span class="cd-nd-paid-cost">−100</span></span></div>',
+    );
+  });
+
+  it('says how today’s players did, with a chart of eleven bars and the reader’s own lit', () => {
+    const html = result(SOLVED, { board: BOARD });
+    expect(html).toContain('<p class="cd-nd-better"><span class="cd-nd-better-n">78%</span> of today’s players scored less than you.</p>');
+    const bars = [...html.matchAll(/<span class="(cd-nd-chart-bar[^"]*)" style="height:(\d+)%"><\/span>/g)];
+    expect(bars).toHaveLength(11);
+    expect(bars[6][1]).toBe('cd-nd-chart-bar cd-nd-chart-you');
+    expect(bars.filter((b) => b[1] !== 'cd-nd-chart-bar')).toHaveLength(1);
+    expect(bars[10][2]).toBe('6');
+    expect(html).toContain('<div class="cd-nd-chart-labels" aria-hidden="true"><span>0</span><span>500</span><span>1,000</span></div>');
+  });
+
+  it('holds the line open, with the chart flat, while today’s board is on its way', () => {
+    const html = result(SOLVED);
+    expect(html).toContain('<p class="cd-nd-better"> </p>');
+    expect(html.match(/style="height:6%"/g)).toHaveLength(11);
+  });
+
+  it('heads each kind of miss, counts the names seen, and lights the first bar in the miss colour', () => {
+    const out = result(OUT, { board: BOARD });
+    expect(out).toContain('<span class="cd-nd-res-kicker">Your points ran out</span>');
+    expect(out).toContain('<span class="cd-nd-res-n" aria-hidden="true">0</span>');
+    expect(out).toContain('You saw 2 of the 6 names');
+    expect(out).toContain('<span class="cd-nd-better-n">92%</span> of today’s players got it.');
+    expect(out).toContain('<span class="cd-nd-chart-bar cd-nd-chart-miss" style="height:25%"></span>');
+    expect(out).toContain('Streak ended');
+    const gave = result(GAVE_UP);
+    expect(gave).toContain('<span class="cd-nd-res-kicker">You asked for the answer</span>');
+    expect(gave).toContain('You saw 1 of the 6 names');
+    expect(gave).not.toContain('cd-nd-paid');
+  });
+
+  it('offers Share result, Map this movie to the answer’s map, and the countdown to the next movie', () => {
+    const html = result(SOLVED);
+    expect(html).toMatch(/<button type="button" class="cd-nd-share"><svg [^>]*aria-hidden="true">[\s\S]*?<\/svg>Share result<\/button>/);
+    expect(html).toContain('<a class="cd-nd-mapit" href="/movie/tt0133093-the-matrix">Map this movie</a>');
+    expect(html).toMatch(/<span class="cd-nd-countdown-label">Next movie in<\/span><span class="cd-nd-countdown-n">\d+:\d\d:\d\d<\/span>/);
+  });
+
+  it('leaves for the answer’s map through the app’s own way, and leaves a modified click to the browser', () => {
+    const opened: string[] = [];
+    const el = createElement(DailyResult, {
+      today: todayOf(SOLVED),
+      game: SOLVED,
+      board: null,
+      fresh: false,
+      offset: 0,
+      codes,
+      theme: 'dark',
+      onShare: () => {},
+      onOpenMovie: (id: string, title: string) => opened.push(`${id} ${title}`),
+    });
+    const [press] = pressesIn(el, 'cd-nd-mapit') as unknown as ((e: unknown) => void)[];
+    let kept = 0;
+    press({ metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, button: 0, preventDefault: () => kept++ });
+    expect(opened).toEqual(['tt0133093 The Matrix']);
+    expect(kept).toBe(1);
+    press({ metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, button: 0, preventDefault: () => kept++ });
+    expect(opened).toHaveLength(1);
+    expect(kept).toBe(1);
+  });
+});
+
+describe('the leaderboard', () => {
+  const today: DailyBoard = {
+    tab: 'today',
+    total: 61240,
+    you: { place: 12427, tied: true, pts: 600 },
+    rows: [
+      { place: 9849, tied: true, name: 'Ferris Corleone', hue: 10, pts: 700, you: false },
+      { place: 11063, tied: false, name: 'Ennis Hooper', hue: 20, pts: 650, you: false },
+      { place: 12427, tied: true, name: 'Trinity Kimble', hue: 30, pts: 600, you: true },
+      { place: 12427, tied: true, name: 'Clarice McFly', hue: 40, pts: 600, you: false },
+      { place: 13959, tied: false, name: 'Holly Deckard', hue: 50, pts: 550, you: false },
+    ],
+    beat: 78,
+    solved: 92,
+    chart: null,
+  };
+  const week: DailyBoard = {
+    tab: 'week',
+    total: 83500,
+    you: { place: 1204, tied: false, pts: 2650, days: [700, 0, 850, 500, 600] },
+    rows: [
+      { place: 1203, tied: false, name: 'Vito Gunderson', hue: 10, pts: 2700, days: [700, 0, 900, 500, 600], you: false },
+      { place: 1204, tied: false, name: 'Trinity Kimble', hue: 30, pts: 2650, days: [700, 0, 850, 500, 600], you: true },
+    ],
+    beat: null,
+    solved: null,
+  };
+  const board = (tab: 'today' | 'week', boards: ComponentProps<typeof DailyLeaderboard>['boards']) =>
+    renderToStaticMarkup(createElement(DailyLeaderboard, { date: '2026-10-09', tab, boards, onTab: () => {}, onRetry: () => {} }));
+
+  it('shows the players around the reader under Today and This week tabs, places shared with an equals sign', () => {
+    const html = board('today', { today });
+    expect(html).toMatch(/<h2 id="[^"]+" class="cd-nd-board-title">Leaderboard<\/h2>/);
+    expect(html).toContain('<div class="cd-nd-tabs" role="tablist" aria-label="Leaderboard">');
+    expect(html).toMatch(/role="tab" aria-selected="true" aria-controls="[^"]+" tabindex="0" class="cd-nd-tab cd-nd-tab-on">Today</);
+    expect(html).toMatch(/role="tab" aria-selected="false" aria-controls="[^"]+" tabindex="-1" class="cd-nd-tab">This week</);
+    expect(html).toContain(
+      '<li class="cd-nd-board-row cd-nd-board-you"><span class="cd-nd-place">=12,427</span><span class="cd-nd-board-who"><span class="cd-nd-board-name">You</span></span><span class="cd-nd-board-pts">600</span></li>',
+    );
+    expect(html).toContain('<span class="cd-nd-place">11,063</span>');
+    expect(html).toContain(
+      '<p class="cd-nd-board-note">The players around your score. Equal scores share a place. 61,240 played today.</p>',
+    );
+    expect(html).not.toContain('cd-nd-board-days');
+  });
+
+  it('gives each name a cell for every day this week, under the days’ initials, a day not played as a faint 0', () => {
+    const html = board('week', { today, week });
+    expect(html).toContain(
+      '<div class="cd-nd-board-days" aria-hidden="true"><span class="cd-nd-board-day">M</span><span class="cd-nd-board-day">T</span><span class="cd-nd-board-day">W</span><span class="cd-nd-board-day">T</span><span class="cd-nd-board-day">F</span></div>',
+    );
+    expect(html).toContain(
+      '<span class="cd-nd-days"><span class="cd-nd-day">700</span><span class="cd-nd-day cd-nd-day-zero">0</span><span class="cd-nd-day">850</span>',
+    );
+    expect(html).toContain('A day you didn’t play counts as 0.');
+  });
+
+  it('says it is loading, and offers to try again when it did not load', () => {
+    expect(board('today', {})).toContain('<p class="cd-nd-board-note">Loading the leaderboard…</p>');
+    const failed = board('week', { today, week: 'failed' });
+    expect(failed).toContain('The leaderboard didn’t load.');
+    expect(failed).toContain('<button type="button" class="cd-nd-board-again">Try again</button>');
+  });
+
+  it('lists nobody without the reader on it, and says whose places these would be', () => {
+    const html = board('today', { today: { ...today, rows: [], you: null } });
+    expect(html).not.toContain('cd-nd-board-rows');
+    expect(html).toContain('61,240 played today.');
+  });
+});
+
+describe('How it works', () => {
+  it('is a modal dialog of six numbered items, the prices and Got it', () => {
+    const html = renderToStaticMarkup(createElement(DailyRules, { onClose: () => {} }));
+    expect(html).toContain(
+      '<div class="cd-nd-rules" role="dialog" aria-modal="true" aria-labelledby="cd-nd-rules-title" tabindex="-1">',
+    );
+    expect(html).toContain('<h2 id="cd-nd-rules-title" class="cd-nd-rules-title">How it works</h2>');
+    expect(html.match(/<li class="cd-nd-rules-item">/g)).toHaveLength(6);
+    expect(html).toContain(
+      'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
+    );
+    expect(html).toContain(
+      '<p class="cd-nd-rules-then">You start with 1,000 points. Each extra name costs 100. Wrong guesses cost 100, then 150, 200 and so on. Facts cost 50 to 250. There’s no clock.</p>',
+    );
+    expect(html).toContain('<button type="button" class="cd-nd-rules-close">Got it</button>');
+  });
+
+  it('closes from Got it and from the scrim', () => {
+    let closed = 0;
+    const el = createElement(DailyRules, { onClose: () => closed++ });
+    pressesIn(el, 'cd-nd-rules-close')[0]();
+    pressesIn(el, 'cd-nd-rules-scrim')[0]();
+    expect(closed).toBe(2);
+  });
+
+  it('keeps Tab inside it, round from the last to the first and back', () => {
+    expect(nextStop(-1, 1, false)).toBe(0);
+    expect(nextStop(0, 1, false)).toBe(0);
+    expect(nextStop(0, 1, true)).toBe(0);
+    expect(nextStop(0, 3, true)).toBe(2);
+    expect(nextStop(2, 3, false)).toBe(0);
+    expect(nextStop(-1, 0, false)).toBe(-1);
+  });
+});
+
+describe('Play again, in development', () => {
+  const AGAIN = '<button type="button" class="cd-nd-again">Play again (development only)</button>';
+
+  it('sits beside “Show the answer” while the game is on', () => {
+    expect(drawn(gameOf(), true)).toContain(
+      `<div class="cd-nd-giveup-row"><button type="button" class="cd-nd-giveup">Show the answer</button>${AGAIN}</div>`,
+    );
+  });
+
+  it('comes last in the result', () => {
+    const html = drawn(SOLVED, true);
+    expect(html).toContain(`${AGAIN}</section>`);
+    expect(html.match(/cd-nd-again/g)).toHaveLength(1);
+  });
+
+  it('is never offered unless the server says it is not in production, nor on the title screen', () => {
+    for (const game of [null, gameOf(), SOLVED]) {
+      expect(drawn(game)).not.toContain('cd-nd-again');
+      expect(words(drawn(game))).not.toContain('development only');
+    }
+    expect(drawn(null, true)).not.toContain('cd-nd-again');
   });
 
   it('asks the page to start again when pressed, from either place', () => {
-    for (const game of [gameOf([]), won()]) {
+    for (const game of [gameOf(), SOLVED]) {
       const again = vi.fn();
-      const presses = pressesIn(createElement(DailyGameView, viewProps(game, null, true, again)), 'cd-daily-again');
+      const presses = pressesIn(createElement(DailyGameView, viewProps(game, true, again)), 'cd-nd-again');
       expect(presses).toHaveLength(1);
       presses[0]();
       expect(again).toHaveBeenCalledTimes(1);
     }
+  });
+});
+
+describe('the Daily’s words on the page', () => {
+  it('say "movie", never "film", in every state', () => {
+    for (const game of [null, gameOf(), PLAYING, SOLVED, OUT, GAVE_UP]) {
+      expect(words(drawn(game))).not.toMatch(/\bfilms?\b/i);
+      expect(words(drawn(game, true))).not.toMatch(/\bfilms?\b/i);
+    }
+    expect(words(renderToStaticMarkup(createElement(DailyRules, { onClose: () => {} })))).not.toMatch(/\bfilms?\b/i);
   });
 });
 
@@ -901,185 +966,239 @@ describe('starting again', () => {
   });
 });
 
-describe('the rules', () => {
-  const props = (game: DailyGame): ComponentProps<typeof DailyIntro> => ({
-    today: todayOf(game),
-    game,
-    name: 'Trinity Kimble',
-    spinning: false,
-    streak: 0,
-    rank: '',
-    rules: true,
-    busy: false,
-    dialogRef: { current: null },
-    nameRef: { current: null },
-    onGo: () => {},
-    onReroll: () => {},
-    onClose: () => {},
-    theme: 'dark',
-  });
-
-  it('are the intro again, leading back to the game', () => {
-    const html = renderToStaticMarkup(createElement(DailyIntro, props(gameOf([]))));
-    expect(html).toContain('>Point Blank</h1>');
-    expect(html).toContain('aria-label="How to play"');
-    expect(html).toContain('Back to the game');
-    expect(html).not.toContain('people have played today');
-    expect(html).not.toContain('-day streak');
-  });
-
-  it('lead back to the result once the game is over', () => {
-    expect(renderToStaticMarkup(createElement(DailyIntro, props(won())))).toContain('Back to your result');
-  });
-
-  it('keep the focus inside, going round from either end', () => {
-    expect(nextStop(-1, 3, false)).toBe(0);
-    expect(nextStop(2, 3, false)).toBe(0);
-    expect(nextStop(0, 3, true)).toBe(2);
-    expect(nextStop(1, 3, true)).toBe(0);
-    expect(nextStop(0, 0, false)).toBe(-1);
-  });
-});
-
 describe('the header’s end on /daily', () => {
   it('names the puzzle by number and day, and offers the rules', () => {
     const html = renderToStaticMarkup(
-      createElement(DailyHeaderTail, { day: { no: 142, date: '2026-10-08' }, phone: false, onRules: () => {} }),
+      createElement(DailyHeaderTail, { day: { no: 143, date: '2026-10-09' }, phone: false, onRules: () => {} }),
     );
     expect(html).toContain('<span class="cd-daily-pill">Daily</span>');
-    expect(html).toContain('No. 142 · Thursday 8 October');
+    expect(html).toContain('No. 143 · Friday 9 October');
     expect(html).toContain('aria-label="How it works"');
   });
 
   it('names it by number alone on a phone, and not at all before it has loaded', () => {
     const phone = renderToStaticMarkup(
-      createElement(DailyHeaderTail, { day: { no: 142, date: '2026-10-08' }, phone: true, onRules: () => {} }),
+      createElement(DailyHeaderTail, { day: { no: 143, date: '2026-10-09' }, phone: true, onRules: () => {} }),
     );
-    expect(phone).toContain('>No. 142<');
+    expect(phone).toContain('>No. 143<');
     const none = renderToStaticMarkup(createElement(DailyHeaderTail, { day: null, phone: false, onRules: () => {} }));
     expect(none).not.toContain('cd-daily-date');
   });
 });
 
 describe('the page as it opens', () => {
-  it('holds an empty board while today’s puzzle is on its way', () => {
-    expect(renderToStaticMarkup(createElement(DailyPage))).toBe(
-      '<div class="cd-daily"><div class="cd-scroller" aria-hidden="true"></div></div>',
+  it('draws nothing in its box while today’s puzzle is on its way', () => {
+    expect(renderToStaticMarkup(createElement(DailyPage))).toBe('<div class="cd-daily"></div>');
+  });
+
+  it('steps back while a map loads over it', () => {
+    expect(renderToStaticMarkup(createElement(DailyPage, { dim: true }))).toBe(
+      '<div class="cd-daily cd-daily-dim"></div>',
     );
   });
 });
 
-/** The panel's props, folded away. */
-function folded(game: DailyGame, results: boolean): ComponentProps<typeof DailyPanel> {
-  return {
-    today: todayOf(game),
-    game,
-    results,
-    min: true,
-    onMin: () => {},
-    delta: null,
-    offset: 0,
-    touch: true,
-    theme: 'dark',
-    hues: new Map(),
-    codes: new Map(),
-    panelRef: { current: null },
-    inputRef: { current: null },
-    fresh: false,
-    player: 'Trinity Kimble',
-    onClue: () => {},
-    onGuess: async () => true,
-    onReveal: () => {},
-    onFind: () => {},
-    onFindAnswer: () => {},
-    onCopy: () => {},
-    say: () => {},
-  };
+// ---- the stylesheet ----
+
+/** Every rule in the sheet outside an @media block with this selector
+ *  among its own, as `prop: value` declarations, comments gone. */
+function decls(selector: string): Map<string, string> {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@media[^{]*\{[\s\S]*?\n\}/g, '');
+  const out = new Map<string, string>();
+  for (const m of text.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sels = m[1].split(',').map((s) => s.trim().replace(/\s+/g, ' '));
+    if (!sels.includes(selector)) continue;
+    for (const d of m[2].split(';')) {
+      const i = d.indexOf(':');
+      if (i > 0) out.set(d.slice(0, i).trim(), d.slice(i + 1).trim().replace(/\s+/g, ' '));
+    }
+  }
+  return out;
 }
 
-describe('the panel folded away', () => {
-  it('keeps what the reader can do while the game is on, and hides the feed', () => {
-    const html = renderToStaticMarkup(createElement(DailyPanel, folded(gameOf([]), false)));
-    expect(html).toContain('aria-label="Show the panel"');
-    expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain('Three movies from its map are showing.');
-    expect(html).toContain('Tap a blank card to turn it over.');
-  });
-
-  it('keeps the countdown and the way back to the result', () => {
-    const html = renderToStaticMarkup(createElement(DailyPanel, folded(won(), true)));
-    expect(html).toContain('Show results');
-    expect(html).not.toContain('Leaderboard');
-  });
-});
-
-describe('a blank card', () => {
-  const today = todayOf(gameOf([]));
-  const { payload, settings } = boardPayload(today, gameOf([]));
-  const layout = layoutGrid(payload, 1366, settings);
-  const placed = layout.cards.find((c) => c.film.id === 'c4')!;
-
-  interface Drawn {
-    role: string;
-    onClick?: () => void;
-    onKeyDown?: (e: { key: string; preventDefault: () => void }) => void;
-  }
-
-  /** The card's box as it would be drawn, with its handlers live: called
-   *  inside a render of its own, so no DOM is needed to press it. */
-  function box(over: Partial<ComponentProps<typeof BoardCard>>): Drawn {
-    const props: ComponentProps<typeof BoardCard> = {
-      placed,
-      card: today.cards[3],
-      face: undefined,
-      who: undefined,
-      layout,
-      can: true,
-      afford: true,
-      hot: false,
-      delay: 0,
-      faded: false,
-      eager: false,
-      hues: new Map(),
-      codes: new Map(),
-      theme: 'dark',
-      onFlip: () => {},
-      ...over,
-    };
-    const render = (BoardCard as unknown as { type: (p: typeof props) => ReactElement<Drawn> }).type;
-    let tree = null as ReactElement<Drawn> | null;
-    function Probe() {
-      tree = render(props);
-      return null;
+/** The same, for the rules inside the sheet's blocks for one media
+ *  query, written as the sheet writes it. */
+function mediaDecls(query: string, selector: string): Map<string, string> {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const out = new Map<string, string>();
+  for (const block of text.matchAll(/@media ([^{]*)\{([\s\S]*?)\n\}/g)) {
+    if (block[1].trim() !== query) continue;
+    for (const m of block[2].matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const sels = m[1].split(',').map((s) => s.trim().replace(/\s+/g, ' '));
+      if (!sels.includes(selector)) continue;
+      for (const d of m[2].split(';')) {
+        const i = d.indexOf(':');
+        if (i > 0) out.set(d.slice(0, i).trim(), d.slice(i + 1).trim().replace(/\s+/g, ' '));
+      }
     }
-    renderToStaticMarkup(createElement(Probe));
-    return tree!.props;
   }
+  return out;
+}
 
-  it('turns over on a press, which the page holds to its tap guard', () => {
-    const asked: [string, boolean][] = [];
-    box({ onFlip: (id, pointer) => asked.push([id, pointer]) }).onClick?.();
-    expect(asked).toEqual([['c4', true]]);
+/** The rules inside the reduced-motion blocks, as one text. */
+function stillRules(): string {
+  const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...text.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join('\n');
+}
+
+describe('Name Drop’s stylesheet', () => {
+  it('sets out the column, the card and the rows at the design’s numbers', () => {
+    expect(decls('.cd-nd-col').get('max-width')).toBe('600px');
+    expect(decls('.cd-nd-col').get('padding')).toBe('18px clamp(14px, 4vw, 20px) 22px');
+    expect(decls('.cd-nd-col').get('gap')).toBe('16px');
+    expect(decls('.cd-nd-card').get('width')).toBe('clamp(64px, 18vw, 104px)');
+    expect(decls('.cd-nd-card-q').get('font-size')).toBe('clamp(30px, 8vw, 52px)');
+    expect(decls('.cd-nd-card-in').get('transition')).toBe('transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)');
+    expect(decls('.cd-nd-card-over').get('transform')).toBe('rotateY(180deg)');
+    expect(decls('.cd-nd-row').get('min-height')).toBe('58px');
+    expect(decls('.cd-nd-row').get('padding')).toBe('6px 12px 6px 8px');
+    expect(decls('.cd-nd-face').get('width')).toBe('44px');
+    expect(decls('.cd-nd-face').get('box-shadow')).toBe('0 0 0 2px var(--s), 0 0 0 3.5px var(--tone)');
+    expect(decls('.cd-nd-face').get('background')).toBe('color-mix(in oklch, var(--tone) 24%, var(--s))');
+    expect(decls('.cd-nd-title-col').get('padding')).toBe('32px 20px 40px');
+    expect(decls('.cd-nd-play').get('height')).toBe('56px');
   });
 
-  it('turns over on Enter or Space, which is always meant', () => {
-    const asked: [string, boolean][] = [];
-    const prevent = vi.fn();
-    const onKeyDown = box({ onFlip: (id, pointer) => asked.push([id, pointer]) }).onKeyDown!;
-    onKeyDown({ key: 'Enter', preventDefault: prevent });
-    onKeyDown({ key: ' ', preventDefault: prevent });
-    onKeyDown({ key: 'a', preventDefault: prevent });
-    expect(asked).toEqual([
-      ['c4', false],
-      ['c4', false],
-    ]);
-    expect(prevent).toHaveBeenCalledTimes(2);
+  it('moves a name in as the design does: the placeholder out over .3s, the text up from 6px over .45s, the face growing from 0.7', () => {
+    expect(decls('.cd-nd-ph').get('transition')).toBe('opacity 0.3s ease');
+    expect(decls('.cd-nd-who').get('transition')).toBe('opacity 0.45s ease, translate 0.45s ease');
+    expect(decls('.cd-nd-who').get('translate')).toBe('0 6px');
+    expect(decls('.cd-nd-facewrap').get('scale')).toBe('0.7');
+    expect(decls('.cd-nd-facewrap').get('transition')).toBe('opacity 0.45s ease, scale 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.25)');
+    expect(decls('.cd-nd-peek').get('left')).toBe('54px');
+    expect(decls('.cd-nd-peek').get('width')).toBe('176px');
+    expect(decls('.cd-nd-peek').get('transition')).toBe('opacity 0.16s ease, scale 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2)');
   });
 
-  it('is only a picture once it is face up, or before the game is on', () => {
-    const up = box({ can: false, face: { kind: 'film', film: RELOADED } });
-    expect(up.role).toBe('img');
-    expect(up.onClick).toBeUndefined();
-    expect(box({ can: false }).onKeyDown).toBeUndefined();
+  it('reaches 44px round every small control, as the handoff sets each one out', () => {
+    expect(decls('button.cd-nd-tried-chip::before').get('inset')).toBe(HIT_INSETS.triedChip);
+    expect(decls('.cd-nd-giveup::before').get('inset')).toBe(HIT_INSETS.showAnswer);
+    expect(decls('.cd-nd-fact::before').get('inset')).toBe(HIT_INSETS.fact);
+    expect(decls('.cd-nd-movies::before').get('inset')).toBe(HIT_INSETS.movies);
+    expect(decls('.cd-nd-nextbtn::before').get('inset')).toBe(HIT_INSETS.next);
+    expect(decls('.cd-nd-tab::before').get('inset')).toBe(HIT_INSETS.tab);
+    for (const c of ['.cd-nd-tried-chip', '.cd-nd-giveup', '.cd-nd-fact', '.cd-nd-movies', '.cd-nd-nextbtn', '.cd-nd-tab']) {
+      expect(decls(c).get('position'), c).toBe('relative');
+    }
+  });
+
+  it('pins the guess bar, a 340px column on a landscape phone, with its message on one sideways row', () => {
+    expect(decls('.cd-nd-bar').get('padding')).toBe('8px clamp(12px, 3vw, 24px) calc(10px + env(safe-area-inset-bottom))');
+    expect(decls('.cd-nd-bar').get('box-shadow')).toBe('0 -1px 0 var(--ln2)');
+    expect(decls('.cd-nd-land .cd-nd-bar').get('width')).toBe('340px');
+    expect(decls('.cd-nd-land .cd-nd-bar').get('padding')).toBe('12px 14px calc(12px + env(safe-area-inset-bottom))');
+    expect(decls('.cd-nd-land .cd-nd-bar').get('box-shadow')).toBe('-1px 0 0 var(--ln2)');
+    expect(decls('.cd-nd-land').get('flex-direction')).toBe('row');
+    expect(decls('.cd-nd-msg').get('overflow-x')).toBe('auto');
+    expect(decls('.cd-nd-msg > *').get('flex-shrink')).toBe('0');
+    expect(decls('.cd-nd-msg > *').get('white-space')).toBe('nowrap');
+    expect(decls('.cd-nd-input').get('font-size')).toBe('16px');
+    expect(decls('.cd-nd-guess:disabled').get('opacity')).toBe('0.45');
+    expect(decls('.cd-daily .cd-toast').get('bottom')).toBe('calc(170px + env(safe-area-inset-bottom))');
+  });
+
+  it('keeps the results inside the column on a landscape phone, scrolling rather than running off the top', () => {
+    // Six results above the field are 288px and more, taller than a
+    // landscape phone's column: hung above it, the best match (drawn
+    // first, and the one Enter guesses) went off the top of the screen.
+    const hits = decls('.cd-nd-land .cd-nd-hits');
+    expect(hits.get('position')).toBe('static');
+    expect(hits.get('overflow-y')).toBe('auto');
+    expect(hits.get('flex-shrink')).toBe('1');
+    // Never less than the panel's top padding and one result, the one
+    // Enter guesses.
+    expect(hits.get('min-height')).toBe(`${6 + 46}px`);
+    expect(decls('.cd-nd-hit').get('min-height')).toBe('46px');
+    expect(decls('.cd-nd-hits').get('padding')).toBe('6px');
+    const inner = decls('.cd-nd-land .cd-nd-bar-in');
+    expect(inner.get('min-height')).toBe('0');
+    expect(inner.get('justify-content')).toBe('flex-end');
+    expect(css.replace(/\/\*[\s\S]*?\*\//g, '')).toMatch(
+      /\.cd-nd-land :is\(\.cd-nd-msgwrap, \.cd-nd-bar-row, \.cd-nd-ask\) \{\s*flex-shrink: 0;\s*\}/,
+    );
+    // Portrait keeps the list hung above the field, over the page.
+    expect(decls('.cd-nd-hits').get('position')).toBe('absolute');
+    expect(decls('.cd-nd-hits').get('bottom')).toBe('calc(100% + 8px)');
+  });
+
+  it('dims Play and shows the waiting cursor while the game is being started', () => {
+    const held = decls('.cd-nd-title .cd-nd-play:disabled');
+    expect(held.get('cursor')).toBe('progress');
+    expect(held.get('filter')).toBe('brightness(0.9)');
+  });
+
+  it('sizes the app to the visual viewport while the Daily is up', () => {
+    const fit = decls('.cd-app:has(> .cd-daily)');
+    expect(fit.get('position')).toBe('fixed');
+    expect(fit.get('top')).toBe('var(--vv-top, 0px)');
+    expect(fit.get('height')).toBe('var(--vv-h, auto)');
+  });
+
+  it('draws the chart and the week’s cells at the design’s sizes', () => {
+    expect(decls('.cd-nd-chart').get('height')).toBe('52px');
+    expect(decls('.cd-nd-chart').get('gap')).toBe('4px');
+    expect(decls('.cd-nd-chart-bar').get('border-radius')).toBe('4px 4px 2px 2px');
+    expect(decls('.cd-nd-place').get('width')).toBe('58px');
+    expect(decls('.cd-nd-board-days').get('padding-left')).toBe('76px');
+    expect(decls('.cd-nd-day').get('width')).toBe('30px');
+    expect(decls('.cd-nd-day').get('height')).toBe('18px');
+  });
+
+  it('fits a cell for every day on a phone, Sunday’s seven included, without running over the total', () => {
+    const phone = '(max-width: 639.98px)';
+    const row = mediaDecls(phone, '.cd-nd-board-row:has(.cd-nd-days)');
+    expect(row.get('display')).toBe('grid');
+    expect(row.get('grid-template-columns')).toBe('58px minmax(0, 1fr) auto');
+    expect(row.get('grid-template-areas')).toBe(`'place name pts' 'place days days'`);
+    expect(row.get('gap')).toBe('3px 8px');
+    expect(mediaDecls(phone, '.cd-nd-board-row:has(.cd-nd-days) .cd-nd-board-who').get('display')).toBe('contents');
+    expect(mediaDecls(phone, '.cd-nd-days').get('grid-area')).toBe('days');
+    for (const c of ['.cd-nd-day', '.cd-nd-board-day']) {
+      expect(mediaDecls(phone, c).get('flex'), c).toBe('0 1 30px');
+      expect(mediaDecls(phone, c).get('min-width'), c).toBe('0');
+    }
+    // The initials reach the row's right padding as the cells do, so the
+    // two strips are as wide as each other and shrink alike.
+    const pad = parseFloat(decls('.cd-nd-board-row').get('padding')!.split(' ')[1]);
+    expect(mediaDecls(phone, '.cd-nd-board-days').get('padding-right')).toBe(`${pad}px`);
+    expect(decls('.cd-nd-board-days').get('padding-left')).toBe(`${pad + 58 + 8}px`);
+
+    // Under 360px the cells take the place column's room too, and the
+    // initials start at the row's padding.
+    const narrow = '(max-width: 359.98px)';
+    expect(mediaDecls(narrow, '.cd-nd-board-row:has(.cd-nd-days)').get('grid-template-areas')).toBe(
+      `'place name pts' 'days days days'`,
+    );
+    expect(mediaDecls(narrow, '.cd-nd-board-days').get('padding-left')).toBe(`${pad}px`);
+
+    // The arithmetic, from the sheet's own numbers: the days' strip on a
+    // phone is the panel less the row's padding and, from 360px, the
+    // place column and its gap. Seven 30px cells fit from 375px, and
+    // under 360; between, each gives a pixel, which a "1,000" (29px at
+    // 10.5px) still fits.
+    const cell = parseFloat(decls('.cd-nd-day').get('width')!);
+    const gap = parseFloat(decls('.cd-nd-days').get('gap')!);
+    const seven = 7 * cell + 6 * gap;
+    const strip = (width: number) => {
+      const col = width - 2 * Math.min(Math.max(14, 0.04 * width), 20);
+      const panel = col - 2 * parseFloat(decls('.cd-nd-board').get('padding')!.split(' ')[1]);
+      return panel - 2 * pad - (width < 360 ? 0 : 58 + 8);
+    };
+    expect(seven).toBe(228);
+    for (const w of [320, 340, 359, 375, 390, 414]) expect(strip(w), `${w}px`).toBeGreaterThanOrEqual(seven);
+    expect((strip(360) - 6 * gap) / 7).toBeGreaterThanOrEqual(29);
+  });
+
+  it('drops the tabs under the leaderboard’s title where the two cannot share a line', () => {
+    expect(decls('.cd-nd-board-head').get('flex-wrap')).toBe('wrap');
+    expect(decls('.cd-nd-board-title').get('flex')).toBe('1 1 auto');
+    expect(decls('.cd-nd-tabs').get('margin-left')).toBe('auto');
+  });
+
+  it('moves nothing with stillness asked for', () => {
+    const still = stillRules();
+    for (const c of ['.cd-nd-card-in', '.cd-nd-row', '.cd-nd-ph', '.cd-nd-who', '.cd-nd-facewrap', '.cd-nd-peek', '.cd-nd-play']) {
+      expect(still, c).toMatch(new RegExp(`${c.replace(/[.-]/g, (x) => `\\${x}`)}[,\\s][^}]*transition: none`));
+    }
   });
 });

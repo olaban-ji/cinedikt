@@ -1,10 +1,10 @@
 package api
 
 // Cinedikt Daily over HTTP: today's puzzle, the player's game, the moves,
-// the boards, and the reader's own standing, which is all the opening
-// screens show of the boards. The rules are internal/daily's, and the
-// games are kept by the catalog's store; this is who the reader is, the
-// shapes, and the status codes.
+// the Movies sheets, the boards, and the reader's own standing, which is
+// all the start screen's banner shows of the boards. The rules are
+// internal/daily's, and the games are kept by the catalog's store; this
+// is who the reader is, the shapes, and the status codes.
 //
 // Each reader plays the puzzle for their own date, changing at their
 // own midnight. The page names its time zone on every request, as the
@@ -197,10 +197,12 @@ func (d *dailyRoutes) register(mux *http.ServeMux) {
 	route("GET /daily/me", d.me)
 	route("POST /daily/name", d.rename)
 	route("POST /daily/{no}/play", d.play)
-	route("POST /daily/{no}/flip", d.flip)
+	route("POST /daily/{no}/next", d.next)
 	route("POST /daily/{no}/buy", d.buy)
+	route("POST /daily/{no}/overlap", d.overlap)
 	route("POST /daily/{no}/guess", d.guess)
 	route("POST /daily/{no}/reveal", d.reveal)
+	route("GET /daily/{no}/movies", d.movies)
 	route("GET /daily/{no}/board", d.board)
 	if d.dev {
 		route("POST /daily/dev/reset", d.reset)
@@ -375,12 +377,11 @@ func (d *dailyRoutes) forget(no int) {
 	delete(d.live, no)
 }
 
-// named is the puzzle the path names, for a change to a game of it. A
-// number that is no puzzle, or one whose day is no longer anybody's
-// date, is refused as "day", which is how a page left open past
-// midnight learns its map has ended; whether it has ended for this
-// game, in the zone the game was started in, is for Play and the store
-// to say.
+// named is the puzzle the path names, for a game of it. A number that is
+// no puzzle, or one whose day is no longer anybody's date, is refused as
+// "day", which is how a page left open past midnight learns its game has
+// ended; whether it has ended for this game, in the zone the game was
+// started in, is for Play, the Movies sheet and the store to say.
 func (d *dailyRoutes) named(w http.ResponseWriter, r *http.Request, now time.Time) (*daily.Puzzle, bool) {
 	no, ok := puzzleNumber(w, r)
 	if !ok {
@@ -489,12 +490,13 @@ type dailyToday struct {
 	// their game's when readerDay moved them on to its day. Both are in
 	// UTC. The page counts down to Next on its own clock, corrected by
 	// the difference between the two.
-	Now    time.Time      `json:"now"`
-	Next   time.Time      `json:"next"`
-	Cards  []daily.Face   `json:"cards"`
-	Start  []daily.Opened `json:"start"`
-	Clues  daily.Clues    `json:"clues"`
-	Player dailyPlayer    `json:"player"`
+	Now  time.Time `json:"now"`
+	Next time.Time `json:"next"`
+	// Colour is what the answer's poster averages to, "#rrggbb": the one
+	// thing about it the page has from the start, since it fills the
+	// hidden card and says nothing a search could use.
+	Colour string      `json:"colour"`
+	Player dailyPlayer `json:"player"`
 	// Played is how many games of the reader's puzzle have been started,
 	// in every zone.
 	Played int          `json:"played"`
@@ -507,11 +509,10 @@ type dailyToday struct {
 
 // read is GET /daily: the reader's puzzle, the one for their date, or
 // for a player whose game was left behind at its own zone's midnight the
-// day that zone has moved on to (readerDay), laid out as the page draws
-// it, the three starting cards, their game when they have one, and
-// otherwise a name to play as. It writes nothing to the database; a
-// reader with a player has their cookie renewed, and a name offered is
-// remembered (nameOffers).
+// day that zone has moved on to (readerDay), its number, date and colour,
+// their game when they have one, and otherwise a name to play as. It
+// writes nothing to the database; a reader with a player has their
+// cookie renewed, and a name offered is remembered (nameOffers).
 func (d *dailyRoutes) read(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := d.now()
@@ -564,9 +565,7 @@ func (d *dailyRoutes) read(w http.ResponseWriter, r *http.Request) {
 		Date:   daily.DayString(p.Day),
 		Now:    daily.Instant(now),
 		Next:   daily.Instant(daily.Next(now, zone)),
-		Cards:  p.Faces(),
-		Start:  p.Opened(live),
-		Clues:  p.Clues(),
+		Colour: p.Answer.Colour,
 		Player: who,
 		Played: played,
 		Streak: streak,
@@ -579,10 +578,10 @@ func (d *dailyRoutes) read(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// dailyMe is GET /daily/me: what the opening screens show of the
-// reader before any board. Streak is the number the title screen shows
-// (daily.Streak.Shown), and Week their place on this week's board, null
-// with no points this week.
+// dailyMe is GET /daily/me: the reader's standing, before any board.
+// Streak is their run as daily.Streak.Shown gives it, and Week their
+// place on this week's board, null with no points this week, which is
+// what the start screen's banner shows.
 type dailyMe struct {
 	Streak int         `json:"streak"`
 	Week   *daily.Week `json:"week"`
@@ -590,12 +589,12 @@ type dailyMe struct {
 
 // me is GET /daily/me: the reader's streak and their standing this
 // week, on their puzzle as GET /daily works it out (readerDay). Neither
-// opening screen shows a leaderboard, only this: the daily title screen
-// beside the streak, and the start screen's banner in place of how many
-// are playing. Both ask on every visit, so it writes nothing, a reader
-// with no player is answered without a read of anything, and a
-// player's answer is kept for a minute (standings), until they finish
-// their game. A player's cookie is renewed, as GET /daily renews it.
+// opening screen shows a leaderboard; the start screen's banner shows
+// the place where it would say how many are playing, and asks on every
+// visit, so this writes nothing, a reader with no player is answered
+// without a read of anything, and a player's answer is kept for a
+// minute (standings), until they finish their game. A player's cookie
+// is renewed, as GET /daily renews it.
 func (d *dailyRoutes) me(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := d.now()
@@ -791,25 +790,31 @@ func (d *dailyRoutes) addr(r *http.Request) string {
 // crypto.randomUUID().
 var dailyKey = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
-// dailyMove is a move's body.
+// dailyMove is a move's body: the key and seq every move has, and the
+// fact a buy is for, the person an overlap adds, or the movie a guess
+// names.
 type dailyMove struct {
-	Key  string `json:"key"`
-	Seq  *int   `json:"seq"`
-	Card string `json:"card"`
-	Kind string `json:"kind"`
-	Film string `json:"film"`
+	Key    string `json:"key"`
+	Seq    *int   `json:"seq"`
+	Kind   string `json:"kind"`
+	Person string `json:"person"`
+	Film   string `json:"film"`
 }
 
-// The four clues "buy" sells. "story", the clue the year replaced, is
-// not one, and is refused as bad like any kind that never was.
-var dailyBuys = map[string]bool{daily.KindDirector: true, daily.KindActor: true, daily.KindGenres: true, daily.KindYear: true}
-
-func (d *dailyRoutes) flip(w http.ResponseWriter, r *http.Request) {
-	d.act(w, r, func(m dailyMove) (string, string, bool) { return daily.KindFlip, m.Card, m.Card != "" })
+func (d *dailyRoutes) next(w http.ResponseWriter, r *http.Request) {
+	d.act(w, r, func(dailyMove) (string, string, bool) { return daily.KindNext, "", true })
 }
 
+// buy sells the facts daily.IsFact names. The old game's clues, and any
+// kind that never was, are refused as bad.
 func (d *dailyRoutes) buy(w http.ResponseWriter, r *http.Request) {
-	d.act(w, r, func(m dailyMove) (string, string, bool) { return m.Kind, "", dailyBuys[m.Kind] })
+	d.act(w, r, func(m dailyMove) (string, string, bool) { return m.Kind, "", daily.IsFact(m.Kind) })
+}
+
+func (d *dailyRoutes) overlap(w http.ResponseWriter, r *http.Request) {
+	d.act(w, r, func(m dailyMove) (string, string, bool) {
+		return daily.KindOverlap, m.Person, imdbid.Name(m.Person)
+	})
 }
 
 func (d *dailyRoutes) guess(w http.ResponseWriter, r *http.Request) {
@@ -876,11 +881,89 @@ func (d *dailyRoutes) act(w http.ResponseWriter, r *http.Request, what func(dail
 	writeJSON(w, http.StatusOK, map[string]any{"game": g})
 }
 
-// board is GET /daily/{no}/board?tab=today|week: the top of the board
-// and the rows around the reader, with their own place. A reader with no
-// player sees the top alone. A puzzle that does not exist, or whose day
-// has not come for the reader, in their zone, or for a player in the
-// zone their game moved them on in (gameZone), has no board.
+// dailySheet is GET /daily/{no}/movies: whose sheet it is, and their
+// movies.
+type dailySheet struct {
+	Person string             `json:"person"`
+	Movies []daily.SheetMovie `json:"movies"`
+}
+
+// movies is GET /daily/{no}/movies?person=nm…: the Movies sheet of one of
+// the six showing in the reader's game, from the puzzle as it was picked
+// (daily.Puzzle.SheetOf), with today's movie among the cards and nothing
+// marking it out. In order, it is refused:
+//
+//   - "bad" for a person that is no IMDb name id;
+//   - "cookie" without a player;
+//   - "day" for a puzzle whose day is nobody's date, or whose game is
+//     unfinished and past its own zone's midnight, as a move on it
+//     would be;
+//   - "no-game" before Play;
+//   - "bad" for anyone not showing in their game, a director included.
+//
+// Once the game is over it answers for anyone in the cast. It writes
+// nothing.
+func (d *dailyRoutes) movies(w http.ResponseWriter, r *http.Request) {
+	person := r.URL.Query().Get("person")
+	if _, ok := puzzleNumber(w, r); !ok {
+		return
+	}
+	if !imdbid.Name(person) {
+		dailyRefuse(w, http.StatusBadRequest, "bad", "person must be one of the cast, by IMDb id")
+		return
+	}
+	if dailyToken(r) == "" {
+		dailyRefuse(w, http.StatusForbidden, "cookie", "the Movies sheet needs the player cookie")
+		return
+	}
+	now := d.now()
+	p, ok := d.named(w, r, now)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	player, _, ok, err := d.player(r)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	if !ok {
+		dailyRefuse(w, http.StatusForbidden, "cookie", "that cookie is nobody's")
+		return
+	}
+	rec, err := d.store.DailyGame(ctx, player.ID, p.No)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	if rec == nil {
+		d.fail(w, r, daily.ErrNoGame)
+		return
+	}
+	if rec.Finished == nil && !p.On(now, daily.Zone(rec.Zone)) {
+		d.fail(w, r, daily.ErrDay)
+		return
+	}
+	s := daily.Replay(p, rec.Moves)
+	slot := p.SlotOf(person)
+	if !s.Shown(slot) {
+		dailyRefuse(w, http.StatusBadRequest, "bad", "that person is not showing in this game")
+		return
+	}
+	live, err := d.store.DailyLive(ctx, p.SheetWants(slot), nil)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	movies, _ := p.SheetOf(s, slot, live)
+	writeJSON(w, http.StatusOK, dailySheet{Person: person, Movies: movies})
+}
+
+// board is GET /daily/{no}/board?tab=today|week: the players around the
+// reader, with their own place, and today's figures; never the top. A
+// reader not on the board sees no rows. A puzzle that does not exist, or
+// whose day has not come for the reader, in their zone, or for a player
+// in the zone their game moved them on in (gameZone), has no board.
 func (d *dailyRoutes) board(w http.ResponseWriter, r *http.Request) {
 	no, ok := puzzleNumber(w, r)
 	if !ok {
@@ -932,8 +1015,8 @@ func (d *dailyRoutes) board(w http.ResponseWriter, r *http.Request) {
 // reset is POST /daily/dev/reset {}, development's Play again, which
 // exists only outside production (WithDailyDev): the reader starts again
 // as a brand-new player, on their puzzle dealt afresh with another movie,
-// so whoever is working on Daily can play it from the intro as often as
-// they like, never knowing the answer first. In order:
+// so whoever is working on Daily can play it from the title screen as
+// often as they like, never knowing the answer first. In order:
 //
 //   - the puzzle is the one the reader is shown once this has answered,
 //     with no cookie: the one for their date in their zone, as GET /daily
@@ -941,7 +1024,7 @@ func (d *dailyRoutes) board(w http.ResponseWriter, r *http.Request) {
 //     a left-behind game had moved them on a day (readerDay);
 //   - the store deals it again from another answer, under the same number
 //     on the same day, and deletes every game of it, everybody's, since a
-//     game's moves mean nothing on another board;
+//     game's moves mean nothing on another movie's cast;
 //   - the puzzle this process kept is let go, and every standing kept
 //     with it, so the next GET /daily is the new movie at once;
 //   - the cookie is expired, so that GET offers a new name and no game.
@@ -1006,7 +1089,7 @@ func (d *dailyRoutes) reset(w http.ResponseWriter, r *http.Request) {
 }
 
 // standings are GET /daily/me's answers, kept a minute each in each
-// process's memory: both opening screens ask on every visit, and each
+// process's memory: the banner asks on every visit, and each
 // answer ranks a week's board. Kept by player, puzzle and whether they
 // have finished it, so finishing their game, which moves their standing
 // at once, is a key nothing was kept under and is worked out afresh,

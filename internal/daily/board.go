@@ -1,14 +1,14 @@
 package daily
 
 import (
-	"encoding/json"
+	"cmp"
 	"math"
 	"slices"
 	"time"
 )
 
-// The leaderboards, the streak, and the reader's standing on the
-// opening screens.
+// The leaderboards, the streak, and the reader's standing on the start
+// screen's banner.
 
 // Board tabs: today's puzzle, and the week so far.
 const (
@@ -25,63 +25,68 @@ func EarlierGames(no int) int {
 	return max(0, min(3, no-1))
 }
 
-// TopRows is how many of the best a board always shows, and Around how
-// many either side of the player.
-const (
-	TopRows = 5
-	Around  = 2
-)
-
-// Ranked is one player's place on a board: today's points and time, or
-// the week's sums with each day's points, Monday first, nil for a day
-// not played.
+// Ranked is one player on a board, placed: today's points, or the
+// week's sum with each day's points from Monday to the puzzle's day, 0
+// for a day not played. Place is a competition rank, one more than the
+// players on the board with more points, so equal scores share a place,
+// and Tied is whether anyone else on the board has the same points. Both
+// are worked out over the whole board, which a few of its rows cannot
+// say, so they come with each row.
 type Ranked struct {
-	Rank   int
+	Place  int
+	Tied   bool
 	Player int64
 	Name   string
 	Hue    int
 	Pts    int
-	MS     int64
-	Days   []*int
+	Days   []int
 }
 
-// Row is a line of a board as the page draws it, or the gap between two
-// that are not next to each other.
-type Row struct {
-	Gap  bool
-	Rank int
-	Name string
-	Hue  int
-	Pts  int
-	// Secs is today's time; Days the week's points, Monday first.
-	Secs *int
-	Days []*int
-	You  bool
-}
-
-// MarshalJSON writes a gap as {"gap": true} and a row as a row.
-func (r Row) MarshalJSON() ([]byte, error) {
-	if r.Gap {
-		return []byte(`{"gap":true}`), nil
+// Place gives each of a whole board its competition place and whether
+// it is tied, as the store's window functions do: the rule written
+// once, for the tests and for anything that ranks a board in memory.
+func Place(board []Ranked) {
+	for i := range board {
+		above, same := 0, 0
+		for _, o := range board {
+			switch {
+			case o.Pts > board[i].Pts:
+				above++
+			case o.Pts == board[i].Pts:
+				same++
+			}
+		}
+		board[i].Place, board[i].Tied = above+1, same > 1
 	}
-	return json.Marshal(struct {
-		Rank int    `json:"rank"`
-		Name string `json:"name"`
-		Hue  int    `json:"hue"`
-		Pts  int    `json:"pts"`
-		Secs *int   `json:"secs,omitempty"`
-		You  bool   `json:"you"`
-		Days []*int `json:"days,omitempty"`
-	}{r.Rank, r.Name, r.Hue, r.Pts, r.Secs, r.You, r.Days})
 }
 
-// You is the player's own place, whether or not they are listed.
+// Row is a line of a board as the page draws it. Days is the week's
+// points, Monday first; the today tab has none.
+type Row struct {
+	Place int    `json:"place"`
+	Tied  bool   `json:"tied"`
+	Name  string `json:"name"`
+	Hue   int    `json:"hue"`
+	Pts   int    `json:"pts"`
+	Days  []int  `json:"days,omitempty"`
+	You   bool   `json:"you"`
+}
+
+// You is the player's own place on a board.
 type You struct {
-	Rank   int    `json:"rank"`
-	Pts    int    `json:"pts"`
-	Secs   int    `json:"secs"`
-	Listed bool   `json:"listed"`
-	Days   []*int `json:"days,omitempty"`
+	Place int   `json:"place"`
+	Tied  bool  `json:"tied"`
+	Pts   int   `json:"pts"`
+	Days  []int `json:"days,omitempty"`
+}
+
+// ChartBars is how many bars the result's chart of today's scores has:
+// a hundred points each, 0–99 up to 900–999, and 1,000 on its own.
+const ChartBars = 11
+
+// Bar is the bar of the chart a score falls in.
+func Bar(pts int) int {
+	return min(ChartBars-1, max(0, pts)/100)
 }
 
 // Board is one tab of the leaderboard.
@@ -89,48 +94,66 @@ type Board struct {
 	Tab string `json:"tab"`
 	// Total is how many players the board ranks: those listed, and the
 	// player when they are not.
-	Total int   `json:"total"`
-	You   *You  `json:"you"`
-	Rows  []Row `json:"rows"`
+	Total int  `json:"total"`
+	You   *You `json:"you"`
+	// Rows are the players around the reader, never the top: a top spot
+	// would be the one reason to look answers up. Empty for a reader who
+	// is not on the board.
+	Rows []Row `json:"rows"`
 	// Beat is, today, the share of everyone who finished (listed or not)
 	// with fewer points than the player; Solved the share of finished
 	// games that were won. Both percentages, null on the week's tab and
 	// when there is nothing to count.
 	Beat   *int `json:"beat"`
 	Solved *int `json:"solved"`
+	// Chart is, today, how many finished games (listed or not) scored in
+	// each of the ChartBars bars; null on the week's tab.
+	Chart []int `json:"chart"`
 }
 
-// Lay is the rows a board shows from its ranked players: the top
-// TopRows, and Around either side of me, with a gap wherever the ranks
-// jump. The ranked players may be all of them or only those rows; the
+// Around is the rows a board shows the player me from its ranked
+// players, by points, ties falling to who joined first. Today: up to two
+// players just above them, with more points, the nearest first; them;
+// up to one other on their score; and up to one just below. This week:
+// the two ahead of them and the two behind, as the week's order has
+// them. Nobody, for a player not on the board. The ranked players may
+// be the whole board or only the rows the store reads around me; the
 // rule picks the same lines either way.
-func Lay(ranked []Ranked, me int64, tab string) []Row {
-	mine := 0
-	for _, r := range ranked {
-		if me != 0 && r.Player == me {
-			mine = r.Rank
-		}
+func Around(ranked []Ranked, me int64, tab string) []Row {
+	order := slices.Clone(ranked)
+	slices.SortFunc(order, func(a, b Ranked) int { return cmp.Or(cmp.Compare(b.Pts, a.Pts), cmp.Compare(a.Player, b.Player)) })
+	at := slices.IndexFunc(order, func(r Ranked) bool { return me != 0 && r.Player == me })
+	if at < 0 {
+		return []Row{}
 	}
-	shown := slices.Clone(ranked)
-	shown = slices.DeleteFunc(shown, func(r Ranked) bool {
-		return r.Rank > TopRows && (mine == 0 || r.Rank < mine-Around || r.Rank > mine+Around)
-	})
-	slices.SortFunc(shown, func(a, b Ranked) int { return a.Rank - b.Rank })
-	rows := make([]Row, 0, len(shown)+2)
-	prev := 0
-	for _, r := range shown {
-		if r.Rank > prev+1 {
-			rows = append(rows, Row{Gap: true})
+	var shown []Ranked
+	if tab == TabWeek {
+		shown = order[max(0, at-2):min(len(order), at+3)]
+	} else {
+		mine := order[at].Pts
+		var above, same, below []Ranked
+		for i, r := range order {
+			switch {
+			case i == at:
+			case r.Pts > mine:
+				above = append(above, r)
+			case r.Pts == mine:
+				same = append(same, r)
+			default:
+				below = append(below, r)
+			}
 		}
-		prev = r.Rank
-		row := Row{Rank: r.Rank, Name: r.Name, Hue: r.Hue, Pts: r.Pts, You: mine != 0 && r.Rank == mine}
+		shown = append(shown, above[max(0, len(above)-2):]...)
+		shown = append(shown, order[at])
+		shown = append(shown, same[:min(1, len(same))]...)
+		shown = append(shown, below[:min(1, len(below))]...)
+	}
+	rows := make([]Row, len(shown))
+	for i, r := range shown {
+		rows[i] = Row{Place: r.Place, Tied: r.Tied, Name: r.Name, Hue: r.Hue, Pts: r.Pts, You: r.Player == me}
 		if tab == TabWeek {
-			row.Days = r.Days
-		} else {
-			secs := Secs(r.MS)
-			row.Secs = &secs
+			rows[i].Days = r.Days
 		}
-		rows = append(rows, row)
 	}
 	return rows
 }
@@ -190,7 +213,7 @@ func StreakOf(today int, days []Played) Streak {
 	return Streak{}
 }
 
-// Shown is the streak the title screen shows: the run ending at the
+// Shown is the streak GET /daily/me answers with: the run ending at the
 // reader's puzzle once they have finished it, and until then the run
 // they can still extend by finishing it. A game finished with nothing
 // shows nothing: the run it ended is over.
@@ -202,12 +225,15 @@ func (s Streak) Shown(finished bool) int {
 }
 
 // Neither opening screen shows a leaderboard: today's would be strangers
-// the reader cannot be on yet, and it would start them off behind. They
-// show the reader's own standing instead, their place on this week's
-// board, which the result's This week tab then shows them on.
+// the reader cannot be on yet, and it would start them off behind. The
+// start screen's banner shows the reader's own standing instead, their
+// place on this week's board, which the result's This week tab then
+// shows them on.
 
-// Week is the reader's place on the week's board: their rank, and how
-// many players the board ranks, the reader among them.
+// Week is the reader's place on the week's board: their competition
+// rank by points, one more than the players with more, so equal totals
+// share it as the This week tab's places do, and how many players the
+// board ranks, the reader among them.
 type Week struct {
 	Rank    int `json:"rank"`
 	Players int `json:"players"`

@@ -27,6 +27,7 @@ type Title struct {
 	IsAdult   bool
 	StartYear int // 0 when IMDb has none
 	Genres    []string
+	Runtime   int // minutes, 0 when IMDb has none
 }
 
 // ReadTitle reads the current row as a Title, and reports false for any
@@ -41,6 +42,9 @@ func ReadTitle(r *Reader) (Title, bool) {
 		return Title{}, false
 	}
 	year, _ := r.Int("startYear")
+	// A runtime of nothing is not one: IMDb writes \N for "not known",
+	// and a zero or less would put a movie in the shortest band.
+	runtime, _ := r.Int("runtimeMinutes")
 	return Title{
 		TConst:    id,
 		Primary:   r.Text("primaryTitle"),
@@ -48,6 +52,7 @@ func ReadTitle(r *Reader) (Title, bool) {
 		IsAdult:   r.Bool("isAdult"),
 		StartYear: year,
 		Genres:    r.List("genres"),
+		Runtime:   max(0, runtime),
 	}, true
 }
 

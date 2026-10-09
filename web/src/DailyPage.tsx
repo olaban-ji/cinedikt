@@ -1,147 +1,120 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { capture } from './analytics';
 import {
   ApiError,
   fetchDaily,
-  fetchDailyWeek,
   playDaily,
-  renameDaily,
   resetDaily,
   sendDailyMove,
+  type DailyFactKind,
   type DailyGame,
   type DailyMove,
-  type DailyPlayer,
+  type DailyPerson,
   type DailyToday,
-  type DailyWeek,
 } from './api';
-import { DailyBoard, NO_FX, useBoardView, type BoardFx } from './DailyBoard';
-import { DailyIntro } from './DailyIntro';
-import { DailyPanel } from './DailyPanel';
+import { DailyBar } from './DailyBar';
+import { DailyCast } from './DailyCast';
+import { DailyMoviesSheet } from './DailyMoviesSheet';
+import { AgainButton, DailyLeaderboard, DailyResult, useBoards } from './DailyResult';
+import { DailyRules } from './DailyRules';
+import { DailyTitle } from './DailyTitle';
 import {
   AGAIN_FAILED,
-  CLUE_COST,
-  CONFETTI_AFTER_MS,
-  CONFETTI_COLOURS,
-  CONFETTI_MS,
-  CONFETTI_PIECES,
-  FRESH_HOLD_MS,
-  INTRO_OUT_EASE,
-  INTRO_OUT_KEYFRAMES,
-  INTRO_OUT_MS,
-  NAME_BOUNCE_MS,
-  BOUNCE_EASE,
-  PULSE_MS,
-  REEL_GIVE_UP_MS,
-  REEL_STEPS,
-  RESULTS_AFTER_MS,
-  RESULTS_FRESH_MS,
-  SCORE_SHOWN_MS,
-  SHAKE_KEYFRAMES,
-  SHAKE_MS,
-  SPEND_FLOAT_MS,
-  TWINKLE_EASE,
-  TWINKLE_EVERY_MS,
-  TWINKLE_KEYFRAMES,
-  TWINKLE_MS,
+  CAST_HEADING,
+  GAME_NAME,
+  LANDSCAPE_QUERY,
+  PLAY_HIDE_MS,
+  REVEAL_CONFIRM_MS,
+  SHOW_ANSWER,
+  SHOW_ANSWER_SURE,
+  TOASTS,
   UNREACHABLE,
-  boardLayout,
-  boardPayload,
-  burstShift,
+  aboutItems,
+  cardColour,
+  castRows,
   clockOffset,
+  codesOf,
   dailyDateText,
-  everyoneNamed,
-  facesOf,
-  flipCost,
+  earlyRefusal,
+  factItems,
+  factsHeading,
+  guessById,
+  guessMessage,
   guessedIds,
-  hueSlots,
-  introStreak,
+  isLandscapePhone,
   midnightText,
   moveSig,
   newKey,
   newWrongGuess,
-  peopleByCard,
-  peopleOf,
-  reelDelay,
-  reelFrame,
+  newestGuess,
+  openingRows,
+  pageHeading,
+  pageLine,
+  pageSections,
   refusalText,
-  resumeCards,
-  revealedOf,
-  scrollTarget,
+  revealDelays,
   shareText,
-  staggerDelays,
   staleGame,
-  standingText,
+  todaysPeople,
+  toneStyle,
+  triedChips,
+  viewportFit,
+  warmthColour,
   watchMidnight,
-  yearOf,
-  yearTargets,
+  type PageSection,
 } from './daily';
-import { initialsFor, type GridLayout } from './grid';
-import { animate, stillNow } from './motion';
+import { stillNow } from './motion';
+import { PosterImage } from './PosterImage';
+import { posterFallback } from './poster';
 import { useScreen } from './screen';
 import { isTyping } from './search';
-import { useResolvedTheme, type Theme } from './theme';
+import { useReducedMotion, useResolvedTheme, type Theme } from './theme';
 import { Toast, useToast } from './Toast';
-import { useTapGuard } from './tap';
+
+// Cinedikt Daily's page, under the app's header, and its game, Name Drop:
+// the title screen, then the game page — the hidden card and the wrong
+// guesses, the cast showing up one name at a time, the facts for sale and
+// the guess bar pinned under them — and, once it is over, the answer, the
+// result and the leaderboard, with the cast below. The server owns the
+// game: every move is sent, and the page draws the game it sends back.
 
 interface Props {
   /** Told the puzzle's number and day once it has loaded, for the
    *  header; null when it could not be loaded or is not ready yet. */
   onDay?: (day: { no: number; date: string } | null) => void;
-  /** Bumped by the header's "How it works": each change opens the rules. */
+  /** Bumped by the header's "How it works": each change opens it. */
   rulesSignal?: number;
-  /** A map is loading over the page (Forward from here, say). The page
-   *  steps back behind the progress line until it arrives, as the opening
+  /** A map is loading over the page (Map this movie, say). The page steps
+   *  back behind the progress line until it arrives, as the opening
    *  screen and the About page do. */
   dim?: boolean;
+  /** Map this movie: the app's own way to a movie's map, by its IMDb id,
+   *  with its title for the progress line, so the Daily leaves for the
+   *  map as any other screen does. */
+  onOpenMovie?: (id: string, title: string) => void;
 }
 
 type Load =
   | { state: 'loading' }
-  | { state: 'ready'; today: DailyToday; week: DailyWeek | null; offset: number; n: number }
+  | { state: 'ready'; today: DailyToday; offset: number; n: number }
   | { state: 'failed'; reason: string | null };
-
-/** Today's puzzle and the reader's place this week, asked for together
- *  as the page opens, as the banner asks for them, so the title screen
- *  draws the place in its first frame. One that came a round trip after
- *  the puzzle would land in the middle of the screen's entrance and
- *  re-centre the row it sits in, which on a phone can wrap onto a line
- *  of its own and lift the whole column under the reader's thumb. A
- *  place that cannot be had is no place: only the puzzle failing fails
- *  the page. */
-export function fetchDailyPage(signal: AbortSignal): Promise<{ today: DailyToday; week: DailyWeek | null }> {
-  return Promise.all([fetchDaily(signal), fetchDailyWeek(signal)]).then(([today, week]) => ({ today, week }));
-}
-
-/** Asks for the reader's place this week again once today's game has
- *  ended here, and hands on what came of it. The place held until then
- *  was worked out over the days before today, so it is let go as the ask
- *  goes out: until the new one lands, and for good if it cannot be had,
- *  there is no place, as on the banner, rather than one that leaves
- *  today's game out and disagrees with the result's This week tab. The
- *  title screen is not up as a game ends, so letting go draws nothing.
- *  An answer that lands after `signal` has gone is dropped. */
-export function askForStanding(
-  fetcher: (signal: AbortSignal) => Promise<DailyWeek | null>,
-  signal: AbortSignal,
-  onWeek: (week: DailyWeek | null) => void,
-): Promise<void> {
-  onWeek(null);
-  return fetcher(signal).then(
-    (week) => {
-      if (!signal.aborted) onWeek(week);
-    },
-    // Let go already: a place that cannot be had stays none.
-    () => {},
-  );
-}
 
 /** Play again, in development: asks the server to start the reader
  *  again (resetDaily, as `reset`), and once it has, starts the page
- *  again from nothing, `restart`, as though it had just been opened: the
- *  intro, with a new name proposed, over the new movie's board. A reset
- *  that is refused changed nothing, and one that never got an answer
- *  changed nothing the page can know of, so either leaves the page as it
- *  was and tells the reader, who can simply press again. */
+ *  again from nothing, `restart`, as though it had just been opened. A
+ *  reset that is refused changed nothing, and one that never got an
+ *  answer changed nothing the page can know of, so either leaves the
+ *  page as it was and tells the reader, who can simply press again. */
 export function playAgain(
   reset: () => Promise<void>,
   restart: () => void,
@@ -150,27 +123,84 @@ export function playAgain(
   return reset().then(restart, () => say(AGAIN_FAILED));
 }
 
-/** Cinedikt Daily, under the app's header: the board, the panel, the
- *  intro that is also the rules, the toast and the confetti. It asks for
- *  today's puzzle, and the reader's place this week with it, as it
- *  opens, again at the reader's midnight, and again whenever the server
- *  says the game it is showing has moved on (a new day, a game that
- *  ended in another tab). */
-export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
+/** Sizes the app to the visual viewport while the Daily is up: its top
+ *  and height, as custom properties on the app's box, which the
+ *  stylesheet reads (.cd-app:has(> .cd-daily)). On iOS the keyboard
+ *  covers the bottom of a layout viewport that stays full height, and the
+ *  guess bar would sit under it; fitted to the visual viewport, the page
+ *  ends where the keyboard begins and the bar rides just above it. Let go
+ *  while the reader is zoomed in (viewportFit), and when the page goes. */
+function useViewportFit(box: RefObject<HTMLElement | null>): void {
+  useEffect(() => {
+    const vv = typeof window === 'undefined' ? null : window.visualViewport;
+    const app = box.current?.parentElement;
+    if (!vv || !app) return;
+    const fit = () => {
+      const f = viewportFit(vv);
+      if (f) {
+        app.style.setProperty('--vv-top', `${f.top}px`);
+        app.style.setProperty('--vv-h', `${f.height}px`);
+      } else {
+        app.style.removeProperty('--vv-top');
+        app.style.removeProperty('--vv-h');
+      }
+    };
+    fit();
+    vv.addEventListener('resize', fit);
+    vv.addEventListener('scroll', fit);
+    return () => {
+      vv.removeEventListener('resize', fit);
+      vv.removeEventListener('scroll', fit);
+      app.style.removeProperty('--vv-top');
+      app.style.removeProperty('--vv-h');
+    };
+  }, [box]);
+}
+
+/** Whether the window is a landscape phone (LANDSCAPE_QUERY), read now.
+ *  Its width and height stand in where matchMedia is missing. */
+function landscapeNow(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (typeof window.matchMedia === 'function') return window.matchMedia(LANDSCAPE_QUERY).matches;
+  return isLandscapePhone(window.innerWidth, window.innerHeight);
+}
+
+/** A landscape phone, kept as the window turns: the guess bar becomes a
+ *  column beside the cast. Watched from script rather than written as a
+ *  media query because 520px tall is not one of the stylesheet's screen
+ *  classes, which screen.test.ts holds every query in grid.css to. */
+function useLandscape(): boolean {
+  const [land, setLand] = useState(landscapeNow);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia(LANDSCAPE_QUERY);
+    const read = () => setLand(mq.matches);
+    read();
+    mq.addEventListener('change', read);
+    return () => mq.removeEventListener('change', read);
+  }, []);
+  return land;
+}
+
+/** Cinedikt Daily, under the app's header. It asks for today's puzzle as
+ *  it opens, again at the reader's midnight, and again whenever the
+ *  server says the game it is showing has moved on (a new day, a game
+ *  that ended in another tab). */
+export function DailyPage({ onDay, rulesSignal = 0, dim = false, onOpenMovie }: Props) {
   const toast = useToast();
+  const box = useRef<HTMLDivElement>(null);
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [asked, setAsked] = useState(0);
+  useViewportFit(box);
 
   useEffect(() => {
     const ctrl = new AbortController();
-    fetchDailyPage(ctrl.signal)
-      .then(({ today, week }) => {
-        if (ctrl.signal.aborted) return;
-        setLoad({ state: 'ready', today, week, offset: clockOffset(today.now, Date.now()), n: asked });
+    fetchDaily(ctrl.signal)
+      .then((today) => {
+        if (!ctrl.signal.aborted) setLoad({ state: 'ready', today, offset: clockOffset(today.now, Date.now()), n: asked });
       })
       .catch((e: unknown) => {
-        if (ctrl.signal.aborted) return;
-        setLoad({ state: 'failed', reason: e instanceof ApiError ? e.reason : null });
+        if (!ctrl.signal.aborted) setLoad({ state: 'failed', reason: e instanceof ApiError ? e.reason : null });
       });
     return () => ctrl.abort();
   }, [asked]);
@@ -192,12 +222,10 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
   const reload = useCallback(() => setAsked((n) => n + 1), []);
 
   // Play again (development only). Not a reload, which keeps the old game
-  // up until the new puzzle lands: that game is gone on the server, so
-  // the view drawing it goes at once, and with it all it had running —
-  // its timers, a reel or a confetti burst mid-flight, a guess half typed
-  // — and any toast it raised. The page then asks afresh, as when it
-  // opened, puzzle and place together. A press while one is on its way
-  // is the same press.
+  // up until the new puzzle lands: that game is gone on the server, so the
+  // view drawing it goes at once, and with it all it had running — its
+  // timers, a guess half typed — and any toast it raised. A press while
+  // one is on its way is the same press.
   const restart = useCallback(() => {
     hide();
     setLoad({ state: 'loading' });
@@ -213,27 +241,24 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
   }, [restart, say]);
 
   return (
-    <div className={`cd-daily${dim ? ' cd-daily-dim' : ''}`}>
+    <div ref={box} className={`cd-daily${dim ? ' cd-daily-dim' : ''}`}>
       {load.state === 'ready' ? (
         <DailyGameView
           // A reload starts the game view afresh from what the server
           // says: whatever the old one was showing is what was wrong.
           key={`${load.today.no}:${load.n}`}
           today={load.today}
-          week={load.week}
           offset={load.offset}
           say={say}
           reload={reload}
           again={again}
           rulesSignal={rulesSignal}
+          onOpenMovie={onOpenMovie}
         />
       ) : load.state === 'failed' ? (
         <DailyMissing notReady={load.reason === 'not-ready'} onRetry={reload} />
-      ) : (
-        // The plot stays empty while today's puzzle is on its way, as a
-        // map's does.
-        <div className="cd-scroller" aria-hidden="true" />
-      )}
+      ) : null}
+      {/* The Daily's own toast, 170px up, clear of the guess bar. */}
       <Toast spec={toast.spec} visible={toast.visible} />
     </div>
   );
@@ -242,8 +267,8 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false }: Props) {
 /** Today's puzzle could not be had: not picked yet, or not reachable. */
 function DailyMissing({ notReady, onRetry }: { notReady: boolean; onRetry: () => void }) {
   const [title, body] = notReady
-    ? ['Today’s map isn’t ready yet', 'Try again in a few minutes.']
-    : ['We couldn’t open today’s map', UNREACHABLE];
+    ? ['Today’s movie isn’t ready yet', 'Try again in a few minutes.']
+    : ['We couldn’t open today’s movie', UNREACHABLE];
   return (
     <div className="cd-error" role="alert">
       <h2 className="cd-error-title">{title}</h2>
@@ -255,19 +280,8 @@ function DailyMissing({ notReady, onRetry }: { notReady: boolean; onRetry: () =>
   );
 }
 
-/** Where the map is asked to go: to cards, to a year's row, or to the
- *  middle of the plot behind the intro. `n` makes asking twice for the
- *  same place two asks. */
-type Aim =
-  | { ids: string[]; smooth: boolean; n: number }
-  | { year: number; smooth: boolean; n: number }
-  | { centre: true; n: number };
-
 interface GameProps {
   today: DailyToday;
-  /** The reader's place this week, asked for with today's puzzle, or
-   *  null with none to show. */
-  week: DailyWeek | null;
   /** The server's clock less this one's. */
   offset: number;
   say: (text: string) => void;
@@ -276,66 +290,48 @@ interface GameProps {
    *  production never does. */
   again: () => void;
   rulesSignal: number;
+  onOpenMovie?: (id: string, title: string) => void;
 }
+
+/** No end cascade: the names are simply there. */
+const NO_DELAYS: ReadonlyMap<number, number> = new Map();
 
 /** The game for one loaded puzzle. Exported for its tests, which draw it
  *  from a fixture; the page draws it once today's puzzle has arrived. */
-export function DailyGameView({ today, week, offset, say, reload, again, rulesSignal }: GameProps) {
+export function DailyGameView({ today, offset, say, reload, again, rulesSignal, onOpenMovie }: GameProps) {
   const screen = useScreen();
   const theme = useResolvedTheme();
-  const tap = useTapGuard();
-  const scroller = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const still = useReducedMotion();
+  const land = useLandscape();
+  const main = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const answerRef = useRef<HTMLDivElement>(null);
-  const nameRef = useRef<HTMLSpanElement>(null);
 
   const [game, setGame] = useState<DailyGame | null>(today.game);
   const gameRef = useRef(game);
-  const [player, setPlayer] = useState<DailyPlayer>(today.player);
-  const [reel, setReel] = useState<string | null>(null);
-  // "New name" pressed and not landed yet: the ref for what is pressed
-  // meanwhile, the state for the intro to draw. Not `reel != null`: with
-  // stillness asked for there are no frames, but the name is still on
-  // its way.
-  const spinning = useRef(false);
-  const [rolling, setRolling] = useState(false);
+  // Play hiding every name for a moment, so the first comes in from
+  // nothing. Nothing can be done meanwhile.
+  const [opening, setOpening] = useState(false);
+  const openingRef = useRef(false);
+  // The game ended here, rather than being opened over: the card turns,
+  // the names not seen arrive one after another, the score counts up.
+  const [ended, setEnded] = useState(false);
+  // The wrong guess whose message the bar shows, by IMDb id.
+  const [msgId, setMsgId] = useState<string | null>(null);
+  // "Show the answer" pressed once: a second press within
+  // REVEAL_CONFIRM_MS gives the game up.
+  const [sure, setSure] = useState(false);
+  const sureTimer = useRef(0);
   const [rules, setRules] = useState(false);
   const rulesRef = useRef(rules);
   rulesRef.current = rules;
-  const [min, setMin] = useState(false);
-  const [resIn, setResIn] = useState(today.game?.phase === 'done');
-  const [fx, setFx] = useState<BoardFx>(NO_FX);
-  const [pulse, setPulse] = useState<string | null>(null);
-  const [delta, setDelta] = useState<{ k: number; n: number } | null>(null);
-  const [popPts, setPopPts] = useState<number | null>(null);
-  const [burst, setBurst] = useState<{ k: number; x: number; y: number } | null>(null);
-  // A solve asking for its confetti, counted, so the wait for it starts
-  // from the commit that draws the end rather than from the moment the
-  // game arrived: that render, every card turning face up at once, is
-  // heavy, and must not eat into the beat.
-  const [burstAsk, setBurstAsk] = useState(0);
-  const [freshEnd, setFreshEnd] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // The Movies sheet, open on this person, by IMDb id.
+  const [sheet, setSheet] = useState<string | null>(null);
+  const sheetRef = useRef(sheet);
+  sheetRef.current = sheet;
+  const [starting, setStarting] = useState(false);
   const busyRef = useRef(false);
+  const [topAsk, setTopAsk] = useState(0);
   const [focusAsk, setFocusAsk] = useState(0);
-  const [aim, setAim] = useState<Aim>(() =>
-    !today.game
-      ? { centre: true, n: 0 }
-      : today.game.phase === 'done' && today.game.end
-        ? { ids: [today.game.end.answer.id], smooth: false, n: 0 }
-        : { ids: resumeCards(today, today.game), smooth: false, n: 0 },
-  );
-  const aims = useRef(0);
-  const goTo = useCallback((ids: string[], smooth: boolean) => {
-    aims.current += 1;
-    setAim({ ids, smooth, n: aims.current });
-  }, []);
-  const goToYear = useCallback((year: number) => {
-    aims.current += 1;
-    setAim({ year, smooth: true, n: aims.current });
-  }, []);
 
   // Timers that must not outlive the view.
   const timers = useRef(new Set<number>());
@@ -348,224 +344,64 @@ export function DailyGameView({ today, week, offset, say, reload, again, rulesSi
   }, []);
   useEffect(() => {
     const all = timers.current;
-    return () => all.forEach((t) => window.clearTimeout(t));
+    return () => {
+      all.forEach((t) => window.clearTimeout(t));
+      window.clearTimeout(sureTimer.current);
+    };
   }, []);
 
-  // ---- the board ----
-
-  const view = useBoardView(scroller, tap.onScroll);
-  const compact = screen.overlay;
-  // Laid out again only when the year is bought and when the answer
-  // arrives: any other move changes what the cards say, never where they
-  // are.
-  const answer = game?.end?.answer;
-  const year = yearOf(game);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const laid = useMemo(() => boardPayload(today, game), [today, answer, year]);
-  const layout = useMemo(() => boardLayout(laid, view.width, compact), [laid, view.width, compact]);
-  const layoutRef = useRef(layout);
-  layoutRef.current = layout;
-  // What a game would be laid out as at this width, for the end's
-  // stagger, which is worked out before the end is drawn.
-  const shape = useRef({ width: view.width, compact });
-  shape.current = { width: view.width, compact };
-
-  const faces = useMemo(() => facesOf(today, game), [today, game]);
-  const people = useMemo(() => peopleByCard(peopleOf(game)), [game]);
-  const named = useMemo(() => everyoneNamed(game), [game]);
-  const hues = useMemo(() => hueSlots(named), [named]);
-  const codes = useMemo(() => initialsFor(named), [named]);
-  const cardRating = useMemo(() => new Map(today.cards.map((c) => [c.id, c.rating])), [today]);
+  const codes = useMemo(() => codesOf(game ? todaysPeople(game) : []), [game]);
+  const done = game?.phase === 'done';
+  const boards = useBoards(today.no, done);
 
   // ---- taking a game the server sent ----
 
-  const shake = useCallback(() => {
-    animate(panelRef.current, SHAKE_KEYFRAMES, { duration: SHAKE_MS, easing: 'ease-out' });
-  }, []);
-
-  /** The end of a game played here: the answer pops in and the map turns
-   *  over from it, a solve rises over it in points and confetti, and a
-   *  moment later the result takes the panel. */
-  const finish = useCallback(
-    (next: DailyGame, quiet: boolean) => {
-      const still = stillNow();
-      // A game that ended in another tab was counted there.
-      if (!quiet) capture('daily_finish', { won: next.won, pts: next.pts, secs: next.secs });
-      setFreshEnd(true);
-      setMin(false);
-      setPopPts(next.won ? next.pts : null);
-      later(() => setPopPts(null), SCORE_SHOWN_MS);
-      if (next.won && !still) setBurstAsk((n) => n + 1);
-      if (next.end) goTo([next.end.answer.id], true);
-      later(() => {
-        setResIn(true);
-        later(() => setFreshEnd(false), RESULTS_FRESH_MS);
-      }, still ? 0 : RESULTS_AFTER_MS);
-      if (!next.won) shake();
-    },
-    [goTo, later, shake],
-  );
-
-  /** Draws the game the server sent, moving whatever moved: the cards it
-   *  turns over turn, one after another, and keep a ring for a moment;
-   *  what was spent floats off the total; a wrong guess shakes the panel;
-   *  the end ends. `quiet` takes a game handed back by a refusal, or by
+  /** Draws the game the server sent. A new wrong guess puts its message
+   *  in the bar. A game that ends here ends: the card turns, the page
+   *  goes back to its top, where the answer is, and the field lets the
+   *  keyboard go. `quiet` takes a game handed back by a refusal, or by
    *  Play, which changes what is drawn and reports nothing about it. */
-  const adopt = useCallback(
-    (next: DailyGame, quiet = false) => {
-      const was = gameRef.current;
-      gameRef.current = next;
-      const before = revealedOf(today, was);
-      const added = [...revealedOf(today, next)].filter((id) => !before.has(id));
-      const done = next.phase === 'done';
-      let ending: GridLayout | null = null;
-      if (done) ending = boardLayout(boardPayload(today, next), shape.current.width, shape.current.compact);
-      const delays = stillNow() || added.length === 0 ? {} : staggerDelays(added, done, ending);
-      setGame(next);
-      if (added.length) {
-        setFx({ fresh: new Set(done ? [] : added), delays });
-        later(() => setFx(NO_FX), Math.max(0, ...Object.values(delays)) + FRESH_HOLD_MS);
-      }
-      if (was && next.pts < was.pts) {
-        // Let go once it has floated off, so a panel drawn afresh — after
-        // the rules close — does not float it again.
-        const k = Date.now();
-        setDelta({ k, n: was.pts - next.pts });
-        later(() => setDelta((d) => (d?.k === k ? null : d)), SPEND_FLOAT_MS);
-      }
-      if (was?.phase === 'play' && done) finish(next, quiet);
-      else if (done) {
-        setResIn(true);
-        if (next.end) goTo([next.end.answer.id], false);
-      } else if (!quiet && newWrongGuess(was, next)) shake();
-      // The year just bought: the map goes to its row, which the same
-      // render opens, if no card shares it.
-      const told = yearOf(next);
-      if (!quiet && !done && told != null && yearOf(was) == null) goToYear(told);
-    },
-    [today, later, finish, goTo, goToYear, shake],
-  );
-
-  // A solve's confetti, CONFETTI_AFTER_MS after the commit that drew the
-  // end. It bursts from the answer's card where the card is then, which
-  // may be part way through the map's glide to it, and follows the card
-  // from there (Confetti's `follow`).
-  useLayoutEffect(() => {
-    if (!burstAsk) return;
-    later(() => {
-      const r = answerRef.current?.getBoundingClientRect();
-      setBurst({
-        k: Date.now(),
-        x: r ? r.left + r.width / 2 : window.innerWidth / 2,
-        y: r ? r.top + r.height / 2 : window.innerHeight / 3,
-      });
-    }, CONFETTI_AFTER_MS);
-  }, [burstAsk, later]);
-
-  // ---- the reader's standing ----
-
-  // Their place this week, for the title screen: the one asked for with
-  // today's puzzle, and asked for again once a game ends here. Before
-  // today's game the server counts the days before today, and after it
-  // today is in, keying what it keeps by which, so the second ask is
-  // worked out afresh. A game already over when the page opened needs no
-  // second ask: the first was worked out with today in. The place from
-  // before is let go as the second ask goes out, so the screen never
-  // shows a place that leaves today out once today is played.
-  const [standing, setStanding] = useState<DailyWeek | null>(week);
-  const over = game?.phase === 'done';
-  const overAtOpen = useRef(over);
-  useEffect(() => {
-    if (!over || overAtOpen.current) return;
-    const ctrl = new AbortController();
-    void askForStanding(fetchDailyWeek, ctrl.signal, setStanding);
-    return () => ctrl.abort();
-  }, [over]);
-
-  // ---- the intro and the rules ----
-
-  const dialogUp = !game || rules;
-  const leaving = useRef(false);
-  /** The intro leaving, before `then`: it fades up and away. On a timer
-   *  rather than the animation's finish, which a page nobody is painting
-   *  never reaches. */
-  const leaveIntro = useCallback(
-    (then: () => void) => {
-      if (leaving.current) return;
-      leaving.current = true;
-      const a = animate(dialogRef.current, INTRO_OUT_KEYFRAMES, {
-        duration: INTRO_OUT_MS,
-        easing: INTRO_OUT_EASE,
-        fill: 'forwards',
-      });
-      later(() => {
-        leaving.current = false;
-        then();
-      }, a ? INTRO_OUT_MS : 0);
-    },
-    [later],
-  );
-
-  const openRules = useCallback(() => {
-    setRules(true);
-    setMin(false);
+  const adopt = useCallback((next: DailyGame, quiet = false) => {
+    const was = gameRef.current;
+    gameRef.current = next;
+    setGame(next);
+    if (next.phase === 'play' && newWrongGuess(was, next)) setMsgId(newestGuess(next)?.id ?? null);
+    if (was?.phase === 'play' && next.phase === 'done') {
+      // A game that ended in another tab was counted there.
+      if (!quiet) capture('daily_finish', { won: next.won, pts: next.pts });
+      setEnded(true);
+      setSheet(null);
+      setMsgId(null);
+      setSure(false);
+      inputRef.current?.blur();
+      setTopAsk((n) => n + 1);
+    }
   }, []);
-  const closeRules = useCallback(() => {
-    if (rulesRef.current) leaveIntro(() => setRules(false));
-  }, [leaveIntro]);
 
-  const signal = useRef(rulesSignal);
-  useEffect(() => {
-    if (rulesSignal === signal.current) return;
-    signal.current = rulesSignal;
-    if (gameRef.current) openRules();
-  }, [rulesSignal, openRules]);
-
-  const play = useCallback(async () => {
-    if (gameRef.current) {
-      closeRules();
-      return;
-    }
-    // Play sends the name shown, so it waits for a new one to land (the
-    // intro holds the button too).
-    if (busyRef.current || spinning.current) return;
-    busyRef.current = true;
-    setBusy(true);
-    try {
-      const res = await playDaily(today.no, player.name);
-      capture('daily_play');
-      setPlayer(res.player);
-      leaveIntro(() => {
-        adopt(res.game, true);
-        if (res.game.phase === 'play') {
-          goTo(today.start.map((s) => s.card), true);
-          // A keyboard is there to type with; a touch screen would throw
-          // its keyboard up over the map the reader has just been shown.
-          if (!screen.touch) setFocusAsk((n) => n + 1);
-        }
-      });
-    } catch (e) {
-      if (e instanceof ApiError) {
-        const text = refusalText(e.reason, 'play');
-        if (text) say(text);
-        if (e.reason === 'day') reload();
-      } else {
-        say(UNREACHABLE);
-      }
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
-  }, [today, player.name, closeRules, leaveIntro, adopt, goTo, screen.touch, say, reload]);
+  // Back to the top once the end is drawn, smoothly, or at once with
+  // stillness asked for.
+  useLayoutEffect(() => {
+    if (topAsk) main.current?.scrollTo({ top: 0, behavior: stillNow() ? 'auto' : 'smooth' });
+  }, [topAsk]);
 
   useEffect(() => {
     if (focusAsk) inputRef.current?.focus();
   }, [focusAsk]);
 
-  // The reader's midnight, when "Next map in" runs out: this map is over
-  // for them, and the next is theirs to play, so it is asked for at once,
-  // whatever is up — the intro, the result, or a game, which the server
-  // would refuse to go on with anyway. Only a game cut short is told why.
+  // ---- the rules, the reader's midnight, "/" ----
+
+  const signal = useRef(rulesSignal);
+  useEffect(() => {
+    if (rulesSignal === signal.current) return;
+    signal.current = rulesSignal;
+    setRules(true);
+  }, [rulesSignal]);
+
+  // The reader's midnight, when "Next movie in" runs out: this movie is
+  // over for them, and the next is theirs to play, so it is asked for at
+  // once, whatever is up — the title screen, the result, or a game, which
+  // the server would refuse to go on with anyway. Only a game cut short is
+  // told why.
   useEffect(
     () =>
       watchMidnight(today.next, offset, () => {
@@ -576,88 +412,59 @@ export function DailyGameView({ today, week, offset, say, reload, again, rulesSi
     [today.next, offset, say, reload],
   );
 
-  // "New name": a reel of scrambled letters while the server picks one,
-  // landing on it with a bounce. Repeat presses are ignored while it
-  // spins, and so is Play (see play). With stillness asked for, it simply
-  // changes. The name on the screen goes with the ask, so what lands is
-  // never the name it left.
-  const reroll = useCallback(() => {
-    if (spinning.current) return;
-    spinning.current = true;
-    setRolling(true);
-    const from = player.name;
-    let landed: DailyPlayer | null = null;
-    let failed = false;
-    renameDaily(from).then(
-      (p) => {
-        landed = p;
-      },
-      () => {
-        failed = true;
-      },
-    );
-    let k = 0;
-    let held = 0;
-    const settle = (p: DailyPlayer | null) => {
-      spinning.current = false;
-      setRolling(false);
-      setReel(null);
-      if (!p) {
-        say(UNREACHABLE);
-        return;
-      }
-      setPlayer(p);
-      later(
-        () =>
-          animate(nameRef.current, [{ transform: 'scale(1.14)' }, { transform: 'scale(1)' }], {
-            duration: NAME_BOUNCE_MS,
-            easing: BOUNCE_EASE,
-          }),
-        0,
-      );
-    };
-    const step = () => {
-      if (failed) return settle(null);
-      const still = stillNow();
-      if (landed && (still || k >= REEL_STEPS)) return settle(landed);
-      // The reel slows into its last steps only once there is a name to
-      // land on; until then it keeps spinning at that pace, for as long as
-      // an answer might still come.
-      if (!landed && k >= REEL_STEPS - 4) {
-        held += 1;
-        if (held * reelDelay(k) > REEL_GIVE_UP_MS) return settle(null);
-        if (!still) setReel(reelFrame(from, null, k, Math.random));
-        later(step, reelDelay(k));
-        return;
-      }
-      k += 1;
-      const to: DailyPlayer | null = landed;
-      if (!still) setReel(reelFrame(from, to ? to.name : null, k, Math.random));
-      later(step, still ? 50 : reelDelay(k));
-    };
-    step();
-  }, [player.name, later, say]);
-
-  // While the intro is up, now and then a blank card behind it starts to
-  // turn over and thinks better of it. A timer, skipped while the tab is
-  // hidden, and never for a reader who has asked for stillness.
+  // "/" reaches for the guess field from anywhere on the page, as it does
+  // for the header's search on a map.
   useEffect(() => {
-    if (!dialogUp) return;
-    const t = window.setInterval(() => {
-      const el = scroller.current;
-      if (!el || document.hidden || stillNow()) return;
-      const flips = el.querySelectorAll<HTMLElement>('[data-flip="0"]');
-      const vr = el.getBoundingClientRect();
-      for (let k = 0; k < 8 && flips.length; k++) {
-        const f = flips[Math.floor(Math.random() * flips.length)];
-        const r = f.getBoundingClientRect();
-        if (r.bottom < vr.top || r.top > vr.bottom || r.right < vr.left || r.left > vr.right) continue;
-        animate(f, TWINKLE_KEYFRAMES, { duration: TWINKLE_MS, easing: TWINKLE_EASE });
-        return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const g = gameRef.current;
+      if (!g || g.phase !== 'play' || rulesRef.current || sheetRef.current) return;
+      if (isTyping(document.activeElement)) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ---- Play ----
+
+  const touch = screen.touch;
+  const play = useCallback(async () => {
+    if (gameRef.current || busyRef.current) return;
+    busyRef.current = true;
+    setStarting(true);
+    try {
+      const res = await playDaily(today.no, today.player.name);
+      capture('daily_play');
+      const hide = res.game.phase === 'play' && !stillNow();
+      if (hide) {
+        openingRef.current = true;
+        setOpening(true);
+        later(() => {
+          openingRef.current = false;
+          setOpening(false);
+          // A keyboard is there to type with; a touch screen would throw
+          // its keyboard up over the names the reader has come to see.
+          if (!touch) setFocusAsk((n) => n + 1);
+        }, PLAY_HIDE_MS);
+      } else if (!touch) {
+        setFocusAsk((n) => n + 1);
       }
-    }, TWINKLE_EVERY_MS);
-    return () => window.clearInterval(t);
-  }, [dialogUp]);
+      adopt(res.game, true);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        const text = refusalText(e.reason, 'play');
+        if (text) say(text);
+        if (e.reason === 'day') reload();
+      } else {
+        say(UNREACHABLE);
+      }
+    } finally {
+      busyRef.current = false;
+      setStarting(false);
+    }
+  }, [today.no, today.player.name, touch, later, adopt, say, reload]);
 
   // ---- moves ----
 
@@ -668,19 +475,11 @@ export function DailyGameView({ today, week, offset, say, reload, again, rulesSi
   const act = useCallback(
     async (move: DailyMove): Promise<boolean> => {
       const g = gameRef.current;
-      if (!g || g.phase !== 'play' || busyRef.current) return false;
+      if (!g || g.phase !== 'play' || busyRef.current || openingRef.current) return false;
       // What the server would say anyway, said at once.
-      if (move.kind === 'flip') {
-        const r = cardRating.get(move.card);
-        if (r != null && g.pts < flipCost(r)) {
-          say(refusalText('points', 'flip'));
-          return false;
-        }
-      } else if (move.kind === 'buy' && g.pts < CLUE_COST[move.clue]) {
-        say(refusalText('points', 'buy'));
-        return false;
-      } else if (move.kind === 'guess' && guessedIds(g).has(move.film)) {
-        say(refusalText('known', 'guess'));
+      const early = earlyRefusal(g, move);
+      if (early) {
+        say(early);
         return false;
       }
       const sig = moveSig(move, g.seq);
@@ -689,6 +488,11 @@ export function DailyGameView({ today, week, offset, say, reload, again, rulesSi
       try {
         const res = await sendDailyMove(today.no, move, key, g.seq);
         unanswered.current = null;
+        // A name or a fact bought moves the reader on from the last
+        // wrong guess's message; anything done takes back a first press
+        // of Show the answer.
+        if (move.kind === 'next' || move.kind === 'buy') setMsgId(null);
+        setSure(false);
         adopt(res.game);
         return true;
       } catch (e) {
@@ -705,270 +509,317 @@ export function DailyGameView({ today, week, offset, say, reload, again, rulesSi
         }
         const text = refusalText(e.reason, move.kind);
         if (text) say(text);
-        if (e.reason === 'day' || e.reason === 'done' || e.reason === 'cookie' || e.reason === 'no-game') {
-          reload();
-        }
+        if (e.reason === 'day' || e.reason === 'done' || e.reason === 'cookie' || e.reason === 'no-game') reload();
         return false;
       } finally {
         busyRef.current = false;
       }
     },
-    [today.no, cardRating, adopt, say, reload],
+    [today.no, adopt, say, reload],
   );
 
-  const flip = useCallback(
-    (card: string, pointer: boolean) => {
-      // A flick that ends on a card was a flick, not a choice to pay for it.
-      if (pointer && !tap.allows()) return;
-      void act({ kind: 'flip', card });
-    },
-    [act, tap],
-  );
+  const next = useCallback(() => void act({ kind: 'next' }), [act]);
+  const buy = useCallback((fact: DailyFactKind) => void act({ kind: 'buy', fact }), [act]);
+  const guess = useCallback((film: string) => act({ kind: 'guess', film }), [act]);
+  const overlap = useCallback((person: string) => act({ kind: 'overlap', person }), [act]);
 
-  const find = useCallback(
-    (card: string) => {
-      goTo([card], true);
-      setPulse(card);
-      later(() => setPulse((p) => (p === card ? null : p)), PULSE_MS);
-    },
-    [goTo, later],
-  );
+  /** Show the answer takes two presses: the first asks "Sure? Show it"
+   *  for REVEAL_CONFIRM_MS, and a second within that gives the game up. */
+  const reveal = useCallback(() => {
+    window.clearTimeout(sureTimer.current);
+    if (!sure) {
+      setSure(true);
+      sureTimer.current = window.setTimeout(() => setSure(false), REVEAL_CONFIRM_MS);
+      return;
+    }
+    setSure(false);
+    void act({ kind: 'reveal' });
+  }, [sure, act]);
 
-  const copy = useCallback(() => {
+  const share = useCallback(() => {
     const g = gameRef.current;
     if (!g) return;
-    const fail = () => say('Couldn’t copy the result');
+    const fail = () => say(TOASTS.copyFailed);
     try {
-      navigator.clipboard
-        .writeText(shareText(today.no, g, window.location.origin))
-        .then(() => say('Result copied'), fail);
+      navigator.clipboard.writeText(shareText(today.no, g, window.location.origin)).then(() => say(TOASTS.copied), fail);
     } catch {
       fail();
     }
   }, [today.no, say]);
 
-  // "/" reaches for the guess field from anywhere on the page, as it does
-  // for the header's search on a map.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const g = gameRef.current;
-      if (!g || g.phase !== 'play' || rulesRef.current || isTyping(document.activeElement)) return;
-      e.preventDefault();
-      inputRef.current?.focus();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
-  // ---- scrolling ----
-
-  // Read when it is asked for rather than watched, so a later change of
-  // width does not send the map back to where it was last asked to go.
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (!el) return;
-    if ('centre' in aim) {
-      el.scrollTo({ left: 0, top: Math.max(0, (el.scrollHeight - el.clientHeight) / 2) });
-      return;
-    }
-    const l = layoutRef.current;
-    const at = new Map(l.cards.map((c) => [c.film.id, c]));
-    const cards = 'year' in aim ? yearTargets(l, aim.year) : aim.ids.flatMap((id) => at.get(id) ?? []);
-    const panel = panelRef.current;
-    const w = el.clientWidth - (!screen.phone && panel ? panel.offsetWidth + 32 : 0);
-    const h = el.clientHeight - (screen.phone && panel ? panel.offsetHeight + 8 : 0);
-    const to = scrollTarget(cards, { w: l.metrics.cardW, h: l.metrics.cardH }, { w, h });
-    if (to) el.scrollTo({ ...to, behavior: aim.smooth && !stillNow() ? 'smooth' : 'auto' });
-    // Only a new aim moves the map.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aim]);
-
   // ---- drawing ----
 
-  const results = !!game && game.phase === 'done' && resIn;
+  if (!game) {
+    return (
+      <>
+        <DailyTitle today={today} busy={starting} theme={theme} onPlay={() => void play()} />
+        {rules && <DailyRules onClose={() => setRules(false)} />}
+      </>
+    );
+  }
+
+  const playing = game.phase === 'play';
+  const rows = opening ? openingRows() : castRows(game);
+  const delays = ended && !still ? revealDelays(rows) : NO_DELAYS;
+  const shownGuess = playing ? guessById(game, msgId) : null;
+  const message = shownGuess ? guessMessage(shownGuess, game) : null;
+  const guessed = guessedIds(game);
+
+  const parts: Record<PageSection, ReactNode> = {
+    top: (
+      <TopBlock
+        today={today}
+        game={game}
+        theme={theme}
+        msgId={shownGuess?.id ?? null}
+        sure={sure}
+        opening={opening}
+        onChip={setMsgId}
+        onReveal={reveal}
+        onAgain={today.dev ? again : undefined}
+      />
+    ),
+    cast: (
+      <DailyCast
+        rows={rows}
+        playing={playing && !opening}
+        delays={delays}
+        codes={codes}
+        theme={theme}
+        onNext={next}
+        onMovies={(p: DailyPerson) => setSheet(p.id)}
+      />
+    ),
+    facts: <DailyFacts game={game} opening={opening} onBuy={buy} />,
+    about: game.end ? <DailyAbout end={game.end} /> : null,
+    result: (
+      <DailyResult
+        today={today}
+        game={game}
+        board={boards.boards.today && boards.boards.today !== 'failed' ? boards.boards.today : null}
+        fresh={ended}
+        offset={offset}
+        codes={codes}
+        theme={theme}
+        onShare={share}
+        onOpenMovie={onOpenMovie}
+        onAgain={today.dev ? again : undefined}
+      />
+    ),
+    board: (
+      <DailyLeaderboard
+        date={today.date}
+        tab={boards.tab}
+        boards={boards.boards}
+        onTab={boards.pick}
+        onRetry={boards.retry}
+      />
+    ),
+    castHead: <h2 className="cd-nd-cast-head">{CAST_HEADING}</h2>,
+  };
+
   return (
     <>
-      <div
-        ref={scroller}
-        className="cd-scroller cd-daily-map"
-        role="region"
-        aria-label="Today’s map"
-        aria-hidden={dialogUp || undefined}
-        inert={dialogUp || undefined}
-        onPointerDown={tap.onPointerDown}
-        onPointerMove={tap.onPointerMove}
-      >
-        <DailyBoard
-          today={today}
-          game={game}
-          layout={layout}
-          faces={faces}
-          people={people}
-          hues={hues}
-          codes={codes}
-          phone={screen.phone}
-          scrollTop={view.scrollTop}
-          viewH={view.height}
-          fx={fx}
-          pulse={pulse}
-          popAnswer={freshEnd}
-          popPts={popPts}
-          answerRef={answerRef}
-          theme={theme}
-          onFlip={flip}
-        />
+      <div className={`cd-nd${land ? ' cd-nd-land' : ''}`}>
+        <div ref={main} className="cd-nd-main">
+          <div className="cd-nd-col">
+            {pageSections(!playing).map((s) => (
+              <Fragment key={s}>{parts[s]}</Fragment>
+            ))}
+          </div>
+        </div>
+        {playing && (
+          <DailyBar
+            game={game}
+            message={message}
+            codes={codes}
+            theme={theme}
+            phone={screen.phone}
+            opening={opening}
+            guessed={guessed}
+            inputRef={inputRef}
+            onNext={next}
+            onGuess={guess}
+            say={say}
+          />
+        )}
       </div>
-      {game && !dialogUp && (
-        <DailyPanel
-          today={today}
+      {sheet && playing && (
+        <DailyMoviesSheet
+          no={today.no}
+          person={sheet}
           game={game}
-          results={results}
-          min={min}
-          onMin={() => setMin((m) => !m)}
-          delta={delta}
-          offset={offset}
-          touch={screen.touch}
           theme={theme}
-          hues={hues}
-          codes={codes}
-          panelRef={panelRef}
-          inputRef={inputRef}
-          fresh={freshEnd}
-          player={player.name}
-          onClue={(clue) => void act({ kind: 'buy', clue })}
-          onGuess={(film) => act({ kind: 'guess', film })}
-          onReveal={() => void act({ kind: 'reveal' })}
-          onFind={find}
-          onFindAnswer={() => {
-            if (game.end) goTo([game.end.answer.id], true);
+          onOverlap={overlap}
+          onGuess={(id) => {
+            // A move still on its way (a name the sheet is buying) would
+            // have act drop the guess unsaid. The sheet holds Guess it
+            // until then; should a press get through, the sheet stays up
+            // rather than close on a guess never made.
+            if (busyRef.current) return;
+            // The sheet goes first, then the guess is made as any other.
+            setSheet(null);
+            void guess(id);
           }}
-          onCopy={copy}
-          say={say}
-          onAgain={today.dev ? again : undefined}
+          onClose={() => setSheet(null)}
         />
       )}
-      {dialogUp && (
-        <DailyIntro
-          today={today}
-          game={game}
-          name={reel ?? player.name}
-          spinning={rolling}
-          streak={introStreak(today.streak, game)}
-          rank={standingText(standing)}
-          rules={rules}
-          busy={busy}
-          dialogRef={dialogRef}
-          nameRef={nameRef}
-          onGo={() => void play()}
-          onReroll={reroll}
-          onClose={closeRules}
-          theme={theme}
-        />
-      )}
-      {burst && (
-        <Confetti
-          key={burst.k}
-          x={burst.x}
-          y={burst.y}
-          follow={answerRef}
-          theme={theme}
-          onDone={() => setBurst((b) => (b?.k === burst.k ? null : b))}
-        />
-      )}
+      {rules && <DailyRules onClose={() => setRules(false)} />}
     </>
   );
 }
 
-/** A burst of confetti from the solved movie, on a canvas over everything
- *  for a couple of seconds. Drawn a frame at a time, as only a painted
- *  page can show it; taken away by a timer, which a hidden one still
- *  runs. Never mounted for a reader who has asked for stillness.
- *
- *  It bursts from (x, y), the card's centre on the screen as it began,
- *  and stays on the card, `follow`, after that: the canvas is fixed to
- *  the screen and the card is on the map, which may still be gliding to
- *  it, so each frame is drawn moved by however far the card has gone
- *  since (burstShift). */
-function Confetti({
-  x,
-  y,
-  follow,
+/** The top of the game page: the hidden card in today's poster colour,
+ *  which turns over to the poster at the end, and beside it the game's
+ *  name, the heading (the answer's title once it is over), the line, the
+ *  wrong guesses as chips, and Show the answer. */
+function TopBlock({
+  today,
+  game,
   theme,
-  onDone,
+  msgId,
+  sure,
+  opening,
+  onChip,
+  onReveal,
+  onAgain,
 }: {
-  x: number;
-  y: number;
-  follow: RefObject<HTMLElement | null>;
+  today: DailyToday;
+  game: DailyGame;
   theme: Theme;
-  onDone: () => void;
+  /** The wrong guess whose message is in the bar: its chip takes its
+   *  warmth colour for a ring. */
+  msgId: string | null;
+  sure: boolean;
+  opening: boolean;
+  onChip: (id: string) => void;
+  onReveal: () => void;
+  onAgain?: () => void;
 }) {
-  const ref = useRef<HTMLCanvasElement>(null);
-  const done = useRef(onDone);
-  done.current = onDone;
-  useEffect(() => {
-    const cv = ref.current;
-    const ctx = cv?.getContext('2d');
-    const gone = window.setTimeout(() => done.current(), CONFETTI_MS + 100);
-    if (!cv || !ctx) return () => window.clearTimeout(gone);
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    cv.width = W * dpr;
-    cv.height = H * dpr;
-    ctx.scale(dpr, dpr);
-    const colours = CONFETTI_COLOURS[theme];
-    const bits = Array.from({ length: CONFETTI_PIECES }, (_, i) => {
-      const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.2;
-      const v = 7 + Math.random() * 10;
-      return {
-        x,
-        y,
-        vx: Math.cos(a) * v,
-        vy: Math.sin(a) * v,
-        w: 5 + Math.random() * 6,
-        h: 3 + Math.random() * 5,
-        r: Math.random() * 6.28,
-        vr: (Math.random() - 0.5) * 0.45,
-        c: colours[i % colours.length],
-      };
-    });
-    let frame = 0;
-    const t0 = performance.now();
-    const draw = (t: number) => {
-      const e = t - t0;
-      ctx.clearRect(0, 0, W, H);
-      ctx.globalAlpha = Math.max(0, Math.min(1, (CONFETTI_MS - e) / 700));
-      // The pieces fly where they burst; the card carries them.
-      const at = burstShift({ x, y }, follow.current?.getBoundingClientRect() ?? null);
-      ctx.save();
-      ctx.translate(at.dx, at.dy);
-      for (const b of bits) {
-        b.vy += 0.34;
-        b.vx *= 0.986;
-        b.vy *= 0.986;
-        b.x += b.vx;
-        b.y += b.vy;
-        b.r += b.vr;
-        ctx.save();
-        ctx.translate(b.x, b.y);
-        ctx.rotate(b.r);
-        ctx.fillStyle = b.c;
-        ctx.fillRect(-b.w / 2, -b.h / 2, b.w, b.h * Math.abs(Math.cos(b.r * 2)));
-        ctx.restore();
-      }
-      ctx.restore();
-      if (e < CONFETTI_MS) frame = requestAnimationFrame(draw);
-    };
-    frame = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(gone);
-    };
-    // One burst per mount, from where it was asked for.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return <canvas ref={ref} className="cd-daily-confetti" aria-hidden="true" />;
+  const playing = game.phase === 'play';
+  const answer = game.end?.answer;
+  const chips = triedChips(game);
+  const line = pageLine(game);
+  return (
+    <div className="cd-nd-top">
+      <div className="cd-nd-card" aria-hidden="true">
+        <div className={`cd-nd-card-in${answer ? ' cd-nd-card-over' : ''}`}>
+          <div className="cd-nd-card-front" style={toneStyle(cardColour(today.colour))}>
+            <span className="cd-nd-card-q">?</span>
+          </div>
+          {/* The back is not drawn until the game is over: the page is not
+              told the poster before then. */}
+          {answer && (
+            <div className="cd-nd-card-back" style={{ ['--poster-fill' as string]: posterFallback(answer.title, theme) }}>
+              <PosterImage id={answer.id} url={answer.poster} cssPx={104} className="cd-nd-card-poster" eager />
+              {!answer.poster && <span className="cd-nd-card-standin">{answer.title}</span>}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="cd-nd-beside">
+        <span className="cd-nd-kicker">{GAME_NAME}</span>
+        <h1 className="cd-nd-heading">{pageHeading(game)}</h1>
+        {line && <p className="cd-nd-line">{line}</p>}
+        {chips.length > 0 && (
+          <div className="cd-nd-tried" role="group" aria-label="Wrong guesses">
+            {chips.map((c) =>
+              playing ? (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`cd-nd-tried-chip${c.id === msgId ? ' cd-nd-tried-on' : ''}`}
+                  style={toneStyle(warmthColour(c.warmth, theme))}
+                  aria-label={c.aria}
+                  onClick={() => onChip(c.id)}
+                >
+                  <span className="cd-nd-tried-dot" aria-hidden="true" />
+                  <span className="cd-nd-tried-title">{c.title}</span>
+                </button>
+              ) : (
+                <span key={c.id} className="cd-nd-tried-chip" style={toneStyle(warmthColour(c.warmth, theme))}>
+                  <span className="cd-nd-tried-dot" aria-hidden="true" />
+                  <span className="cd-nd-tried-title">{c.title}</span>
+                </span>
+              ),
+            )}
+          </div>
+        )}
+        {playing && (
+          <div className="cd-nd-giveup-row">
+            <button type="button" className="cd-nd-giveup" disabled={opening} onClick={onReveal}>
+              {sure ? SHOW_ANSWER_SURE : SHOW_ANSWER}
+            </button>
+            {/* Beside the way out, so starting again never takes giving
+                the answer away first. */}
+            {onAgain && <AgainButton onAgain={onAgain} />}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The facts row while the game is on: each fact for sale, with its price,
+ *  or what it says once bought (factItems). One the points do not cover
+ *  with one to spare is drawn at half strength and cannot be pressed. */
+function DailyFacts({
+  game,
+  opening,
+  onBuy,
+}: {
+  game: DailyGame;
+  opening: boolean;
+  onBuy: (fact: DailyFactKind) => void;
+}) {
+  return (
+    <section className="cd-nd-facts" aria-labelledby="cd-nd-facts-head">
+      <h2 id="cd-nd-facts-head" className="cd-nd-facts-head">
+        {factsHeading(false)}
+      </h2>
+      <div className="cd-nd-fact-list">
+        {factItems(game).map((f) =>
+          f.bought ? (
+            <span key={f.kind} className="cd-nd-fact-got">
+              <span className="cd-nd-fact-label">{f.label}</span>
+              <span className="cd-nd-fact-value">{f.value}</span>
+            </span>
+          ) : (
+            <button
+              key={f.kind}
+              type="button"
+              className="cd-nd-fact"
+              disabled={!f.can || opening}
+              aria-label={f.aria}
+              onClick={() => onBuy(f.kind)}
+            >
+              {f.label}
+              <span className="cd-nd-cost">{f.price}</span>
+            </button>
+          ),
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** About the movie, once the game is over: every fact, exact. */
+function DailyAbout({ end }: { end: NonNullable<DailyGame['end']> }) {
+  return (
+    <section className="cd-nd-facts" aria-labelledby="cd-nd-about-head">
+      <h2 id="cd-nd-about-head" className="cd-nd-facts-head">
+        {factsHeading(true)}
+      </h2>
+      <div className="cd-nd-fact-list">
+        {aboutItems(end).map((f) => (
+          <span key={f.label} className="cd-nd-fact-got">
+            <span className="cd-nd-fact-label">{f.label}</span>
+            <span className="cd-nd-fact-value">{f.value}</span>
+          </span>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 /** The header's end on /daily, for the app to put after its wordmark:

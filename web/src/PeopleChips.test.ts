@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import css from './grid.css?raw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { faceCardController, type FaceCard, type FaceHold, type ImageLoad } from './faceCard';
-import { PeopleChips, chipEvents, chipName, filmCounts } from './PeopleChips';
+import { PeopleChips, chipEvents, chipName, filmCounts, wheelSideways } from './PeopleChips';
 import matrix from './fixtures/matrix-grid.json';
 import type { GridPayload, GridPerson, SpineTuple } from './grid';
 import type { PreviewClock } from './preview';
@@ -251,5 +251,50 @@ describe('a chip’s touch rules', () => {
     const rule = css.replace(/\/\*[\s\S]*?\*\//g, '').match(/(?:^|\})\s*\.cd-chip\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(rule).toMatch(/-webkit-touch-callout:\s*none;/);
     expect(rule).toMatch(/(?:^|[;\s])user-select:\s*none;/);
+  });
+});
+
+describe('a wheel over a row of chips', () => {
+  /** A row 300px wide holding 700px of chips, scrolled to `left`. */
+  const rowAt = (left: number) => ({ scrollWidth: 700, clientWidth: 300, scrollLeft: left }) as HTMLDivElement;
+  const wheel = (deltaX: number, deltaY: number) => {
+    const preventDefault = vi.fn();
+    return { e: { deltaX, deltaY, preventDefault } as unknown as Parameters<typeof wheelSideways>[0], preventDefault };
+  };
+
+  it('moves the chips sideways for a mouse wheel’s up and down', () => {
+    const row = rowAt(0);
+    const { e, preventDefault } = wheel(0, 120);
+    wheelSideways(e, row);
+    expect(row.scrollLeft).toBe(120);
+    expect(preventDefault).toHaveBeenCalled();
+    wheelSideways(wheel(0, -50).e, row);
+    expect(row.scrollLeft).toBe(70);
+  });
+
+  it('stops at either end, and leaves the page to scroll once the row has nowhere to go', () => {
+    const end = rowAt(400);
+    const past = wheel(0, 120);
+    wheelSideways(past.e, end);
+    expect(end.scrollLeft).toBe(400);
+    expect(past.preventDefault).not.toHaveBeenCalled();
+    const near = rowAt(350);
+    wheelSideways(wheel(0, 120).e, near);
+    expect(near.scrollLeft).toBe(400);
+    const start = rowAt(0);
+    wheelSideways(wheel(0, -120).e, start);
+    expect(start.scrollLeft).toBe(0);
+  });
+
+  it('leaves a sideways gesture, and a row that fits, as they are', () => {
+    const row = rowAt(100);
+    const side = wheel(40, 120);
+    wheelSideways(side.e, row);
+    expect(row.scrollLeft).toBe(100);
+    expect(side.preventDefault).not.toHaveBeenCalled();
+    const fits = { scrollWidth: 300, clientWidth: 300, scrollLeft: 0 } as HTMLDivElement;
+    wheelSideways(wheel(0, 120).e, fits);
+    expect(fits.scrollLeft).toBe(0);
+    expect(() => wheelSideways(wheel(0, 120).e, null)).not.toThrow();
   });
 });

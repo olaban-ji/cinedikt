@@ -16,30 +16,28 @@ import (
 )
 
 // heatPuzzle is what the fake deals in place of a puzzle: Heat, under
-// the same number on the same day, with a board of its own, so a read
+// the same number on the same day, with a colour of its own, so a read
 // can tell which of the two it was served without being told either
 // answer.
 func heatPuzzle(no int, day time.Time) *daily.Puzzle {
 	return &daily.Puzzle{
 		No:  no,
 		Day: day,
-		Answer: daily.Answer{ID: "tt0113277", Title: "Heat", Year: 1995, Rating: 8.3, MD: 1215,
-			Genres: []string{"Action", "Crime"}},
-		People: []daily.Slot{
-			{ID: "nm0000520", Name: "Michael Mann", Role: daily.RoleDirector},
-			{ID: "nm0000199", Name: "Al Pacino", Role: daily.RoleCast},
-			{ID: "nm0000134", Name: "Robert De Niro", Role: daily.RoleCast},
-			{ID: "nm0000174", Name: "Val Kilmer", Role: daily.RoleCast},
+		Answer: daily.Answer{ID: "tt0113277", Title: "Heat", Year: 1995, Rating: 8.3, MD: 1215, Length: 170,
+			Colour: "#2b3f57", Genres: []string{"Action", "Crime", "Drama"}},
+		Directors: []daily.Named{{ID: "nm0000520", Name: "Michael Mann"}},
+		Cast: []daily.Billed{
+			{ID: "nm0001827", Name: "Diane Venora", Billing: 6},
+			{ID: "nm0000634", Name: "Tom Sizemore", Billing: 5},
+			{ID: "nm0000685", Name: "Jon Voight", Billing: 4},
+			{ID: "nm0000174", Name: "Val Kilmer", Billing: 3, Also: &daily.Also{ID: "tt0092099", Title: "Top Gun", Year: 1986}},
+			{ID: "nm0000134", Name: "Robert De Niro", Billing: 2, Also: &daily.Also{ID: "tt0075314", Title: "Taxi Driver", Year: 1976}},
+			{ID: "nm0000199", Name: "Al Pacino", Billing: 1, Also: &daily.Also{ID: "tt0086250", Title: "Scarface", Year: 1983}},
 		},
-		Cards: []daily.Card{
-			{ID: "c1", Film: "tt0068646", Title: "The Godfather", Year: 1972, Rating: 9.2, MD: 324, Votes: 2100000, People: []int{1}},
-			{ID: "c2", Film: "tt0075314", Title: "Taxi Driver", Year: 1976, Rating: 8.2, Votes: 950000, People: []int{2}},
-			{ID: "c3", Film: "tt0108358", Title: "Tombstone", Year: 1993, Rating: 7.8, Votes: 160000, People: []int{3}},
-			{ID: "c4", Film: "tt0369339", Title: "Collateral", Year: 2004, Rating: 7.5, Votes: 420000, People: []int{0}},
-			{ID: "c5", Film: "tt0112641", Title: "Casino", Year: 1995, Rating: 8.2, Votes: 560000, People: []int{2}},
-			{ID: "c6", Film: "tt0140352", Title: "The Insider", Year: 1999, Rating: 7.8, Votes: 180000, People: []int{0, 1}},
+		Movies: []daily.Movie{
+			{ID: "tt0113277", Title: "Heat", Year: 1995, Rating: 8.3, Genres: []string{"Action", "Crime", "Drama"},
+				Cast: []int{0, 1, 2, 3, 4, 5}, Sheets: []int{0, 1, 2, 3, 4, 5}, Dir: true},
 		},
-		Start: []string{"c3", "c4", "c2"},
 		Era:   1995,
 		Genre: "Action",
 	}
@@ -145,7 +143,7 @@ func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
 	srv, _ := devServer(t, f, todayAt, nil)
 	b := newBrowser(t, srv)
 	b.post("/daily/142/play", map[string]any{})
-	b.move("flip", 0, map[string]any{"card": "c4"})
+	b.move("next", 0, nil)
 	other := newBrowser(t, srv)
 	other.ip = "216.160.83.56"
 	other.post("/daily/142/play", map[string]any{})
@@ -182,10 +180,8 @@ func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
 	if after.body["game"] != nil || after.body["played"] != 0.0 || after.header.Get("Set-Cookie") != "" {
 		t.Errorf("after Play again: game %v, played %v, Set-Cookie %q", after.body["game"], after.body["played"], after.header.Get("Set-Cookie"))
 	}
-	start := after.body["start"].([]any)[0].(map[string]any)["film"].(map[string]any)
-	first := after.body["cards"].([]any)[0].(map[string]any)
-	if start["title"] != "Tombstone" || first["year"] != 1972.0 || len(after.body["cards"].([]any)) != 6 {
-		t.Errorf("after Play again the board is still the old one: %s", after.raw)
+	if after.body["colour"] != "#2b3f57" {
+		t.Errorf("after Play again the movie is still the old one: %s", after.raw)
 	}
 	if heatSaid(after.raw) {
 		t.Errorf("today after Play again names the new answer: %s", after.raw)
@@ -237,9 +233,8 @@ func TestPlayAgainDealsThePuzzleTheReaderIsShownNext(t *testing.T) {
 	// Before, it dealt 144 again, and the page, with no cookie now, showed
 	// 143 with the movie it had always had.
 	after := b.get("/daily?tz=America/Los_Angeles")
-	start := after.body["start"].([]any)[0].(map[string]any)["film"].(map[string]any)
-	if after.body["no"] != 143.0 || start["title"] != "Tombstone" || after.body["game"] != nil {
-		t.Errorf("after Play again the page shows No. %v starting from %v: %s", after.body["no"], start["title"], after.raw)
+	if after.body["no"] != 143.0 || after.body["colour"] != "#2b3f57" || after.body["game"] != nil {
+		t.Errorf("after Play again the page shows No. %v in %v: %s", after.body["no"], after.body["colour"], after.raw)
 	}
 	for _, c := range []struct {
 		query string
@@ -274,7 +269,7 @@ func TestPlayAgainWithNoOtherMovieChangesNothing(t *testing.T) {
 	srv, _ := devServer(t, f, todayAt, nil)
 	b := newBrowser(t, srv)
 	b.post("/daily/142/play", map[string]any{})
-	b.move("flip", 0, map[string]any{"card": "c4"})
+	b.move("next", 0, nil)
 	b.get("/daily")
 	b.get("/daily/me")
 	days, _, standings := f.devAsked()
@@ -287,8 +282,8 @@ func TestPlayAgainWithNoOtherMovieChangesNothing(t *testing.T) {
 	if after.body["player"].(map[string]any)["saved"] != true || after.body["game"] == nil || seqOf(t, after) != 1 {
 		t.Errorf("after a reset that failed: %s", after.raw)
 	}
-	if start := after.body["start"].([]any)[0].(map[string]any)["film"].(map[string]any); start["title"] != "Searching for Bobby Fischer" {
-		t.Errorf("after a reset that failed the board is %s", after.raw)
+	if after.body["colour"] != "#26382d" {
+		t.Errorf("after a reset that failed the movie is %s", after.raw)
 	}
 	b.get("/daily/me")
 	nowDays, repicks, nowStandings := f.devAsked()
@@ -372,7 +367,7 @@ func TestPlayAgainNeverLogsTheNewAnswer(t *testing.T) {
 	b.post("/daily/142/play", map[string]any{})
 	replies := []reply{b.reset("?tz=Europe/London"), b.get("/daily?tz=Europe/London")}
 	replies = append(replies, b.post("/daily/142/play?tz=Europe/London", map[string]any{}))
-	replies = append(replies, b.move("flip", 0, map[string]any{"card": "c1"}))
+	replies = append(replies, b.move("next", 0, nil))
 	for _, r := range replies {
 		if r.status >= 400 || heatSaid(r.raw) {
 			t.Errorf("a response after Play again: %d %s", r.status, r.raw)

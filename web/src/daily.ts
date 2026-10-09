@@ -1,759 +1,566 @@
-// Cinedikt Daily, and its game, Point Blank.
+// Cinedikt Daily, and its game, Name Drop.
 //
-// One hidden movie a day. The board is its map with it taken off: every
-// card shares an actor or director with it, and every card but three
-// starts blank, in its year and at its rating. The reader spends points
-// on cards and clues, and guesses; the points left are the score.
+// One hidden movie a day. Its cast shows up one name at a time, from the
+// sixth-billed up to the star, each with a face and another movie they
+// were in, and the reader names the movie with as few names, facts and
+// wrong guesses as they can. The points left are the score.
 //
 // The server owns the game. It checks every move against the recorded
 // one, applies it once and sends the game back, and it never sends the
-// answer, or a blank card's movie, until the game is over. So what is
-// here is only what the page needs to draw the game it is handed: what
-// a card says, where the guesses have narrowed the answer to, what the
-// feed and the result say, and when things move. Everything is pure
-// but the midnight watch, which is a timer, and all of it is checked
-// without a DOM in daily.test.ts.
+// answer, a hidden name or a fact nobody has paid for until the game is
+// over. So what is here is only what the page needs to draw the game it
+// is handed: what each row, fact, chip and line says, what a wrong guess
+// told, what the result and the share say, what the Movies sheet lights,
+// and when things move. Everything is pure but the midnight watch, which
+// is a timer, and all of it is checked without a DOM in daily.test.ts.
 
+import type { CSSProperties } from 'react';
 import type {
+  DailyAlso,
+  DailyAnswer,
   DailyBoard,
-  DailyBoardRow,
-  DailyCard,
-  DailyClue,
   DailyEntry,
-  DailyFilm,
+  DailyFactKind,
+  DailyFacts,
   DailyGame,
+  DailyGuess,
   DailyMove,
+  DailyMovie,
   DailyPerson,
+  DailySlot,
   DailyTab,
   DailyToday,
+  DailyWarmth,
   DailyWeek,
 } from './api';
-import {
-  AXIS_H,
-  DEFAULT_SETTINGS,
-  R_LO,
-  layoutGrid,
-  ratingText,
-  xOf,
-  type GridLayout,
-  type GridPayload,
-  type GridSettings,
-  type Placed,
-  type Row,
-  type SpineTuple,
-} from './grid';
+import { initialsFor } from './grid';
 import type { Theme } from './theme';
 
-/** The game's name: the title screen's heading and the banner's title.
- *  Named for what it is played with, points and a board of blank cards.
- *  cmd/api's dailyShareTitle says it to a scraper, and the two must
- *  agree. */
-export const GAME_NAME = 'Point Blank';
+/** The game's name: the title screen's heading, the game page's kicker,
+ *  the banner's title and the share text's first line. Named for what it
+ *  is played with, the cast's names, dropped one at a time. cmd/api's
+ *  dailyShareTitle says it to a scraper ("Cinedikt Daily: Name Drop"),
+ *  and the two must agree. */
+export const GAME_NAME = 'Name Drop';
 
 // ---- the rules, as far as the page shows them ----
+//
+// The server charges; these are what the buttons, the lines and the copy
+// say, and what the page checks before it asks, so a move the server
+// would refuse is not sent. The rule for any fact added here, as for the
+// server's: none may give the answer away in a single search. So no
+// plot, tagline, quote or character's name, and the length, the rating
+// and the years only ever as ranges, so no one number can be checked
+// against a candidate. The exact values come with the end.
 
-/** Every game starts with this many points. The meter, the share card's
- *  bar and a week's cells are all drawn as a share of it (pointsShare),
- *  and the title screen's goal line and Spend step say it. */
+/** Every game starts with this many points, and the score is what is
+ *  left, so the most is this. */
 export const DAILY_START = 1000;
 
-/** What each clue costs. The server charges; these are what the buttons
- *  and the title screen's Spend step say.
- *
- *  The rule for any clue added here, as for the server's: none may give
- *  the answer away in a single search. So no plot, no tagline, no quote
- *  and no character's name: any line of text can be pasted into a
- *  search engine, and The Matrix's first sentence alone names Neo and
- *  Morpheus, so there is no text clue at all. A director or an actor
- *  can be searched through a filmography, which takes several steps and
- *  costs 150 each; the year narrows the map and names nothing. */
-export const CLUE_COST: Record<DailyClue, number> = {
-  director: 150,
-  actor: 150,
-  genres: 80,
-  year: 200,
-};
+/** The names in a puzzle: the six billed cast, in reveal order. */
+export const CAST_SIZE = 6;
+
+/** Next name. */
+export const NEXT_COST = 100;
 
 /** The first wrong guess, and how much more each one after it costs, so
- *  fishing for clues by guessing gets dear fast. The server charges, and
- *  sends what the next one costs with the game (`nextCost`); these are
- *  what the title screen's Guess step says. */
+ *  guessing never beats asking for the next name. The server sends what
+ *  the next one costs with the game (`nextCost`); these are what the
+ *  rules say. */
 export const WRONG_BASE = 100;
 export const WRONG_STEP = 50;
 
-/** The least and the most a card costs to turn over, whatever its
- *  rating: the ends of flipCost's clamp, as the server's FlipCost clamps,
- *  and the title screen's "Card 20–80". */
-export const FLIP_MIN = 20;
-export const FLIP_MAX = 80;
-
-/** What turning a card over costs: 20 to 80, in fives, by its rating.
- *  Better-rated movies tend to be better known, so they give more away.
- *
- *  Written exactly as the server works it out, in the same order, so the
- *  float arithmetic agrees to the last bit: 7.0 is 52.5 before rounding,
- *  and both sides make that 55. */
-export function flipCost(rating: number): number {
-  return Math.max(FLIP_MIN, Math.min(FLIP_MAX, Math.round((20 + (rating - 4.5) * 13) / 5) * 5));
+/** What the `n`th wrong guess costs, counting from nought: 100, 150,
+ *  200… as the server's NextWrong charges. */
+export function wrongCost(n: number): number {
+  return WRONG_BASE + WRONG_STEP * n;
 }
 
-/** How much of the starting points are left, in percent, from 0 to 100:
- *  how full the points meter, the share card's bar and a week's cell
- *  are. Multiplied before it is divided, so a score on a half step (650,
- *  say) is exactly 65 and rounds the same way everywhere. */
-export function pointsShare(pts: number): number {
-  return Math.max(0, Math.min(100, (pts * 100) / DAILY_START));
-}
-
-// ---- what is on the board ----
-
-/** What a face-up card shows: its movie, or, for a close relative turned
- *  over, only how many people it shares. */
-export type CardFace = { kind: 'film'; film: DailyFilm } | { kind: 'relative'; shared: number };
-
-/** Every face-up card and what it shows. Before Play nothing is: the
- *  three starting movies turn over when the clock starts. Then the start,
- *  every card turned over, and every card guessed by name, a guess
- *  showing a close relative's movie after all. At the end, every card. */
-export function facesOf(today: DailyToday, game: DailyGame | null): Map<string, CardFace> {
-  const out = new Map<string, CardFace>();
-  if (!game) return out;
-  for (const s of today.start) out.set(s.card, { kind: 'film', film: s.film });
-  for (const e of game.log) {
-    if (e.type === 'flip') {
-      out.set(e.card, e.film ? { kind: 'film', film: e.film } : { kind: 'relative', shared: e.relative.shared });
-    }
-  }
-  // After the flips, so a close relative guessed by name shows normally
-  // whichever came first.
-  for (const e of game.log) {
-    if (e.type === 'guess' && e.card) out.set(e.card, { kind: 'film', film: e.film });
-  }
-  for (const c of game.end?.cards ?? []) out.set(c.id, { kind: 'film', film: c.film });
-  return out;
-}
-
-/** The cards face up. */
-export function revealedOf(today: DailyToday, game: DailyGame | null): Set<string> {
-  return new Set(facesOf(today, game).keys());
-}
-
-/** The people the page may draw: those bought and found while the game
- *  is on, and everyone once it is over. */
-export function peopleOf(game: DailyGame | null): DailyPerson[] {
-  if (!game) return [];
-  return game.end ? game.end.people : game.known;
-}
-
-/** Who of `people` is on each card, in slot order, which is the order a
- *  card's marks and dots are drawn in: directors, then billing. */
-export function peopleByCard(people: readonly DailyPerson[]): Map<string, DailyPerson[]> {
-  const out = new Map<string, DailyPerson[]>();
-  for (const p of [...people].sort((a, b) => a.slot - b.slot)) {
-    for (const card of p.cards) {
-      const list = out.get(card);
-      if (list) list.push(p);
-      else out.set(card, [p]);
-    }
-  }
-  return out;
-}
-
-/** Each person's place in HUES, for personVars: their slot, wrapped at
- *  sixteen. The Daily colours people by the puzzle's own order rather
- *  than by the visit's, so everyone playing sees Keanu Reeves in the same
- *  colour. */
-export function hueSlots(people: Iterable<DailyPerson>): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const p of people) out.set(p.id, p.slot % 16);
-  return out;
-}
-
-/** Every person the game has named anywhere: bought, found, and in the
- *  feed's entries. The feed's faces need a colour and a code for each. */
-export function everyoneNamed(game: DailyGame | null): DailyPerson[] {
-  if (!game) return [];
-  const byId = new Map<string, DailyPerson>();
-  const add = (p: DailyPerson) => {
-    if (!byId.has(p.id)) byId.set(p.id, p);
-  };
-  for (const p of peopleOf(game)) add(p);
-  for (const e of game.log) {
-    if (e.type === 'person') e.people.forEach(add);
-    if (e.type === 'guess') e.shared.forEach(add);
-  }
-  return [...byId.values()].sort((a, b) => a.slot - b.slot);
-}
-
-/** The movies guessed wrong so far, by IMDb id: the search marks them
- *  "Guessed". */
-export function guessedIds(game: DailyGame | null): Set<string> {
-  const out = new Set<string>();
-  for (const e of game?.log ?? []) if (e.type === 'guess') out.add(e.film.id);
-  return out;
-}
-
-/** Whether a clue of this kind has been bought: genres and the year are
- *  bought once. */
-export function bought(game: DailyGame | null, kind: 'genres' | 'year'): boolean {
-  return !!game?.log.some((e) => e.type === kind);
-}
-
-/** The answer's year, once the Year clue has been bought, or null. The
- *  server sends it with that entry and never before, so this is the
- *  only place the page learns it while the game is on. */
-export function yearOf(game: DailyGame | null): number | null {
-  for (const e of game?.log ?? []) if (e.type === 'year') return e.year;
-  return null;
-}
-
-/** The card most worth putting in front of a reader coming back to a
- *  game: the last one they turned over, or the starting three. */
-export function resumeCards(today: DailyToday, game: DailyGame): string[] {
-  for (let i = game.log.length - 1; i >= 0; i--) {
-    const e = game.log[i];
-    if (e.type === 'flip') return [e.card];
-  }
-  return today.start.map((s) => s.card);
-}
-
-// ---- the layout ----
-
-/** The board's settings. Unrated movies never reach the board, so there
- *  is no unrated column to keep a place for; and the answer's year is not
- *  lit, because lighting it would say what it is — until the reader has
- *  paid to be told (boardPayload). */
-export const DAILY_SETTINGS: GridSettings = {
-  ...DEFAULT_SETTINGS,
-  showUnrated: false,
-  highlightYear: false,
+/** What each fact costs. */
+export const FACT_COST: Record<DailyFactKind, number> = {
+  length: 50,
+  rating: 50,
+  genre: 100,
+  decade: 100,
+  years: 100,
+  director: 250,
 };
 
-/** The id of the year row's placeholder: what holds the row open for
- *  the answer's year once Year is bought, when no card on the map is
- *  from it. Never a card's: the server's card ids are its own short
- *  opaque strings. */
-export const YEAR_PLACEHOLDER = '__year';
+/** An overlap on the Movies sheet: once per person, and then theirs to
+ *  switch on and off for nothing. */
+export const OVERLAP_COST = 250;
 
-/** What the board is laid out from, for grid.ts's layoutGrid.
- *
- *  The layout wants a searched film, and the Daily has none it can show,
- *  so while the game is on it is handed a stand-in that is on no card and
- *  from year 0: no row is lit, no row is kept for it, and nothing the
- *  layout reads from it says anything. Once the game is over the real
- *  answer takes its place, joins the cards in its own year, and its row
- *  is lit as a searched film's is.
- *
- *  Once the reader has bought the year, the stand-in takes it, and that
- *  year is lit as the searched film's is: its band in the wash, its label
- *  in the accent (bandClass and railYearClass, the map's own). A year no
- *  card shares has no row to light, so the layout is handed a placeholder
- *  in it, which opens one: a lane's height, like any year with one card,
- *  so the answer fills it at the end and nothing moves. It has to come
- *  through layoutGrid's own filters to do that — the Daily's settings
- *  take unrated movies off the board, so it is given a rating inside the
- *  scale — and it is taken off the cards again after (boardLayout), so it
- *  is never drawn, pressed, counted or scrolled to as a card. */
-export function boardPayload(
-  today: DailyToday,
-  game: DailyGame | null,
-): { payload: GridPayload; settings: GridSettings } {
-  const films: SpineTuple[] = today.cards.map((c: DailyCard) => [c.id, c.year, c.rating, c.md]);
-  const answer = game?.end?.answer;
-  if (!answer) {
-    const year = yearOf(game);
-    if (year != null && !today.cards.some((c) => c.year === year)) films.push([YEAR_PLACEHOLDER, year, R_LO, 0]);
-    return {
-      payload: {
-        anchor: { id: '', year: year ?? 0, rating: null, md: 0, isAnchor: true, title: '', people: [] },
-        people: [],
-        films,
-      },
-      settings: year == null ? DAILY_SETTINGS : { ...DAILY_SETTINGS, highlightYear: true },
-    };
+/** Whether the points cover a purchase: a purchase must leave at least
+ *  one point, so it is refused at exactly its cost, as the server
+ *  refuses it. A wrong guess is not a purchase: one the points cannot
+ *  cover ends the game instead (lastGuess). */
+export function affords(pts: number, cost: number): boolean {
+  return pts > cost;
+}
+
+/** Whether the next wrong guess would end the game: the points cannot
+ *  cover it, and it scores nought. */
+export function lastGuess(game: Pick<DailyGame, 'pts' | 'nextCost'>): boolean {
+  return game.pts <= game.nextCost;
+}
+
+// ---- colours ----
+//
+// Every colour worked out here is a string the page sets inline, as a
+// custom property (toneStyle), never written in the stylesheet: the
+// build rewrites an oklch() it finds in a declaration as hex, and the
+// token tests refuse one there.
+
+/** A person's colour, from the hue the server gives them: lighter and
+ *  softer on the dark ground, darker and stronger on paper. */
+export function hueColour(hue: number, theme: Theme): string {
+  return theme === 'light' ? `oklch(0.56 0.16 ${hue})` : `oklch(0.76 0.13 ${hue})`;
+}
+
+/** The hue of the face on the title screen's shown row. */
+export const TITLE_HUE = 118;
+
+/** What a wrong guess's warmth is called, cold to hot. */
+export const WARMTH_LABELS: Record<DailyWarmth, 'Cold' | 'Warm' | 'Hot'> = { 0: 'Cold', 1: 'Warm', 2: 'Hot' };
+
+/** The warmth colours, cold to hot, in each theme. */
+export const WARMTH_COLOURS: Record<Theme, readonly [string, string, string]> = {
+  dark: ['oklch(0.76 0.1 235)', 'oklch(0.82 0.13 78)', 'oklch(0.74 0.17 32)'],
+  light: ['oklch(0.5 0.13 240)', 'oklch(0.55 0.13 65)', 'oklch(0.54 0.19 30)'],
+};
+
+export function warmthColour(warmth: DailyWarmth, theme: Theme): string {
+  return WARMTH_COLOURS[theme][warmth];
+}
+
+/** A colour as the element drawing it carries it: --tone, which the
+ *  stylesheet reads for a face's ring and fill (mixed into --s with
+ *  color-mix), a warmth pill's dot and wash, and a chip's ring. One name
+ *  for every per-element colour, which the token tests already allow. */
+export function toneStyle(colour: string): CSSProperties {
+  return { ['--tone' as string]: colour };
+}
+
+/** The poster colour the hidden card is filled with, when it is the
+ *  "#rrggbb" the server promises; anything else is not put into a style
+ *  at all, and the card falls back to the card ground. */
+export function cardColour(colour: string | null | undefined): string {
+  return typeof colour === 'string' && /^#[0-9a-f]{6}$/i.test(colour) ? colour : 'var(--c)';
+}
+
+/** The initials drawn on a face with no photo, unique among `people`: the
+ *  map's own codes (grid.ts's initialsFor), "KR" for Keanu Reeves. */
+export function codesOf(people: readonly DailyPerson[]): Map<string, string> {
+  return initialsFor(people.map((p) => ({ id: p.id, name: p.name, role: 'cast' as const })));
+}
+
+// ---- facts ----
+
+/** The four length bands, by the band the server sends. */
+export const LENGTH_BANDS = ['Under 1h 30m', '1h 30m to 2h', '2h to 2h 30m', 'Over 2h 30m'] as const;
+
+/** The four rating bands, by the band the server sends. */
+export const RATING_BANDS = ['Below 6.0', '6.0 to 6.9', '7.0 to 7.9', '8.0 or higher'] as const;
+
+/** A band as it reads, or nothing for one that is not a band. */
+export function lengthBandText(band: number): string {
+  return LENGTH_BANDS[band] ?? '';
+}
+
+export function ratingBandText(band: number): string {
+  return RATING_BANDS[band] ?? '';
+}
+
+/** A band written to head a fact ("Below 6.0"), as it reads inside a
+ *  sentence: "rated below 6.0". The bands that start with a figure are
+ *  as they were. */
+function inSentence(band: string): string {
+  return band.charAt(0).toLowerCase() + band.slice(1);
+}
+
+/** "1990s", from the decade's first year. */
+export function decadeText(decade: number): string {
+  return `${decade}s`;
+}
+
+/** "1995–1999", from the five years' first. */
+export function yearsText(years: number): string {
+  return `${years}–${years + 4}`;
+}
+
+/** A runtime as the facts write it: "2h 16m", "2h" on the hour, as the
+ *  bands write two hours, and "45m" under one. */
+export function hoursMinutes(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes - h * 60);
+  if (!h) return `${m}m`;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+/** Each fact as the page names it: for sale ("Length range"), bought
+ *  ("Length"), among what the result says was paid for ("Five-year
+ *  range"), in the share text ("the decade"), and what its button says
+ *  to a screen reader before its price. */
+export const FACTS: Record<
+  DailyFactKind,
+  { offer: string; bought: string; paid: string; used: string; aria: string }
+> = {
+  length: {
+    offer: 'Length range',
+    bought: 'Length',
+    paid: 'Length',
+    used: 'the length range',
+    aria: 'Show roughly how long it is.',
+  },
+  rating: {
+    offer: 'Rating range',
+    bought: 'Rating',
+    paid: 'Rating',
+    used: 'the rating range',
+    aria: 'Show its IMDb rating range.',
+  },
+  genre: { offer: 'Genre', bought: 'Genre', paid: 'Genre', used: 'the genre', aria: 'Show its genre.' },
+  decade: {
+    offer: 'Decade',
+    bought: 'Decade',
+    paid: 'Decade',
+    used: 'the decade',
+    aria: 'Show the decade it came out.',
+  },
+  years: {
+    offer: 'Narrow the years',
+    bought: 'Years',
+    paid: 'Five-year range',
+    used: 'a five-year range',
+    aria: 'Narrow the years to five.',
+  },
+  director: {
+    offer: 'Director',
+    bought: 'Director',
+    paid: 'Director',
+    used: 'the director',
+    aria: 'Show the director.',
+  },
+};
+
+/** The facts in the order the row offers them, which is also the order
+ *  the result and the share list them in. */
+export const FACT_ORDER: readonly DailyFactKind[] = ['length', 'rating', 'genre', 'decade', 'years', 'director'];
+
+/** What a bought fact says, or nothing for one not bought. */
+export function factValue(kind: DailyFactKind, facts: DailyFacts): string {
+  switch (kind) {
+    case 'length':
+      return facts.length == null ? '' : lengthBandText(facts.length);
+    case 'rating':
+      return facts.rating == null ? '' : ratingBandText(facts.rating);
+    case 'genre':
+      return facts.genre ? facts.genre.join(', ') : '';
+    case 'decade':
+      return facts.decade == null ? '' : decadeText(facts.decade);
+    case 'years':
+      return facts.years == null ? '' : yearsText(facts.years);
+    case 'director':
+      return facts.director ? andList(facts.director.map((p) => p.name)) : '';
   }
-  return {
-    payload: {
-      anchor: {
-        id: answer.id,
-        year: answer.year,
-        rating: answer.rating,
-        md: answer.md,
-        isAnchor: true,
-        title: answer.title,
-        people: [],
-      },
-      people: [],
-      films: [...films, [answer.id, answer.year, answer.rating, answer.md]],
-    },
-    settings: { ...DAILY_SETTINGS, highlightYear: true },
-  };
 }
 
-/** The board laid out at this width: layoutGrid's layout of what
- *  boardPayload hands it, without the year row's placeholder among the
- *  cards. Its row stays, which is all it was there for. Every layout the
- *  page draws, scrolls by or staggers the end from comes from here. */
-export function boardLayout(
-  laid: { payload: GridPayload; settings: GridSettings },
-  width: number,
-  compact?: boolean,
-): GridLayout {
-  const l = layoutGrid(laid.payload, width, laid.settings, undefined, compact);
-  return { ...l, cards: l.cards.filter((c) => c.film.id !== YEAR_PLACEHOLDER) };
+/** Whether a fact has been bought: only a bought fact is sent. */
+export function hasFact(kind: DailyFactKind, facts: DailyFacts): boolean {
+  return facts[kind] != null;
 }
 
-/** Where the last row ends: the bottom of the rows themselves, without
- *  the room the map keeps under them. */
-export function rowsBottom(layout: Pick<GridLayout, 'rows'>): number {
-  const last = layout.rows[layout.rows.length - 1];
-  return last ? last.top + last.height : AXIS_H;
-}
-
-/** How far the plot runs on past the right-hand panel, so a card under
- *  it can be scrolled out into view: the panel's 380 and its 16 gutter. */
-export const PANEL_CLEAR_W = 396;
-
-/** The plot's size. On a desktop or tablet it runs on past the panel; on
- *  a phone it runs on under the bottom sheet instead, so the last rows
- *  can be scrolled up above it. */
-export function plotSize(layout: GridLayout, phone: boolean): { w: number; h: number } {
-  return {
-    w: layout.plotW + (phone ? 0 : PANEL_CLEAR_W),
-    h: rowsBottom(layout) + (phone ? 360 : 140),
-  };
-}
-
-/** Where each year that has just opened grows out of: the top its next
- *  row had in the layout before, or that layout's bottom. Only the
- *  answer's own year can open — when Year is bought and no card shares
- *  it, or at the end, when the answer joins the board — so its row comes
- *  out of the seam between its neighbours and everything below it slides
- *  down to make room. A year opened by Year is already there at the end,
- *  so the answer lands in it without anything moving. */
-export function seamsFor(was: readonly Row[], now: readonly Row[]): Map<number, number> {
-  const before = new Set(was.map((r) => r.year));
-  const bottom = rowsBottom({ rows: was as Row[] });
-  const out = new Map<number, number>();
-  for (const r of now) {
-    if (before.has(r.year)) continue;
-    const next = was.find((w) => w.year > r.year);
-    out.set(r.year, next ? next.top : bottom);
-  }
-  return out;
-}
-
-// ---- what wrong guesses rule out ----
-
-/** Where the answer can still be: years from yLo to yHi and ratings from
- *  rLo to rHi, all inclusive. */
-export interface Bounds {
-  yLo: number;
-  yHi: number;
-  rLo: number;
-  rHi: number;
-}
-
-/** Nothing ruled out yet. */
-export const OPEN_BOUNDS: Bounds = { yLo: 0, yHi: 9999, rLo: 0, rHi: 10 };
-
-/** The bounds after one wrong guess. Ratings move in tenths, so a guess
- *  rated 7.3 that the answer beats leaves "7.4+".
- *
- *  The same year, or the same rating, pins the bounds to it outright
- *  rather than meeting them: that is the prototype's rule, and a guess
- *  can only ever say the same year inside bounds that already allow it. */
-export function narrowed(
-  b: Bounds,
-  g: Extract<DailyEntry, { type: 'guess' }>,
-): Bounds {
-  const out = { ...b };
-  const y = g.film.year;
-  if (g.year === 'newer') out.yLo = Math.max(out.yLo, y + 1);
-  else if (g.year === 'older') out.yHi = Math.min(out.yHi, y - 1);
-  else if (g.year === 'same') {
-    out.yLo = y;
-    out.yHi = y;
-  }
-  const r = g.film.rating;
-  if (r != null) {
-    if (g.rating === 'higher') out.rLo = Math.max(out.rLo, Math.round((r + 0.1) * 10) / 10);
-    else if (g.rating === 'lower') out.rHi = Math.min(out.rHi, Math.round((r - 0.1) * 10) / 10);
-    else if (g.rating === 'same') {
-      out.rLo = r;
-      out.rHi = r;
-    }
-  }
-  return out;
-}
-
-/** The bounds the guesses so far leave, or null before any guess. Once
- *  the game is over there are none: the answer is on the board.
- *
- *  These are what fade the cards, and only these. The year clue says
- *  where the answer sits, not that any card is wrong — no card is the
- *  answer, whatever year it is from — so it narrows the rows and the
- *  lines (rowBoundsOf) and leaves every card as it was. */
-export function boundsOf(game: DailyGame | null): Bounds | null {
-  if (!game || game.phase === 'done') return null;
-  let b: Bounds | null = null;
-  for (const e of game.log) if (e.type === 'guess') b = narrowed(b ?? OPEN_BOUNDS, e);
-  return b;
-}
-
-/** The bounds the rows and the dashed lines go by: the guesses', with
- *  the year once it is bought pinning both ends of the years to it. The
- *  ratings the guesses ruled out stay, and so do their lines; the year
- *  ranges they left ("1995 or later") give way to the exact year, which
- *  says more and can never disagree with them. Null when there is
- *  nothing to draw, and once the game is over. */
-export function rowBoundsOf(game: DailyGame | null): Bounds | null {
-  const b = boundsOf(game);
-  const year = game && game.phase !== 'done' ? yearOf(game) : null;
-  return year == null ? b : { ...(b ?? OPEN_BOUNDS), yLo: year, yHi: year };
-}
-
-/** Whether a card could still be the answer's neighbour in year and
- *  rating; a card outside fades. The hair either side keeps a rating of
- *  exactly the bound inside it, whatever the floats did. */
-export function inBounds(card: { year: number; rating: number | null }, b: Bounds | null): boolean {
-  if (!b) return true;
-  if (card.year < b.yLo || card.year > b.yHi) return false;
-  return card.rating == null || (card.rating >= b.rLo - 1e-9 && card.rating <= b.rHi + 1e-9);
-}
-
-/** Whether a year's band and label fade. */
-export function yearRuledOut(year: number, b: Bounds | null): boolean {
-  return !!b && (year < b.yLo || year > b.yHi);
-}
-
-/** How opaque a card is, and a year that is ruled out. */
-export const OUT_CARD_OPACITY = 0.28;
-export const OUT_YEAR_OPACITY = 0.35;
-
-/** A dashed line down the board at a rating bound, and its pill in the
- *  rating strip. */
-export interface RatingLine {
-  x: number;
-  /** Where the pill starts. A ceiling's pill sits left of its line. */
-  labelLeft: number;
-  before: boolean;
+/** One item in the facts row while the game is on: a fact for sale, or
+ *  one bought. */
+export interface FactItem {
+  kind: DailyFactKind;
+  bought: boolean;
+  /** "Length range" for sale, "Length" bought. */
   label: string;
-}
-
-/** A dashed line across the board at a year bound, and its pill: at the
- *  top of the years left, or at the bottom. */
-export interface YearLine {
-  kind: 'from' | 'until';
-  y: number;
-  labelTop: number;
-  /** From the year rail's left edge, which stays at the screen's however
-   *  far the map is panned: just past the rail. */
-  labelLeft: number;
-  /** Empty for a line that draws no pill: the bottom edge of a pinned
-   *  year, whose top edge already names it. */
-  label: string;
-}
-
-/** What a rating floor says: "7.4+". */
-export function floorLabel(r: number): string {
-  return `${r.toFixed(1)}+`;
-}
-
-/** What a rating ceiling says: "Up to 6.9". */
-export function ceilingLabel(r: number): string {
-  return `Up to ${r.toFixed(1)}`;
-}
-
-/** What the year line at the top of what is left says: "1995 or later",
- *  or just "1995" once the year is pinned. */
-export function fromLabel(b: Bounds): string {
-  return b.yLo === b.yHi ? `${b.yLo}` : `${b.yLo} or later`;
-}
-
-/** What the year line at the bottom says: "1994 or earlier". */
-export function untilLabel(b: Bounds): string {
-  return `${b.yHi} or earlier`;
-}
-
-/** The dashed lines the bounds draw. A year line is drawn only where it
- *  rules a row out, so the map's first year has no line over it and its
- *  last none under it.
- *
- *  A pinned year — the year bought, or a guess from the same one — is
- *  ruled on both edges of its row, full width, and named once, by one
- *  pill inside the row: on the top line, 6px under it, or, when the row
- *  is the map's first and has no top line, on the bottom line, 24px over
- *  it, which keeps it inside the row all the same. The prototype's own
- *  rule (Cinedikt Daily.dc.html's mapVals). */
-export function boundLines(
-  b: Bounds | null,
-  layout: GridLayout,
-): { ratings: RatingLine[]; years: YearLine[] } {
-  const ratings: RatingLine[] = [];
-  const years: YearLine[] = [];
-  if (!b) return { ratings, years };
-  const m = layout.metrics;
-  if (b.rLo > 0) {
-    const x = Math.round(xOf(b.rLo, m));
-    ratings.push({ x, labelLeft: x + 4, before: false, label: floorLabel(b.rLo) });
-  }
-  if (b.rHi < 10) {
-    const x = Math.round(xOf(b.rHi, m));
-    ratings.push({ x, labelLeft: x - 4, before: true, label: ceilingLabel(b.rHi) });
-  }
-  const rows = layout.rows;
-  const labelLeft = m.railW + 10;
-  if (rows.length && b.yLo > 0 && b.yLo > rows[0].year) {
-    const r = rows.find((w) => w.year >= b.yLo);
-    const y = r ? r.top : rowsBottom(layout);
-    years.push({ kind: 'from', y, labelTop: y + 6, labelLeft, label: fromLabel(b) });
-  }
-  if (rows.length && b.yHi < 9999 && b.yHi < rows[rows.length - 1].year) {
-    const r = [...rows].reverse().find((w) => w.year <= b.yHi);
-    const y = r ? r.top + r.height : 0;
-    const label = b.yLo !== b.yHi ? untilLabel(b) : years.length ? '' : `${b.yHi}`;
-    years.push({ kind: 'until', y, labelTop: y - 24, labelLeft, label });
-  }
-  return { ratings, years };
-}
-
-// ---- what a card says ----
-
-/** A card's accessible name. A close relative says how near it is and
- *  never its title; a blank card says where it is and what it costs. */
-export function cardLabel(card: DailyCard, face: CardFace | undefined): string {
-  const rt = card.rating.toFixed(1);
-  if (!face) return `Hidden movie from ${card.year}. Turn it over for ${flipCost(card.rating)} points`;
-  if (face.kind === 'relative') {
-    return `A close relative of today’s movie, from ${card.year}, rated ${rt}. It shares ${face.shared} people with it`;
-  }
-  return `${face.film.title}, ${card.year}, rated ${rt}`;
-}
-
-/** The answer's card, at the end. */
-export function answerLabel(answer: DailyFilm): string {
-  return `Today’s movie: ${answer.title}, ${answer.year}, rated ${ratingText(answer.rating)}`;
-}
-
-/** The most dots a blank card draws. */
-export const MAX_DOTS = 5;
-
-// ---- the feed ----
-
-/** A chip in the feed: a movie on the board, which takes the reader to
- *  its card. A close relative's chip names no movie. */
-export interface FeedChip {
-  card: string;
-  title: string;
-  film: DailyFilm | null;
+  /** What it says once bought, "2h to 2h 30m"; nothing for sale. */
+  value: string;
+  cost: number;
+  /** "−50" for sale; nothing once bought. */
+  price: string;
+  /** For sale, in a game still on, and the points cover it with one to
+   *  spare. Drawn at half strength when not. */
+  can: boolean;
+  /** For sale: what it shows and its price, "Show its genre. It costs
+   *  100 points." Nothing once bought, when the label and value say it. */
   aria: string;
 }
 
-/** How an entry is coloured. The latest one, while the game is on, is
- *  washed in the accent; a wrong guess's label is the down colour; the
- *  end is the accent for a win and plain for the rest. */
-export type FeedTone = 'plain' | 'miss' | 'win' | 'end';
-
-/** One entry as the panel draws it. */
-export interface FeedView {
-  key: string;
-  label: string;
-  tone: FeedTone;
-  /** The latest entry of a game still being played. */
-  now: boolean;
-  /** "−150", or empty. */
-  cost: string;
-  text: string;
-  faces: DailyPerson[];
-  more: string;
-  chips: FeedChip[];
-}
-
-/** "1999", or nothing for a movie whose year the catalog does not have. */
-function titled(f: DailyFilm): string {
-  return f.year > 0 ? `${f.title} (${f.year})` : f.title;
-}
-
-function chipFor(card: string, face: CardFace | undefined): FeedChip | null {
-  if (!face) return null;
-  if (face.kind === 'relative') {
-    return { card, title: 'Close relative', film: null, aria: 'Show the close relative on the map' };
-  }
-  return { card, title: face.film.title, film: face.film, aria: `Show ${face.film.title} on the map` };
-}
-
-/** What a wrong guess says about where the answer is: "Today’s movie is
- *  older and rated higher." Either half can be missing, for a guess with
- *  no year or no rating to compare, and with both missing it says
- *  nothing. */
-export function directionText(
-  year: Extract<DailyEntry, { type: 'guess' }>['year'],
-  rating: Extract<DailyEntry, { type: 'guess' }>['rating'],
-): string {
-  const yt = year === 'same' ? 'from the same year' : (year ?? '');
-  const rt =
-    rating === 'same'
-      ? 'has the same rating'
-      : rating === 'higher'
-        ? 'rated higher'
-        : rating === 'lower'
-          ? 'rated lower'
-          : '';
-  if (!yt && !rt) return '';
-  return `Today’s movie is ${[yt, rt].filter(Boolean).join(' and ')}.`;
-}
-
-/** How many of the board's cards a set of people are on, between them. */
-export function cardsMarked(people: readonly DailyPerson[]): number {
-  return new Set(people.flatMap((p) => p.cards)).size;
-}
-
-/** What a bought person's entry adds under their faces. */
-export function markedText(n: number): string {
-  if (n === 0) return 'None of their movies are on the map.';
-  if (n === 1) return '1 of their movies is marked on the map.';
-  return `${n} of their movies are marked on the map.`;
-}
-
-/** The feed: one entry per line of the game's record, in order. */
-export function feedOf(today: DailyToday, game: DailyGame | null): FeedView[] {
-  if (!game) return [];
-  const faces = facesOf(today, game);
-  const answer = game.end?.answer;
-  const last = game.log.length - 1;
+/** The facts row while the game is on, in order: length, rating, genre,
+ *  the years, director. The years take one place: Decade for sale; then
+ *  the decade bought, followed by "Narrow the years" for sale; then the
+ *  five years in the decade's place. */
+export function factItems(game: Pick<DailyGame, 'phase' | 'pts' | 'facts'>): FactItem[] {
   const playing = game.phase === 'play';
-  return game.log.map((e, i): FeedView => {
-    const o: FeedView = {
-      key: `${i}:${e.type}`,
-      label: '',
-      tone: 'plain',
-      now: playing && i === last,
-      cost: 'cost' in e && e.cost ? `−${e.cost}` : '',
-      text: '',
-      faces: [],
-      more: '',
-      chips: [],
+  const facts = game.facts;
+  const bought = (kind: DailyFactKind): FactItem => ({
+    kind,
+    bought: true,
+    label: FACTS[kind].bought,
+    value: factValue(kind, facts),
+    cost: FACT_COST[kind],
+    price: '',
+    can: false,
+    aria: '',
+  });
+  const offer = (kind: DailyFactKind): FactItem => {
+    const cost = FACT_COST[kind];
+    return {
+      kind,
+      bought: false,
+      label: FACTS[kind].offer,
+      value: '',
+      cost,
+      price: `−${cost}`,
+      can: playing && affords(game.pts, cost),
+      aria: `${FACTS[kind].aria} It costs ${cost} points.`,
     };
-    switch (e.type) {
-      case 'start':
-        return {
-          ...o,
-          label: 'Start',
-          text: 'Three movies from its map are showing.',
-          chips: today.start.map((s) => chipFor(s.card, faces.get(s.card) ?? { kind: 'film', film: s.film })!),
-        };
-      case 'flip': {
-        const face = faces.get(e.card);
-        const chip = chipFor(e.card, face);
-        if (face?.kind === 'relative') {
-          return {
-            ...o,
-            label: 'Turned over',
-            text: `A close relative: it shares ${face.shared} people with today’s movie, so its title stays hidden.`,
-            chips: chip ? [chip] : [],
-          };
-        }
-        return { ...o, label: 'Turned over', chips: chip ? [chip] : [] };
-      }
-      case 'person':
-        return {
-          ...o,
-          label: e.role === 'director' ? (e.people.length > 1 ? 'Directors' : 'Director') : 'Actor',
-          text: e.role === 'director' ? 'It was directed by:' : 'It stars:',
-          faces: e.people,
-          more: markedText(cardsMarked(e.people)),
-        };
-      case 'genres':
-        return { ...o, label: 'Genres', text: e.genres.join(', ') };
-      case 'year':
-        return { ...o, label: 'Year', text: `It came out in ${e.year}. The map marks where that year sits.` };
-      case 'guess':
-        return {
-          ...o,
-          label: 'Not it',
-          tone: 'miss',
-          text: e.shared.length
-            ? `${titled(e.film)} is linked to it through:`
-            : `${titled(e.film)} shares no one with today’s movie.`,
-          faces: e.shared,
-          more: directionText(e.year, e.rating),
-        };
-      case 'win':
-        return {
-          ...o,
-          now: false,
-          label: 'Got it',
-          tone: 'win',
-          text: answer ? `${titled(answer)} is today’s movie.` : '',
-        };
-      case 'gaveup':
-      case 'out':
-        return {
-          ...o,
-          now: false,
-          label: e.type === 'gaveup' ? 'Answer shown' : 'Out of points',
-          tone: 'end',
-          text: answer ? `Today’s movie was ${titled(answer)}.` : '',
-        };
+  };
+  const out: FactItem[] = [];
+  for (const kind of FACT_ORDER) {
+    if (kind === 'years') continue;
+    if (kind === 'decade') {
+      if (hasFact('years', facts)) out.push(bought('years'));
+      else if (hasFact('decade', facts)) out.push(bought('decade'), offer('years'));
+      else out.push(offer('decade'));
+      continue;
     }
+    out.push(hasFact(kind, facts) ? bought(kind) : offer(kind));
+  }
+  return out;
+}
+
+/** About the movie, once the game is over: every fact, exact. Anything
+ *  the catalog has nothing for is left out rather than drawn empty. */
+export function aboutItems(end: { answer: DailyAnswer; directors: DailyPerson[] }): { label: string; value: string }[] {
+  const a = end.answer;
+  return [
+    { label: 'Length', value: a.length > 0 ? hoursMinutes(a.length) : '' },
+    { label: 'Genre', value: a.genres.join(', ') },
+    { label: 'IMDb rating', value: Number.isFinite(a.rating) ? a.rating.toFixed(1) : '' },
+    { label: 'Year', value: a.year > 0 ? String(a.year) : '' },
+    { label: 'Director', value: andList(end.directors.map((p) => p.name)) },
+  ].filter((f) => f.value);
+}
+
+/** The facts row's heading: what is for sale, or About the movie. */
+export function factsHeading(done: boolean): string {
+  return done ? 'About the movie' : 'Buy a fact. Each one also marks the map';
+}
+
+// ---- the cast ----
+
+/** The slots the reader saw, which is what the result counts and the
+ *  share squares fill: the first, each name bought, and for each wrong
+ *  guess everyone it shared and then the next name, as the server's
+ *  replay shows them. Worked out from the log rather than from the slots,
+ *  because at the end every slot is shown. A last wrong guess that runs
+ *  the points out still showed its names. */
+export function seenSlots(game: Pick<DailyGame, 'log'> | null): Set<number> {
+  const seen = new Set<number>();
+  if (!game) return seen;
+  seen.add(0);
+  const showNext = () => {
+    for (let k = 0; k < CAST_SIZE; k++) {
+      if (!seen.has(k)) {
+        seen.add(k);
+        return;
+      }
+    }
+  };
+  for (const e of game.log) {
+    if (e.type === 'next') seen.add(e.slot);
+    else if (e.type === 'guess') {
+      for (const k of e.guess.shared) if (k >= 0 && k < CAST_SIZE) seen.add(k);
+      showNext();
+    }
+  }
+  return seen;
+}
+
+/** The slots showing now, by slot. */
+export function shownSlots(game: Pick<DailyGame, 'slots'>): Extract<DailySlot, { shown: true }>[] {
+  return game.slots.filter((s): s is Extract<DailySlot, { shown: true }> => s.shown);
+}
+
+/** Whether Next name can be pressed: a game on, a name still hidden, and
+ *  the points to leave one over after it. */
+export function canNext(game: Pick<DailyGame, 'phase' | 'pts' | 'slots'>): boolean {
+  return game.phase === 'play' && game.slots.some((s) => !s.shown) && affords(game.pts, NEXT_COST);
+}
+
+/** The slot Next name shows: the first hidden one in reveal order, or
+ *  null when it cannot be pressed. */
+export function nextSlot(game: Pick<DailyGame, 'phase' | 'pts' | 'slots'>): number | null {
+  if (!canNext(game)) return null;
+  return game.slots.find((s) => !s.shown)?.slot ?? null;
+}
+
+/** "Also in The Fugitive (1993)", "From your guess, Speed", or nothing:
+ *  the line under a shown name. A name a guess filled in says so, which
+ *  is worth more to the reader than another movie. */
+export function castLine(slot: Pick<Extract<DailySlot, { shown: true }>, 'also' | 'from'>): string {
+  if (slot.from) return `From your guess, ${slot.from.title}`;
+  if (slot.also) return `Also in ${titled(slot.also)}`;
+  return '';
+}
+
+/** A hidden row's bar, as a share of its text column, by slot. */
+export const BAR_WIDTHS = [46, 58, 40, 52, 62, 44] as const;
+
+/** One row of the cast list. */
+export type CastRow =
+  | {
+      slot: number;
+      state: 'shown';
+      person: DailyPerson;
+      line: string;
+      /** Seen during the game. At the end the rest appear one after
+       *  another (endRevealDelay), at once with stillness asked for. */
+      seen: boolean;
+    }
+  /** The next to show: the whole row is a button (NEXT_ROW_LABEL). */
+  | { slot: number; state: 'next'; bar: number }
+  | { slot: number; state: 'hidden'; bar: number };
+
+/** The cast list, in reveal order. The row Next name would show is the
+ *  "next" one only while it can be pressed; otherwise every hidden row is
+ *  just hidden. A hidden row carries no name at all: the page is never
+ *  told one. */
+export function castRows(game: Pick<DailyGame, 'phase' | 'pts' | 'slots' | 'log'>): CastRow[] {
+  const next = nextSlot(game);
+  const seen = seenSlots(game);
+  return game.slots.map((s): CastRow => {
+    if (s.shown) return { slot: s.slot, state: 'shown', person: s.person, line: castLine(s), seen: seen.has(s.slot) };
+    return { slot: s.slot, state: s.slot === next ? 'next' : 'hidden', bar: BAR_WIDTHS[s.slot] ?? 50 };
   });
 }
 
-// ---- the panel ----
+/** The next row's name for a screen reader, which is the whole row. */
+export const NEXT_ROW_LABEL = `Show the next name. It costs ${NEXT_COST} points.`;
 
-/** One of the four clue buttons. */
-export interface ClueButton {
-  clue: DailyClue;
+/** A shown row's Movies button, for a screen reader. */
+export function moviesLabel(name: string): string {
+  return `See ${name}’s movies on a Cinedikt map`;
+}
+
+/** The Next name button in the guess bar: its words, its price, and
+ *  whether it can be pressed. Once all six are out it says so. */
+export function nextButton(game: Pick<DailyGame, 'phase' | 'pts' | 'slots'>): {
   label: string;
-  cost: number;
-  /** "Seen", "Known", or the price. */
-  tag: string;
-  /** The tag is a price rather than a note. */
-  priced: boolean;
-  off: boolean;
+  price: string;
+  can: boolean;
+} {
+  const left = game.slots.some((s) => !s.shown);
+  return {
+    label: left ? 'Next name' : 'Everyone’s showing',
+    price: left ? `−${NEXT_COST}` : '',
+    can: canNext(game),
+  };
+}
+
+/** Whether a row's photo preview opens upwards: the lower three do, so it
+ *  stays on the page. */
+export function peekOpensUp(slot: number): boolean {
+  return slot >= 3;
+}
+
+// ---- wrong guesses ----
+
+/** The wrong guesses, in order. */
+export function guessesOf(game: Pick<DailyGame, 'log'> | null): DailyGuess[] {
+  const out: DailyGuess[] = [];
+  for (const e of game?.log ?? []) if (e.type === 'guess') out.push(e.guess);
+  return out;
+}
+
+/** The movies guessed wrong so far, by IMDb id: the results list marks
+ *  them "Tried", and the Movies sheet crosses them. */
+export function guessedIds(game: Pick<DailyGame, 'log'> | null): Set<string> {
+  return new Set(guessesOf(game).map((g) => g.id));
+}
+
+/** Whether a game just handed back has a wrong guess the one before it
+ *  did not: the message box shows the new one. */
+export function newWrongGuess(was: Pick<DailyGame, 'log'> | null, now: Pick<DailyGame, 'log'>): boolean {
+  return guessesOf(now).length > guessesOf(was).length;
+}
+
+/** The people a wrong guess shares, as the game shows them, in slot
+ *  order. A guess fills in everyone it shares, so each is showing. */
+export function sharedPeople(guess: Pick<DailyGuess, 'shared'>, game: Pick<DailyGame, 'slots'>): DailyPerson[] {
+  const wanted = new Set(guess.shared);
+  return shownSlots(game)
+    .filter((s) => wanted.has(s.slot))
+    .map((s) => s.person);
+}
+
+/** A wrong guess's chip in the top block: its title, its warmth, and
+ *  what it says it does. */
+export interface TriedChip {
+  id: string;
+  title: string;
+  warmth: DailyWarmth;
   aria: string;
 }
 
-/** The clue buttons, in order: Director, Actor, Genres, Year. Director
- *  buys every director not yet known, Actor the next of the cast in
- *  billing order, so each says "Known" once there is nobody left for it;
- *  genres and the year say "Seen" once bought. "Directors" when the
- *  answer has more than one, which the server says up front. */
-export function clueButtons(today: DailyToday, game: DailyGame | null): ClueButton[] {
-  const known = game?.known ?? [];
-  const playing = game?.phase === 'play';
-  const pts = game?.pts ?? 0;
-  const dirsKnown = known.filter((p) => p.role === 'director').length;
-  const castKnown = known.filter((p) => p.role === 'cast').length;
-  const make = (clue: DailyClue, label: string, have: boolean, none: boolean): ClueButton => {
-    const cost = CLUE_COST[clue];
-    return {
-      clue,
-      label,
-      cost,
-      tag: have ? 'Seen' : none ? 'Known' : String(cost),
-      priced: !have && !none,
-      off: !playing || have || none || pts < cost,
-      aria: have ? `${label}: seen` : none ? `${label}: already known` : `${label} for ${cost} points`,
-    };
+export function triedChips(game: Pick<DailyGame, 'log'>): TriedChip[] {
+  return guessesOf(game).map((g) => ({
+    id: g.id,
+    title: g.title,
+    warmth: g.warmth,
+    aria: `${g.title}, ${WARMTH_LABELS[g.warmth].toLowerCase()}. Show what it told you`,
+  }));
+}
+
+/** What the message box says after a wrong guess, in its one row: the
+ *  title, never cut short; the warmth; the faces it shares; and three
+ *  chips, the decade, the genre and the cast. Never which way in time,
+ *  nor which genre: those are facts the reader pays for. */
+export interface GuessMessage {
+  title: string;
+  warmth: DailyWarmth;
+  label: 'Cold' | 'Warm' | 'Hot';
+  faces: DailyPerson[];
+  chips: string[];
+}
+
+export function guessMessage(guess: DailyGuess, game: Pick<DailyGame, 'slots'>): GuessMessage {
+  const faces = sharedPeople(guess, game);
+  return {
+    title: `Not ${guess.title}`,
+    warmth: guess.warmth,
+    label: WARMTH_LABELS[guess.warmth],
+    faces,
+    chips: [
+      guess.sameDecade ? 'Same decade' : 'Different decade',
+      guess.sharesGenre ? 'Shares a genre' : 'No shared genre',
+      faces.length ? `Shares ${andList(faces.map((p) => p.name))}` : 'No one from today’s cast',
+    ],
   };
-  return [
-    make('director', today.clues.directors > 1 ? 'Directors' : 'Director', false, dirsKnown >= today.clues.directors),
-    make('actor', 'Actor', false, castKnown >= today.clues.cast),
-    make('genres', 'Genres', bought(game, 'genres'), false),
-    make('year', 'Year', bought(game, 'year'), false),
-  ];
 }
 
-/** The line under the guess field. */
-export function hintText(touch: boolean, nextCost: number): string {
-  return `${touch ? 'Tap' : 'Click'} a blank card to turn it over. Your next wrong guess costs ${nextCost}.`;
+/** The points line over the field: what getting it now scores, and what
+ *  the next wrong guess costs, or, when that guess would end the game,
+ *  that it is the last. The number is set apart; `text` is the whole. */
+export function pointsLine(game: Pick<DailyGame, 'pts' | 'nextCost'>): {
+  lead: string;
+  pts: string;
+  tail: string;
+  text: string;
+} {
+  const pts = fmtN(game.pts);
+  const [lead, tail] = lastGuess(game)
+    ? ['Last guess, for ', ' points']
+    : ['Get it now for ', ` points · wrong guess −${fmtN(game.nextCost)}`];
+  return { lead, pts, tail, text: `${lead}${pts}${tail}` };
 }
 
-/** The meter's colour turns from the accent to the down colour below
- *  this, so a reader near the end can see it coming. */
-export const LOW_POINTS = 250;
+// ---- the results list ----
 
 /** What the guess field's search last answered: the words it was asked,
  *  the movies it found for them, or that it never answered. */
@@ -763,16 +570,16 @@ export interface GuessFound<T> {
   failed: boolean;
 }
 
-/** What the guess list shows for what is typed now.
+/** What the results list shows for what is typed now.
  *
  *  `rows` are what can be chosen, and only an answer to exactly what is
  *  typed gives any. The search waits for a pause and then the network,
  *  and in that time the reader may have typed on: the last answer's rows
  *  belong to words they have typed past, and Enter on the top one would
- *  fill the field with a movie they never meant, a second Enter making
- *  it a wrong guess that costs points and cannot be taken back. So until
- *  the new answer comes, the old rows are only `held`: drawn faded, so
- *  the list does not collapse at every key, and not to be chosen.
+ *  make a guess they never meant, which costs points and cannot be taken
+ *  back. So until the new answer comes, the old rows are only `held`:
+ *  drawn faded, so the list does not collapse at every key, and not to
+ *  be chosen.
  *
  *  `note` stands in for rows: "Searching…" while the answer is on its
  *  way and there is nothing to hold, the network's words when the search
@@ -790,7 +597,38 @@ export function guessOptions<T>(
   return { rows: found.hits, held: [], note: found.hits.length ? '' : `No movies match “${typed}”` };
 }
 
+/** A title as two results are compared: case, accents and punctuation
+ *  set aside, so "Amélie" and "Amelie" are the same title. */
+function titleKey(title: string): string {
+  return title
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** Whether each result shows its year: only where two results share a
+ *  title, so a bought range of years cannot be used to sift the list. */
+export function yearsShown(hits: readonly { title: string }[]): boolean[] {
+  const count = new Map<string, number>();
+  for (const h of hits) count.set(titleKey(h.title), (count.get(titleKey(h.title)) ?? 0) + 1);
+  return hits.map((h) => (count.get(titleKey(h.title)) ?? 0) > 1);
+}
+
+/** The most results the list offers: four on a phone, where the keyboard
+ *  takes half the screen, and six elsewhere. */
+export function resultsMax(phone: boolean): number {
+  return phone ? 4 : 6;
+}
+
 // ---- the result ----
+
+/** A count as the page writes it: "61,240". */
+export function fmtN(n: number): string {
+  return n.toLocaleString('en-GB');
+}
 
 /** "a, b and c", without the Oxford comma. */
 export function andList(items: readonly string[]): string {
@@ -798,58 +636,93 @@ export function andList(items: readonly string[]): string {
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
-function plural(n: number, one: string, many: string): string {
-  return `${fmtN(n)} ${n === 1 ? one : many}`;
+/** "1999", or nothing for a movie whose year the catalog does not have. */
+function titled(f: Pick<DailyAlso, 'title' | 'year'>): string {
+  return f.year > 0 ? `${f.title} (${f.year})` : f.title;
 }
 
-/** What a game spent its points on, for the result's line. */
-export function usedList(log: readonly DailyEntry[]): string[] {
-  const flips = log.filter((e) => e.type === 'flip').length;
-  const people = log.reduce((n, e) => n + (e.type === 'person' ? e.people.length : 0), 0);
-  const wrong = log.filter((e) => e.type === 'guess').length;
-  const out: string[] = [];
-  if (flips) out.push(plural(flips, 'card', 'cards'));
-  if (people) out.push(plural(people, 'person', 'people'));
-  if (log.some((e) => e.type === 'genres')) out.push('the genres');
-  if (log.some((e) => e.type === 'year')) out.push('the year');
-  if (wrong) out.push(`${wrong} wrong ${wrong === 1 ? 'guess' : 'guesses'}`);
+/** The result's kicker: how the game ended. "On the first name" is a
+ *  solve with nothing paid for at all. */
+export function resultKicker(game: Pick<DailyGame, 'won' | 'gaveUp' | 'log'>): string {
+  if (game.won) return seenSlots(game).size === 1 && paidFor(game.log).length === 0 ? 'Got it on the first name' : 'Got it';
+  return game.gaveUp ? 'You asked for the answer' : 'Your points ran out';
+}
+
+/** "You needed 3 of the 6 names", or, for a loss, "You saw 4 of the 6
+ *  names". */
+export function namesLine(game: Pick<DailyGame, 'won' | 'log'>): string {
+  const n = seenSlots(game).size;
+  return game.won ? `You needed ${n} of the ${CAST_SIZE} names` : `You saw ${n} of the ${CAST_SIZE} names`;
+}
+
+/** One chip of What you paid for: "Decade −100". */
+export interface PaidChip {
+  label: string;
+  price: string;
+}
+
+/** What you paid for, from the log: each fact bought, in the row's order,
+ *  then the overlaps and the wrong guesses, each as one chip with what
+ *  they cost between them. The names are the names line's to say. */
+export function paidFor(log: readonly DailyEntry[]): PaidChip[] {
+  const out: PaidChip[] = [];
+  const facts = new Map<DailyFactKind, number>();
+  let overlaps = 0;
+  let overlapCost = 0;
+  let wrong = 0;
+  let wrongSpent = 0;
+  for (const e of log) {
+    if (e.type === 'fact') facts.set(e.kind, e.cost);
+    else if (e.type === 'overlap') {
+      overlaps += 1;
+      overlapCost += e.cost;
+    } else if (e.type === 'guess') {
+      wrong += 1;
+      wrongSpent += e.cost;
+    }
+  }
+  for (const kind of FACT_ORDER) {
+    const cost = facts.get(kind);
+    if (cost != null) out.push({ label: FACTS[kind].paid, price: `−${fmtN(cost)}` });
+  }
+  if (overlaps) out.push({ label: overlaps === 1 ? '1 overlap' : `${overlaps} overlaps`, price: `−${fmtN(overlapCost)}` });
+  if (wrong) out.push({ label: wrong === 1 ? '1 wrong guess' : `${wrong} wrong guesses`, price: `−${fmtN(wrongSpent)}` });
   return out;
 }
 
-/** A count as the page writes it: "61,240". */
-export function fmtN(n: number): string {
-  return n.toLocaleString('en-GB');
+/** What a solve used, for the share text: "3 names, the decade and one
+ *  wrong guess". */
+export function usedText(game: Pick<DailyGame, 'log'>): string {
+  const n = seenSlots(game).size;
+  const parts = [n === 1 ? 'one name' : `${n} names`];
+  const bought = new Set<DailyFactKind>();
+  let overlaps = 0;
+  let wrong = 0;
+  for (const e of game.log) {
+    if (e.type === 'fact') bought.add(e.kind);
+    else if (e.type === 'overlap') overlaps += 1;
+    else if (e.type === 'guess') wrong += 1;
+  }
+  for (const kind of FACT_ORDER) if (bought.has(kind)) parts.push(FACTS[kind].used);
+  if (overlaps) parts.push(overlaps === 1 ? 'one overlap' : `${overlaps} overlaps`);
+  if (wrong) parts.push(wrong === 1 ? 'one wrong guess' : `${wrong} wrong guesses`);
+  return andList(parts);
 }
 
-/** A place as the page writes it: "1st", "112th", "1,204th". The
- *  teens are "th" whatever they end in (11th, 12th, 13th, and 111th), and
- *  otherwise a number ending 1, 2 or 3 takes "st", "nd" or "rd". */
-export function ord(n: number): string {
-  const teen = n % 100 >= 11 && n % 100 <= 13;
-  return `${fmtN(n)}${teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
+/** The six squares, ■ for each name the reader saw, in reveal order. */
+export function shareMarks(game: Pick<DailyGame, 'log'>): string {
+  const seen = seenSlots(game);
+  let out = '';
+  for (let k = 0; k < CAST_SIZE; k++) out += seen.has(k) ? '■' : '□';
+  return out;
 }
 
-/** What the opening screens say of the reader's week: "1,204th this
- *  week", or nothing with no place to say. Neither shows a leaderboard:
- *  before playing, today's would be strangers the reader cannot be on
- *  yet, and it would start them off behind. */
-export function standingText(week: DailyWeek | null | undefined): string {
-  return week ? `${ord(week.rank)} this week` : '';
-}
-
-/** The result's heading. */
-export function resultTitle(game: DailyGame): string {
-  return game.won ? `${fmtN(game.pts)} points` : 'No points today';
-}
-
-/** The line under it. */
-export function resultSub(game: DailyGame): string {
-  if (!game.won) return game.gaveUp ? 'You asked for the answer.' : 'Your points ran out.';
-  const clock = mmss(game.secs ?? 0);
-  const used = usedList(game.log);
-  return used.length
-    ? `Solved in ${clock}. You used ${andList(used)}.`
-    : `Solved in ${clock}, without spending a point.`;
+/** What Share result puts on the clipboard: the puzzle and the game, the
+ *  score and what it took (or how it was missed), the squares, and where
+ *  to play, so a pasted result is also the way in. */
+export function shareText(no: number, game: Pick<DailyGame, 'won' | 'gaveUp' | 'pts' | 'log'>, origin: string): string {
+  const line = game.won ? `${fmtN(game.pts)} points · ${usedText(game)}` : game.gaveUp ? 'Gave up' : 'Missed it';
+  return `Cinedikt Daily No. ${no} · ${GAME_NAME}\n${line}\n${shareMarks(game)}\n${origin}/daily`;
 }
 
 /** The streak once today's game is part of it. The server works it out
@@ -857,7 +730,7 @@ export function resultSub(game: DailyGame): string {
  *  today to the run that ended yesterday. */
 export function streakAfter(
   streak: DailyToday['streak'],
-  game: DailyGame | null,
+  game: Pick<DailyGame, 'phase' | 'won' | 'pts'> | null,
 ): DailyToday['streak'] {
   if (game?.phase === 'done' && game.won && game.pts > 0 && streak.now === 0) {
     return { now: streak.before + 1, before: 0 };
@@ -865,180 +738,111 @@ export function streakAfter(
   return streak;
 }
 
-/** The streak the intro shows: today's run once today is over, or the
- *  run coming into today until then. Zero shows nothing. */
-export function introStreak(streak: DailyToday['streak'], game: DailyGame | null): number {
+/** The result's streak pill: "2-day streak", "Streak started", "Streak
+ *  ended", or nothing for a miss with no run to end. */
+export function streakPill(streak: DailyToday['streak'], game: Pick<DailyGame, 'phase' | 'won' | 'pts'>): string {
   const s = streakAfter(streak, game);
-  return game?.phase === 'done' ? s.now : s.before;
+  if (game.won) return s.now >= 2 ? `${fmtN(s.now)}-day streak` : 'Streak started';
+  return s.before > 0 ? 'Streak ended' : '';
 }
 
-/** One of the result's two numbers. `value` is null while the board it
- *  comes from is on its way. */
-export interface StatView {
-  value: number | null;
-  suffix: string;
-  caption: string;
-}
-
-/** The result's numbers: how the reader did against everyone else today,
- *  and their streak. */
-export function statsOf(
-  game: DailyGame,
+/** The line under the result's rule: the figure, set apart, and the rest.
+ *  Null while today's board is on its way. */
+export function betterLine(
+  game: Pick<DailyGame, 'won'>,
   board: Pick<DailyBoard, 'beat' | 'solved'> | null,
-  streak: DailyToday['streak'],
-): StatView[] {
-  const first: StatView = game.won
-    ? { value: board ? (board.beat ?? 0) : null, suffix: '%', caption: 'of players scored less' }
-    : { value: board ? (board.solved ?? 0) : null, suffix: '%', caption: 'of players got it today' };
-  const s = streakAfter(streak, game);
-  const second: StatView = s.now
-    ? { value: s.now, suffix: '', caption: s.now === 1 ? 'day in a row' : 'days in a row' }
-    : {
-        value: 0,
-        suffix: '',
-        caption: s.before ? `days in a row. Your ${s.before}-day streak ended.` : 'days in a row',
-      };
-  return [first, second];
+): { figure: string; rest: string } | null {
+  if (!board) return null;
+  return game.won
+    ? { figure: `${board.beat ?? 0}%`, rest: ' of today’s players scored less than you.' }
+    : { figure: `${board.solved ?? 0}%`, rest: ' of today’s players got it.' };
 }
 
-/** The copied text's bar, as the share card draws it: ten blocks, filled
- *  to the nearest tenth of the starting points. */
-export function shareBar(pts: number): string {
-  const full = Math.round(pointsShare(pts) / 10);
-  return '▰'.repeat(full) + '▱'.repeat(10 - full);
+/** The scores chart's bars: eleven, 0–99 up to 900–999 and then 1,000,
+ *  each as a share of the tallest in percent, never under 6 so an empty
+ *  one still shows. The reader's own is lit: the hundred their score is
+ *  in, or the first for a loss, which scored nought. */
+export function chartBars(
+  chart: readonly number[] | null | undefined,
+  game: Pick<DailyGame, 'won' | 'pts'>,
+): { h: number; you: boolean }[] {
+  const counts = Array.from({ length: 11 }, (_, i) => Math.max(0, chart?.[i] ?? 0));
+  const most = Math.max(...counts);
+  const mine = game.won ? Math.min(10, Math.max(0, Math.floor(game.pts / 100))) : 0;
+  return counts.map((v, i) => ({ h: most ? Math.max(6, Math.round((v / most) * 100)) : 6, you: i === mine }));
 }
 
-/** The share card's line. */
-export function shareLine(game: DailyGame): string {
-  return game.won ? `${fmtN(game.pts)} points · ${mmss(game.secs ?? 0)}` : 'Missed';
-}
-
-/** What Copy puts on the clipboard: the number, the score, the bar, and
- *  where to play, so a pasted result is also the way in. */
-export function shareText(no: number, game: DailyGame, origin: string): string {
-  const head = `Cinedikt Daily No. ${no}`;
-  const middle = game.won ? `${fmtN(game.pts)} points in ${mmss(game.secs ?? 0)}` : 'Missed it';
-  return `${head}\n${middle}\n${shareBar(game.pts)}\n${origin}/daily`;
-}
+/** The chart's three labels, under its first, middle and last bars. */
+export const CHART_LABELS = ['0', '500', '1,000'] as const;
 
 // ---- the leaderboard ----
 
-/** The week's days, as the column heads and the cells' tips name them. */
+/** A place as the board writes it: "7,804", or "=7,804" when another
+ *  player listed shares it. */
+export function placeText(place: number, tied: boolean): string {
+  return `${tied ? '=' : ''}${fmtN(place)}`;
+}
+
+/** The week's days, as the column heads and the date name them. */
 export const DAY_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'] as const;
-export const DAY_NAMES = [
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-  'Sunday',
-] as const;
+export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
-/** A week's cell for one day. */
-export interface DayCell {
-  /** How full it is, in percent, 0 for an empty cell. */
-  h: number;
-  missed: boolean;
-  played: boolean;
-  tip: string;
-}
-
-/** One day of a week row: not played, missed (no points), or filled to
- *  its points, never less than a sliver so a poor day still shows. */
-export function dayCell(pts: number | null | undefined, day: number): DayCell {
-  const name = DAY_NAMES[day];
-  if (pts == null) return { h: 0, missed: false, played: false, tip: `${name}: not played` };
-  if (pts <= 0) return { h: 0, missed: true, played: true, tip: `${name}: missed` };
-  const h = Math.max(8, Math.round(pointsShare(pts)));
-  return { h, missed: false, played: true, tip: `${name}: ${fmtN(pts)} points` };
-}
-
-/** Initials for a leaderboard avatar: "TK" for Trinity Kimble. */
-export function initialsOf(name: string): string {
-  return name
-    .split(' ')
-    .filter(Boolean)
-    .map((w) => w[0])
-    .join('');
+/** The day initials over the week's cells: Monday to the puzzle's day. */
+export function weekLetters(date: string): string[] {
+  return DAY_LETTERS.slice(0, weekdayOf(date) + 1);
 }
 
 /** A row of the leaderboard as it is drawn. */
-export type BoardLine =
-  | { gap: true; key: string }
-  | {
-      gap: false;
-      key: string;
-      rank: string;
-      you: boolean;
-      name: string;
-      sub: string;
-      code: string;
-      hue: number;
-      value: string;
-      missed: boolean;
-      cells: DayCell[] | null;
-    };
-
-/** The leaderboard's rows. The reader's own row says "You", with their
- *  name under it, or that they are not on the board yet; a day row says
- *  "Missed" for no points. The week's rows carry a cell for each day so
- *  far, Monday first, `days` long. */
-export function boardLines(
-  board: DailyBoard,
-  me: string,
-  days: number,
-): BoardLine[] {
-  const listed = board.you?.listed ?? true;
-  return board.rows.map((r, i): BoardLine => {
-    if ('gap' in r) return { gap: true, key: `gap:${i}` };
-    const row = r as DailyBoardRow;
-    const week = board.tab === 'week';
-    const missed = !week && row.pts <= 0;
-    return {
-      gap: false,
-      key: `${row.rank}:${row.you ? 'you' : row.name}`,
-      rank: fmtN(row.rank),
-      you: row.you,
-      name: row.you ? 'You' : row.name,
-      sub: row.you ? (listed ? me : 'Not on the board yet') : '',
-      code: row.you ? 'You' : initialsOf(row.name),
-      hue: row.hue,
-      value: week
-        ? fmtN(row.pts)
-        : missed
-          ? 'Missed'
-          : row.secs != null
-            ? `${fmtN(row.pts)} · ${mmss(row.secs)}`
-            : fmtN(row.pts),
-      missed,
-      cells: week ? Array.from({ length: days }, (_, d) => dayCell(row.days?.[d], d)) : null,
-    };
-  });
+export interface BoardRowView {
+  key: string;
+  place: string;
+  /** "You" for the reader. */
+  name: string;
+  you: boolean;
+  pts: string;
+  /** The week's cells, Monday first, a day not played as a 0 in the third
+   *  ink; null on today's board. */
+  days: { v: string; zero: boolean }[] | null;
 }
 
-/** How wide the rank column is, so every rank lines up on its right:
- *  7.4px a character, as the handoff sets it. */
-export function rankWidth(lines: readonly BoardLine[]): number {
-  let most = 0;
-  for (const l of lines) if (!l.gap) most = Math.max(most, l.rank.length);
-  return Math.ceil(most * 7.4);
+export function boardRows(board: Pick<DailyBoard, 'tab' | 'rows'>): BoardRowView[] {
+  const week = board.tab === 'week';
+  return board.rows.map((r, i) => ({
+    key: `${i}:${r.you ? 'you' : r.name}`,
+    place: placeText(r.place, r.tied),
+    name: r.you ? 'You' : r.name,
+    you: r.you,
+    pts: fmtN(r.pts),
+    days: week ? (r.days ?? []).map((d) => ({ v: fmtN(d), zero: d === 0 })) : null,
+  }));
 }
+
+/** The note under the leaderboard. */
+export function boardNote(tab: DailyTab, total: number): string {
+  return tab === 'week'
+    ? 'The players around your total since Monday. A day you didn’t play counts as 0.'
+    : `The players around your score. Equal scores share a place. ${fmtN(total)} played today.`;
+}
+
+/** The leaderboard's tabs, in order. */
+export const BOARD_TABS: readonly { tab: DailyTab; label: string }[] = [
+  { tab: 'today', label: 'Today' },
+  { tab: 'week', label: 'This week' },
+];
 
 /** The leaderboards fetched so far, by tab, with 'failed' for one that
  *  could not be had. */
 export type BoardsSeen<T> = Partial<Record<DailyTab, T | 'failed'>>;
 
 /** The boards a tab needs: its own, and today's whichever tab is
- *  showing, since the result's first number comes from today's. */
+ *  showing, since the result's figure and chart come from today's. */
 export function boardsWanted(tab: DailyTab): DailyTab[] {
   return tab === 'week' ? ['today', 'week'] : ['today'];
 }
 
 /** The same boards with any of `tabs` that failed forgotten, so they are
- *  asked for again: the panel asks for every tab it wants and does not
- *  have, and a failure counts as having it until it is dropped. Dropped
- *  when the reader picks a tab and when they press "Try again". The same
+ *  asked for again: the page asks for every tab it wants and does not
+ *  have, and a failure counts as having it until it is dropped. The same
  *  object when nothing failed, so nothing is drawn again for it. */
 export function dropFailed<T>(boards: BoardsSeen<T>, tabs: readonly DailyTab[]): BoardsSeen<T> {
   if (!tabs.some((t) => boards[t] === 'failed')) return boards;
@@ -1047,72 +851,358 @@ export function dropFailed<T>(boards: BoardsSeen<T>, tabs: readonly DailyTab[]):
   return out;
 }
 
-/** The line under the leaderboard. */
-export function boardNote(tab: DailyTab, total: number, me: string, listed: boolean): string {
-  if (tab === 'week') {
-    return `${plural(total, 'player', 'players')} this week. Each day adds the points you kept. The week starts on Monday.`;
-  }
-  const who = listed ? `You show as ${me}.` : `You’ll show as ${me} once you’ve played on a few days.`;
-  return `${plural(total, 'player', 'players')} so far today. ${who}`;
+/** A place as the page writes it: "1st", "112th", "1,204th". The teens
+ *  are "th" whatever they end in (11th, 12th, 13th, and 111th), and
+ *  otherwise a number ending 1, 2 or 3 takes "st", "nd" or "rd". */
+export function ord(n: number): string {
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  return `${fmtN(n)}${teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
 }
 
-/** A leaderboard avatar's colours: the person's hue as a fill, and what
- *  is written on it. Set inline, as every colour worked out in script is,
- *  because the build rewrites an oklch() it finds in a stylesheet. */
-export function avatarColours(hue: number, theme: Theme): { fill: string; ink: string } {
-  return theme === 'light'
-    ? { fill: `oklch(0.55 0.15 ${hue})`, ink: '#ffffff' }
-    : { fill: `oklch(0.78 0.12 ${hue})`, ink: `oklch(0.2 0.03 ${hue})` };
+/** What an opening screen says of the reader's week: "1,204th this
+ *  week", or nothing with no place to say. */
+export function standingText(week: DailyWeek | null | undefined): string {
+  return week ? `${ord(week.rank)} this week` : '';
 }
 
-// ---- the intro ----
+// ---- the words ----
 
-/** The intro's Play button: Play before the game, and the way back to it
- *  when the same screen is opened as the rules. */
-export function introButton(no: number, game: DailyGame | null): string {
-  if (!game) return `Play No. ${no}`;
-  return game.phase === 'done' ? 'Back to your result' : 'Back to the game';
-}
+/** The title screen. Its numbers are the rules'. */
+export const TITLE_SCREEN = {
+  pill: 'Cinedikt Daily',
+  heading: GAME_NAME,
+  lead: 'Today’s movie is hidden. Its cast shows up one name at a time, working up to the star. Name the movie in as few names as you can.',
+  steps: ['See who’s in it', 'Guess, or show the next name', 'Fewer names, more points'],
+  fine: `You start with ${fmtN(DAILY_START)} points. Extra names, facts and wrong guesses cost points. There’s no clock.`,
+  play: 'Play',
+} as const;
 
-/** The count under the Play button: the number, which is set apart, and
- *  the words after it. Null before anyone has played: every puzzle opens
- *  at nought, at the first midnight in the world and all through launch
- *  day, and "0 people have played today" would say the game is empty
- *  rather than new, as the opening screen's banner leaves its count out
- *  for the same reason. */
+/** The count under Play: the number, which is set apart, and the words
+ *  after it. Null before anyone has played: every puzzle opens at nought,
+ *  and "0 people have played today" would say the game is empty rather
+ *  than new, as the banner leaves its count out for the same reason. */
 export function playedText(n: number): { count: string; rest: string } | null {
   if (n <= 0) return null;
   return { count: fmtN(n), rest: n === 1 ? ' person has played today.' : ' people have played today.' };
 }
 
-/** A price that can run between two numbers, as the title screen writes
- *  it: "20–80", or the one number when both ends are the same, as a
- *  director and an actor are today ("Person 150"). Either order. */
-export function costSpan(a: number, b: number): string {
-  const [lo, hi] = a <= b ? [a, b] : [b, a];
-  return lo === hi ? String(lo) : `${lo}–${hi}`;
+/** How it works: six numbered items, then the prices, then Got it. The
+ *  prices come from the rules, so the two never disagree. */
+export const HOW_IT_WORKS = {
+  heading: 'How it works',
+  items: [
+    'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
+    'Guess whenever you like. Each wrong guess, or each tap on Next name, shows another person, working up to the star.',
+    'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
+    'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade and then a five-year range, or the director.',
+    `Tap Movies on any name to see their movies on a Cinedikt map. Facts you buy mark the map, and for ${OVERLAP_COST} you can add another name to light only the movies they share.`,
+    'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
+  ],
+  then: `You start with ${fmtN(DAILY_START)} points. Each extra name costs ${NEXT_COST}. Wrong guesses cost ${wrongCost(0)}, then ${wrongCost(1)}, ${wrongCost(2)} and so on. Facts cost ${Math.min(...Object.values(FACT_COST))} to ${Math.max(...Object.values(FACT_COST))}. There’s no clock.`,
+  close: 'Got it',
+} as const;
+
+/** The game page's heading while the game is on; the answer's title once
+ *  it is over. */
+export const PLAY_HEADING = 'Name today’s movie';
+
+/** The line under it, while the game is on; nothing once it is over. */
+export const PLAY_LINE = 'Its cast shows up one name at a time, working up to the star.';
+
+export function pageHeading(game: Pick<DailyGame, 'end'> | null): string {
+  return game?.end ? game.end.answer.title : PLAY_HEADING;
 }
 
-/** The title screen's four steps go four across from this window width,
- *  and two by two below it. The width is the window's, as the design
- *  measures it: DailyIntro watches STEPS_WIDE_QUERY for it, since 760 is
- *  not one of the stylesheet's screen classes (screen.ts) and so cannot
- *  be a media query there. */
-export const STEPS_WIDE_MIN = 760;
-export const STEPS_WIDE_QUERY = `(min-width: ${STEPS_WIDE_MIN}px)`;
+export function pageLine(game: Pick<DailyGame, 'phase'> | null): string {
+  return game?.phase === 'done' ? '' : PLAY_LINE;
+}
 
-/** How many columns the steps take in a window this wide. */
-export function stepColumns(width: number): 2 | 4 {
-  return width < STEPS_WIDE_MIN ? 2 : 4;
+/** The cast list's name for a screen reader, and its heading once the
+ *  game is over. */
+export const CAST_LIST_LABEL = 'Today’s names';
+export const CAST_HEADING = 'The cast';
+
+/** The guess field's placeholder and name. "/" reaches for it. */
+export const GUESS_PLACEHOLDER = 'Name the movie';
+
+/** Show the answer takes two presses: this, then SHOW_ANSWER_SURE within
+ *  REVEAL_CONFIRM_MS. */
+export const SHOW_ANSWER = 'Show the answer';
+export const SHOW_ANSWER_SURE = 'Sure? Show it';
+
+/** The toasts. */
+export const TOASTS = {
+  tried: 'You’ve already tried that one',
+  copied: 'Result copied',
+  copyFailed: 'Couldn’t copy the result',
+} as const;
+
+/** The result's label for the countdown to the reader's midnight. */
+export const NEXT_MOVIE_IN = 'Next movie in';
+
+// ---- the banner on the opening screen ----
+
+/** The line beside the banner's button: the points left during a game,
+ *  the score or the miss once it is over, and before it the reader's
+ *  place this week or, without one, how many are playing. Nobody yet is
+ *  not a crowd worth mentioning: "0 playing today" would say the game is
+ *  empty, not that it is new. */
+export function bannerLine(
+  game: Pick<DailyGame, 'phase' | 'won' | 'pts'> | null,
+  played: number,
+  week: DailyWeek | null | undefined,
+): string {
+  if (game?.phase === 'done') return game.won ? `${fmtN(game.pts)} points today` : 'Missed today';
+  if (game?.phase === 'play') return `${fmtN(game.pts)} points left`;
+  return standingText(week) || (played > 0 ? `${fmtN(played)} playing today` : '');
+}
+
+/** The banner's name for a screen reader, as the handoff writes it:
+ *  "Cinedikt Daily, No. 143: Name Drop. Play", and once the game is over
+ *  "Cinedikt Daily, No. 143. See your result". A game under way ends on
+ *  the button's own words, Keep going, so a reader who says what they see
+ *  to their speech software is understood. */
+export function bannerLabel(no: number, game: Pick<DailyGame, 'phase'> | null): string {
+  if (game?.phase === 'done') return `Cinedikt Daily, No. ${no}. See your result`;
+  return `Cinedikt Daily, No. ${no}: ${GAME_NAME}. ${game ? 'Keep going' : 'Play'}`;
+}
+
+// ---- the Movies sheet ----
+//
+// One showing person's movies on a small Cinedikt map, with the reader's
+// bought facts drawn on it. Today's movie is among the cards, unmarked:
+// the server sends a poster for every card or for none, and nothing here
+// can tell it from the rest. Length is not drawn, since other movies'
+// runtimes are not on a map.
+
+/** The years a bought decade or five years light, inclusive, or null
+ *  with neither bought. The five years win: they are inside the decade. */
+export function yearSpan(facts: Pick<DailyFacts, 'decade' | 'years'>): [number, number] | null {
+  if (facts.years != null) return [facts.years, facts.years + 4];
+  if (facts.decade != null) return [facts.decade, facts.decade + 9];
+  return null;
+}
+
+/** Each rating band as ratings, from its floor up to, and not including,
+ *  its ceiling. The top band has none. */
+export const RATING_SPANS: readonly (readonly [number, number])[] = [
+  [0, 6],
+  [6, 7],
+  [7, 8],
+  [8, Infinity],
+];
+
+/** The ratings a bought rating band lights, or null with none bought. */
+export function ratingSpan(facts: Pick<DailyFacts, 'rating'>): readonly [number, number] | null {
+  return facts.rating == null ? null : (RATING_SPANS[facts.rating] ?? null);
+}
+
+/** Who the sheet has selected: the showing slots switched on, the one it
+ *  opened on always among them, and the director chip, which means any
+ *  of today's directors. */
+export interface SheetChoice {
+  slots: readonly number[];
+  director: boolean;
+}
+
+/** Whether a card is lit: every selected person is on it, it is inside
+ *  the bought years and rating band, and it has every one of the answer's
+ *  genres once Genre is bought. The rest fade. */
+export function movieLit(
+  movie: Pick<DailyMovie, 'year' | 'rating' | 'genres' | 'on' | 'dir'>,
+  chosen: SheetChoice,
+  facts: DailyFacts,
+): boolean {
+  if (!chosen.slots.every((k) => movie.on.includes(k))) return false;
+  if (chosen.director && !movie.dir) return false;
+  const years = yearSpan(facts);
+  if (years && (movie.year < years[0] || movie.year > years[1])) return false;
+  const ratings = ratingSpan(facts);
+  if (ratings && !(movie.rating >= ratings[0] && movie.rating < ratings[1])) return false;
+  if (facts.genre && !facts.genre.every((g) => movie.genres.includes(g))) return false;
+  return true;
+}
+
+/** The sheet's title: "Joe Pantoliano’s movies", or with more selected,
+ *  "Movies with Joe Pantoliano and Gloria Foster". The person it opened
+ *  on comes first; the director chip names every director. */
+export function sheetTitle(names: readonly string[]): string {
+  return names.length > 1 ? `Movies with ${andList(names)}` : `${names[0] ?? ''}’s movies`;
+}
+
+/** The line under it: "6 of 14 movies lit · on Cinedikt". */
+export function sheetSub(lit: number, total: number): string {
+  return `${fmtN(lit)} of ${fmtN(total)} ${total === 1 ? 'movie' : 'movies'} lit · on Cinedikt`;
+}
+
+/** The legend over the map: the facts drawn on it, or what buying them
+ *  and adding names would do. Either way, that today's movie is there and
+ *  not marked. */
+export function sheetLegend(facts: DailyFacts): string {
+  const marks: string[] = [];
+  if (facts.years != null) marks.push(yearsText(facts.years));
+  else if (facts.decade != null) marks.push(decadeText(facts.decade));
+  if (facts.rating != null) marks.push(`rated ${inSentence(ratingBandText(facts.rating))}`);
+  if (facts.genre?.length) marks.push(facts.genre.join(', '));
+  const tail = 'Today’s movie is one of these cards, but it isn’t marked.';
+  return marks.length
+    ? `Your facts are on the map: ${marks.join(' · ')}. ${tail}`
+    : `Facts you buy mark this map. Add another name to light only the movies they share. ${tail}`;
+}
+
+/** The footer with nothing picked. */
+export function sheetHint(nextCost: number): string {
+  return `Tap a movie to guess it. A wrong guess costs ${fmtN(nextCost)}.`;
+}
+
+/** The footer's line under a picked card's title: "1993 · IMDb 7.8". */
+export function pickLine(movie: Pick<DailyMovie, 'year' | 'rating'>): string {
+  const rated = `IMDb ${movie.rating.toFixed(1)}`;
+  return movie.year > 0 ? `${movie.year} · ${rated}` : rated;
+}
+
+/** A card's name for a screen reader: what it is, and whether it is
+ *  faded or already tried. */
+export function sheetCardLabel(movie: Pick<DailyMovie, 'title' | 'year' | 'rating'>, lit: boolean, tried: boolean): string {
+  return `${movie.title}, ${movie.year}, rated ${movie.rating.toFixed(1)}${tried ? ', already tried' : ''}${lit ? '' : ', dimmed'}`;
+}
+
+/** A person's chip on the sheet: their name once theirs to switch, or
+ *  "+ Gloria Foster" and its price before their overlap is bought. */
+export function overlapChip(name: string, owned: boolean): { label: string; price: string } {
+  return owned ? { label: name, price: '' } : { label: `+ ${name}`, price: `−${OVERLAP_COST}` };
+}
+
+/** The sheet's small map: the app's layout at the handoff's metrics. */
+export const SHEET_METRICS = {
+  desktop: { cardW: 112, cardH: 42, railW: 44 },
+  phone: { cardW: 100, cardH: 42, railW: 40 },
+  gap: 4,
+  padTop: 3,
+  padBottom: 3,
+  gapMark: 4,
+  axisH: 26,
+  /** The ratings the axis labels. */
+  labels: [4, 5, 6, 7, 8, 9],
+} as const;
+
+/** The sheet opens scrolled so its first lit card sits this far from the
+ *  map's top, a bought range already in view. */
+export const SHEET_LIT_TOP = 36;
+
+// ---- the page ----
+
+/** The game page's parts, top to bottom. While the game is on: the top
+ *  block, the cast and then the facts. Once it is over: the top block,
+ *  About the movie, the result, the leaderboard, "The cast" heading and
+ *  the six names. The page draws them keyed in this order, so the order
+ *  on the page is the order a screen reader hears, and the cast keeps its
+ *  place in the tree as the rest arrive round it: a list moved in the
+ *  tree would start its rows' transitions afresh, and the names the
+ *  reader didn't see would arrive all at once. */
+export type PageSection = 'top' | 'cast' | 'facts' | 'about' | 'result' | 'board' | 'castHead';
+export function pageSections(done: boolean): PageSection[] {
+  return done ? ['top', 'about', 'result', 'board', 'castHead', 'cast'] : ['top', 'cast', 'facts'];
+}
+
+/** The cast list while Play hides every name (PLAY_HIDE_MS): six rows,
+ *  none next, so the first name animates in from nothing. */
+export function openingRows(): CastRow[] {
+  return Array.from({ length: CAST_SIZE }, (_, slot): CastRow => ({ slot, state: 'hidden', bar: BAR_WIDTHS[slot] }));
+}
+
+/** When each name the reader didn't see appears at the end, by slot:
+ *  one after another in reveal order (endRevealDelay). Names seen during
+ *  the game are already there, and are left out. */
+export function revealDelays(rows: readonly CastRow[]): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const r of rows) if (r.state === 'shown' && !r.seen) out.set(r.slot, endRevealDelay(out.size));
+  return out;
+}
+
+/** Everyone the page can name today, for the initials on faces with no
+ *  photo: the names showing, then the directors once bought or the game
+ *  is over. Unique by id. */
+export function todaysPeople(game: Pick<DailyGame, 'slots' | 'facts' | 'end'>): DailyPerson[] {
+  const seen = new Map<string, DailyPerson>();
+  const add = (p: DailyPerson) => {
+    if (!seen.has(p.id)) seen.set(p.id, p);
+  };
+  shownSlots(game).forEach((s) => add(s.person));
+  (game.end?.directors ?? game.facts.director ?? []).forEach(add);
+  return [...seen.values()];
+}
+
+/** The wrong guess for this movie, for the message box: the newest one,
+ *  or the one whose chip was pressed. */
+export function guessById(game: Pick<DailyGame, 'log'> | null, id: string | null): DailyGuess | null {
+  if (!id) return null;
+  return guessesOf(game).find((g) => g.id === id) ?? null;
+}
+
+/** The newest wrong guess, which the message box shows as it comes back. */
+export function newestGuess(game: Pick<DailyGame, 'log'>): DailyGuess | null {
+  const all = guessesOf(game);
+  return all[all.length - 1] ?? null;
+}
+
+/** The most faces the message box draws, overlapping, before its chips. */
+export const MESSAGE_FACES = 4;
+
+/** The result's six faces, in reveal order, each marked seen or not: the
+ *  ones the reader saw are drawn in colour, the rest faded and grey. */
+export function resultFaces(game: Pick<DailyGame, 'slots' | 'log'>): { person: DailyPerson; seen: boolean }[] {
+  const seen = seenSlots(game);
+  return shownSlots(game).map((s) => ({ person: s.person, seen: seen.has(s.slot) }));
+}
+
+/** The catalog's search answers from two characters, as the header's. */
+export const SEARCH_MIN_CHARS = 2;
+
+/** What the reader is told, at once and without asking, about a move the
+ *  server would refuse: a name when everyone is showing, a fact already
+ *  bought or the years before the decade, an overlap already owned or for
+ *  someone not showing, a purchase the points would not leave one over
+ *  from, a movie already guessed. Empty for a move worth sending. The
+ *  page's buttons already hold back most of these; this is for the rest,
+ *  and for a press that lands as the game changes under it. */
+export function earlyRefusal(
+  game: Pick<DailyGame, 'pts' | 'slots' | 'facts' | 'overlaps' | 'log'>,
+  move: DailyMove,
+): string {
+  switch (move.kind) {
+    case 'next':
+      if (!game.slots.some((s) => !s.shown)) return refusalText('known', 'next');
+      return affords(game.pts, NEXT_COST) ? '' : refusalText('points', 'next');
+    case 'buy':
+      if (hasFact(move.fact, game.facts)) return refusalText('known', 'buy');
+      if (move.fact === 'years' && !hasFact('decade', game.facts)) return refusalText('bad', 'buy');
+      return affords(game.pts, FACT_COST[move.fact]) ? '' : refusalText('points', 'buy');
+    case 'overlap':
+      if (game.overlaps.includes(move.person)) return refusalText('known', 'overlap');
+      if (!shownSlots(game).some((s) => s.person.id === move.person)) return refusalText('bad', 'overlap');
+      return affords(game.pts, OVERLAP_COST) ? '' : refusalText('points', 'overlap');
+    case 'guess':
+      return guessedIds(game).has(move.film) ? TOASTS.tried : '';
+    case 'reveal':
+      return '';
+  }
+}
+
+/** Where the page sits in the visual viewport: from its top, as tall as
+ *  it is, so the guess bar rides just above an on-screen keyboard rather
+ *  than under it, as iOS leaves the layout viewport full height behind
+ *  it. Null while the reader is zoomed in, when the visual viewport is a
+ *  window onto the page rather than the room it has, and the page keeps
+ *  its own size. */
+export function viewportFit(
+  vv: { height: number; offsetTop: number; scale: number } | null | undefined,
+): { top: number; height: number } | null {
+  if (!vv || !(vv.height > 0) || Math.abs(vv.scale - 1) > 0.01) return null;
+  return { top: Math.max(0, Math.round(vv.offsetTop)), height: Math.round(vv.height) };
 }
 
 // ---- time ----
-
-/** "3:07". */
-export function mmss(secs: number): string {
-  const t = Math.max(0, Math.round(secs));
-  return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
-}
 
 /** "11:47:03": hours, minutes and seconds left, never below zero. */
 export function countdown(ms: number): string {
@@ -1123,21 +1213,14 @@ export function countdown(ms: number): string {
 }
 
 /** How far the server's clock is ahead of this one, in ms, from the time
- *  it gave and the moment it arrived. The countdown and the game clock
- *  run on the server's time: a reader whose clock is wrong still sees the
- *  next map arrive at their own midnight, which the server worked out.
- *  The time it gave was stamped before the answer set off, so this errs
- *  behind the server, and what waits on it comes late rather than
- *  early. */
+ *  it gave and the moment it arrived. The countdown runs on the server's
+ *  time: a reader whose clock is wrong still sees the next movie arrive
+ *  at their own midnight, which the server worked out. The time it gave
+ *  was stamped before the answer set off, so this errs behind the server,
+ *  and what waits on it comes late rather than early. */
 export function clockOffset(serverNow: string, localNow: number): number {
   const t = Date.parse(serverNow);
   return Number.isFinite(t) ? t - localNow : 0;
-}
-
-/** Seconds since an RFC 3339 time, on the server's clock. */
-export function secondsSince(at: string, localNow: number, offset: number): number {
-  const t = Date.parse(at);
-  return Number.isFinite(t) ? Math.max(0, (localNow + offset - t) / 1000) : 0;
 }
 
 /** The longest the midnight watch goes without looking at the clock. A
@@ -1150,11 +1233,11 @@ export const MIDNIGHT_STEP_MS = 30_000;
 /** Calls `onMidnight` once, when `next` (the reader's next midnight, an
  *  RFC 3339 instant) arrives on the server's clock, and hands back what
  *  calls it off. The one timer in this file: the page and the opening
- *  screen's banner each ask for the new map with it, the moment the old
- *  one ends. A `next` that cannot be read, or that has already gone by
- *  as the watch starts, is not waited for: the server said it was ahead,
- *  so asking again would only bring back the same answer, again and
- *  again. */
+ *  screen's banner each ask for the new puzzle with it, the moment the
+ *  old one ends. A `next` that cannot be read, or that has already gone
+ *  by as the watch starts, is not waited for: the server said it was
+ *  ahead, so asking again would only bring back the same answer, again
+ *  and again. */
 export function watchMidnight(next: string, offset: number, onMidnight: () => void): () => void {
   const at = Date.parse(next);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1196,8 +1279,8 @@ export function weekdayOf(date: string): number {
   return (d.getUTCDay() + 6) % 7;
 }
 
-/** "Thursday 8 October", as en-GB writes it, in UTC: the calendar date
- *  the puzzle belongs to, which is the reader's own date, written as it
+/** "Friday 9 October", as en-GB writes it, in UTC: the calendar date the
+ *  puzzle belongs to, which is the reader's own date, written as it
  *  stands whatever zone the page is in. Built by hand from the UTC parts
  *  rather than through Intl, whose en-GB output has moved a comma about
  *  between versions. */
@@ -1207,53 +1290,11 @@ export function dailyDayText(date: string): string {
   return `${DAY_NAMES[weekdayOf(date)]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
 }
 
-/** The header's date: "No. 142 · Thursday 8 October", or "No. 142" on a
+/** The header's date: "No. 143 · Friday 9 October", or "No. 143" on a
  *  phone, where the day does not fit beside the wordmark. */
 export function dailyDateText(day: { no: number; date: string }, phone: boolean): string {
   const text = dailyDayText(day.date);
   return phone || !text ? `No. ${day.no}` : `No. ${day.no} · ${text}`;
-}
-
-// ---- scrolling ----
-
-/** Where the map scrolls to put cards in front of the reader, in the part
- *  of it the panel leaves clear: `view` is that part's size. The box
- *  round all the cards is centred if it fits, with a margin; if not, the
- *  middle card of them, top to bottom, is. The rating strip takes the top
- *  26px, so the middle of what can be seen is lower by half of it. */
-export function scrollTarget(
-  cards: readonly Pick<Placed, 'left' | 'top'>[],
-  size: { w: number; h: number },
-  view: { w: number; h: number },
-): { left: number; top: number } | null {
-  if (cards.length === 0) return null;
-  const box = (list: readonly Pick<Placed, 'left' | 'top'>[]) => ({
-    x0: Math.min(...list.map((c) => c.left)),
-    x1: Math.max(...list.map((c) => c.left + size.w)),
-    y0: Math.min(...list.map((c) => c.top)),
-    y1: Math.max(...list.map((c) => c.top + size.h)),
-  });
-  let b = box(cards);
-  if (b.x1 - b.x0 + 48 > view.w || b.y1 - b.y0 + 48 > view.h - AXIS_H) {
-    const byTop = [...cards].sort((p, q) => p.top - q.top);
-    b = box([byTop[Math.floor((byTop.length - 1) / 2)]]);
-  }
-  return {
-    left: Math.max(0, (b.x0 + b.x1) / 2 - view.w / 2),
-    top: Math.max(0, (b.y0 + b.y1) / 2 - (AXIS_H + view.h) / 2),
-  };
-}
-
-/** What the map scrolls to once Year is bought: the cards in that year's
- *  row, for scrollTarget to centre (the middle one, when they are wider
- *  than the clear part of the map), or, for a row opened empty, a card's
- *  box where the placeholder sits, at the left edge, as an unrated card
- *  would be. Nothing for a year the layout has no row for. */
-export function yearTargets(layout: GridLayout, year: number): Pick<Placed, 'left' | 'top'>[] {
-  const here = layout.cards.filter((c) => c.film.year === year && !c.film.isAnchor);
-  if (here.length) return here;
-  const row = layout.rows.find((r) => r.year === year && !r.isBreak);
-  return row ? [{ left: layout.metrics.railW + 8, top: row.top + 12 }] : [];
 }
 
 // ---- moves ----
@@ -1273,27 +1314,47 @@ export function newKey(): string {
  *  game is the same request, and is sent again under the same key after
  *  an answer that never came. */
 export function moveSig(move: DailyMove, seq: number): string {
-  const arg = move.kind === 'flip' ? move.card : move.kind === 'buy' ? move.clue : move.kind === 'guess' ? move.film : '';
+  const arg =
+    move.kind === 'buy' ? move.fact : move.kind === 'overlap' ? move.person : move.kind === 'guess' ? move.film : '';
   return `${seq}:${move.kind}:${arg}`;
 }
+
+/** Said when a request never got an answer, and for a refusal with no
+ *  words of its own. Sending the same move again is safe. */
+export const UNREACHABLE = 'Couldn’t reach Cinedikt. Try again.';
+
+/** Said while today's puzzle has not been picked yet. */
+export const NOT_READY = 'Today’s movie isn’t ready yet. Try again in a few minutes.';
+
+/** Said when a move is refused because the reader's day has turned, and
+ *  when their midnight comes with a game part way through. */
+export const DAY_OVER = 'That day’s game is over.';
 
 /** What the reader is told when a move is refused, by the server's
  *  reason. Empty for a refusal that is handled without a word: "stale"
  *  hands back the game as it stands, and the page simply draws it. */
-export function refusalText(reason: string | null, kind?: DailyMove['kind'] | 'play' | 'name'): string {
+export function refusalText(
+  reason: string | null,
+  kind?: DailyMove['kind'] | 'play' | 'name' | 'movies',
+): string {
   switch (reason) {
     case 'stale':
       return '';
     case 'points':
-      return kind === 'flip' ? 'Not enough points left for that card.' : 'Not enough points for that.';
+      return 'Not enough points for that.';
     case 'known':
-      if (kind === 'guess') return 'You’ve already guessed that one.';
-      if (kind === 'flip') return 'That card is already turned over.';
-      return 'You already have that clue.';
+      if (kind === 'guess') return TOASTS.tried;
+      if (kind === 'next') return 'Everyone’s showing.';
+      if (kind === 'overlap') return 'You’ve already added them.';
+      return 'You already have that fact.';
+    case 'bad':
+      if (kind === 'buy') return 'Buy the decade first.';
+      if (kind === 'overlap' || kind === 'movies') return 'That name isn’t showing yet.';
+      return UNREACHABLE;
     case 'unknown':
       return 'Cinedikt doesn’t know that movie.';
     case 'day':
-      return 'That map has ended.';
+      return DAY_OVER;
     case 'done':
       return 'This game is already over.';
     case 'cookie':
@@ -1308,20 +1369,13 @@ export function refusalText(reason: string | null, kind?: DailyMove['kind'] | 'p
   }
 }
 
-/** What the reader is told when their midnight comes with the page
- *  open: the same as a move refused for the day ("That map has ended."),
- *  if they were part way through a game, which goes as the new map comes;
- *  nothing over an intro or a result, which simply give way to it. */
-export function midnightText(game: DailyGame | null): string {
-  return game?.phase === 'play' ? refusalText('day') : '';
+/** What the reader is told when their midnight comes with the page open:
+ *  that the day is over, if they were part way through a game, which goes
+ *  as the new puzzle comes; nothing over the title screen or a result,
+ *  which simply give way to it. */
+export function midnightText(game: Pick<DailyGame, 'phase'> | null): string {
+  return game?.phase === 'play' ? DAY_OVER : '';
 }
-
-/** Said when a request never got an answer, and for a refusal with no
- *  words of its own. Sending the same move again is safe. */
-export const UNREACHABLE = 'Couldn’t reach Cinedikt. Try again.';
-
-/** Said while today's puzzle has not been picked yet. */
-export const NOT_READY = 'Today’s map isn’t ready yet. Try again in a few minutes.';
 
 /** The button that starts the reader again, as a new player on a newly
  *  picked movie. Development only, and it says so: a server in
@@ -1335,229 +1389,76 @@ export const AGAIN_FAILED = 'Couldn’t start again. Try again.';
 /** The game a "stale" refusal hands back, or null. */
 export function staleGame(body: unknown): DailyGame | null {
   const g = (body as { game?: unknown } | null)?.game;
-  return g && typeof g === 'object' && Array.isArray((g as DailyGame).log) ? (g as DailyGame) : null;
-}
-
-/** Whether a game just handed back has a wrong guess the one before it
- *  did not, which shakes the panel. */
-export function newWrongGuess(was: DailyGame | null, now: DailyGame): boolean {
-  const count = (g: DailyGame | null) => g?.log.filter((e) => e.type === 'guess').length ?? 0;
-  return count(now) > count(was);
-}
-
-// ---- the name ----
-
-/** How many names the reroll spins through before it lands. */
-export const REEL_STEPS = 9;
-
-/** How long the reel waits on a name that has not arrived before it
- *  stops on the old one and says the server could not be reached. */
-export const REEL_GIVE_UP_MS = 8000;
-
-/** How long each name in the spin is shown: quicker at the start, slowing
- *  as it lands, like a reel. */
-export function reelDelay(step: number): number {
-  return 40 + step * 14;
-}
-
-const UPPER = 'ABCDEFGHIJKLMNOPRSTW';
-const LOWER = 'aeiounrstlmdkchy';
-
-/** One frame of the reroll. The client holds no pool of names to spin
- *  through — the server makes them — so the reel scrambles the letters
- *  instead, keeping each word's shape. Until the new name arrives it
- *  scrambles the old one; once it has, the frames lock its letters in
- *  from the left over the last steps, and the last frame is the name. */
-export function reelFrame(from: string, to: string | null, step: number, rnd: () => number): string {
-  const target = to ?? from;
-  if (to != null && step >= REEL_STEPS) return to;
-  const lock = to == null ? 0 : Math.max(0, Math.round(((step - (REEL_STEPS - 4)) / 4) * target.length));
-  let out = '';
-  for (let i = 0; i < target.length; i++) {
-    const ch = target[i];
-    if (i < lock || !/[A-Za-z]/.test(ch)) out += ch;
-    else if (ch === ch.toUpperCase()) out += UPPER[Math.floor(rnd() * UPPER.length)];
-    else out += LOWER[Math.floor(rnd() * LOWER.length)];
-  }
-  return out;
+  if (!g || typeof g !== 'object') return null;
+  const game = g as DailyGame;
+  return Array.isArray(game.log) && Array.isArray(game.slots) ? game : null;
 }
 
 // ---- motion ----
 //
 // The design's numbers, written once, so each can be checked. Every one is
-// off for a reader who has asked for nothing to move: script animations
-// go through motion.ts's animate, which asks, and the CSS transitions
-// have their reduced-motion rules at the end of the Daily's section.
+// off for a reader who has asked for nothing to move: names appear at
+// once, the card does not turn, the score does not count and scrolls are
+// instant. Script animations go through motion.ts's animate, which asks;
+// the stylesheet's transitions have reduced-motion rules of their own.
 
-/** A card turning over: .62s, overshooting a little as it lands. The
- *  stylesheet's .cd-daily-flip uses the same curve. */
-export const FLIP_MS = 620;
-export const FLIP_EASE = 'cubic-bezier(0.3, 0.75, 0.25, 1.18)';
+/** Play hides every name for this long, and then the first one comes in. */
+export const PLAY_HIDE_MS = 450;
 
-/** The starting three, and any cards a move turns over together, turn
- *  one after another this far apart. */
-export const STAGGER_MS = 150;
+/** A name appearing: its placeholder fades out; its text fades in and
+ *  rises from 6px; its face fades in and grows from 0.7 with a bounce. */
+export const NAME_OUT_MS = 300;
+export const NAME_IN_MS = 450;
+export const NAME_RISE_PX = 6;
+export const FACE_GROW_MS = 500;
+export const FACE_GROW_FROM = 0.7;
+export const FACE_GROW_EASE = 'cubic-bezier(0.2, 0.9, 0.3, 1.25)';
 
-/** At the end the rest of the map turns over outward from the answer:
- *  each card waits 150ms, plus 0.45ms for every pixel it is from the
- *  answer, but never more than 1.3s. */
-export const END_STAGGER_BASE_MS = 150;
-export const END_STAGGER_PER_PX = 0.45;
-export const END_STAGGER_MAX_MS = 1300;
-
-/** How long each card waits to turn, for cards turning over together. */
-export function staggerDelays(
-  ids: readonly string[],
-  done: boolean,
-  layout: GridLayout | null,
-): Record<string, number> {
-  const out: Record<string, number> = {};
-  if (!done) {
-    ids.forEach((id, i) => {
-      out[id] = i * STAGGER_MS;
-    });
-    return out;
-  }
-  const a = layout?.anchor;
-  if (!a || !layout) return out;
-  const at = new Map(layout.cards.map((c) => [c.film.id, c]));
-  for (const id of ids) {
-    const c = at.get(id);
-    if (!c) continue;
-    out[id] = Math.round(
-      Math.min(END_STAGGER_MAX_MS, END_STAGGER_BASE_MS + Math.hypot(c.left - a.left, c.top - a.top) * END_STAGGER_PER_PX),
-    );
-  }
-  return out;
+/** At the end the names the reader didn't see appear one after another:
+ *  the first 350ms in, then 140ms apart. */
+export const END_REVEAL_FIRST_MS = 350;
+export const END_REVEAL_STEP_MS = 140;
+export function endRevealDelay(i: number): number {
+  return END_REVEAL_FIRST_MS + i * END_REVEAL_STEP_MS;
 }
 
-/** Cards just turned over keep the accent ring this long after the last
- *  of them has turned, so the eye can find them. */
-export const FRESH_HOLD_MS = 1900;
+/** The photo preview: on a mouse, after resting on a face this long; it
+ *  fades in quickly and grows from 0.92 with a little bounce, 54px from
+ *  the face's left edge. */
+export const PEEK_REST_MS = 160;
+export const PEEK_FADE_MS = 160;
+export const PEEK_GROW_MS = 220;
+export const PEEK_GROW_FROM = 0.92;
+export const PEEK_EASE = 'cubic-bezier(0.2, 0.9, 0.3, 1.2)';
+export const PEEK_LEFT = 54;
 
-/** How long the ring lasts on a card a feed chip took the reader to. */
-export const PULSE_MS = 1500;
+/** The hidden card turning over at the end. */
+export const CARD_TURN_MS = 800;
+export const CARD_TURN_EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
 
-/** The points total rolls to its new value over this long. */
-export const ROLL_MS = 450;
+/** The score counts up from nought over this long, easing out, when the
+ *  game ends on the page. A finished game opened later just shows it. */
+export const SCORE_COUNT_MS = 1100;
 
-/** What was spent floats up off the total and fades. */
-export const SPEND_FLOAT_MS = 1100;
-export const SPEND_FLOAT_KEYFRAMES: Keyframe[] = [
-  { opacity: 0, transform: 'translateY(4px)' },
-  { opacity: 1, transform: 'translateY(-8px)', offset: 0.25 },
-  { opacity: 0, transform: 'translateY(-24px)' },
-];
-
-/** A wrong guess, and a loss, shake the panel. */
-export const SHAKE_MS = 420;
-export const SHAKE_KEYFRAMES: Keyframe[] = [0, -9, 8, -5, 3, 0].map((x) => ({
-  transform: `translateX(${x}px)`,
-}));
-
-/** The curve things land on with a little bounce: the answer popping
- *  into its place, and a new name. */
-export const BOUNCE_EASE = 'cubic-bezier(0.2, 0.9, 0.3, 1.2)';
-
-/** The answer pops into its place at the end. */
-export const ANSWER_POP_MS = 460;
-export const ANSWER_POP_KEYFRAMES: Keyframe[] = [
-  { opacity: 0, transform: 'scale(0.86)' },
-  { opacity: 1, transform: 'scale(1)' },
-];
-
-/** A solve's score rises over the answer, after a beat, and is gone after
- *  SCORE_SHOWN_MS. */
-export const SCORE_RISE_MS = 1900;
-export const SCORE_RISE_DELAY_MS = 650;
-export const SCORE_SHOWN_MS = 3000;
-export const SCORE_RISE_KEYFRAMES: Keyframe[] = [
-  { opacity: 0, transform: 'translateY(10px) scale(0.8)' },
-  { opacity: 1, transform: 'translateY(0) scale(1.08)', offset: 0.2 },
-  { opacity: 1, transform: 'translateY(-8px) scale(1)', offset: 0.75 },
-  { opacity: 0, transform: 'translateY(-26px) scale(1)' },
-];
-
-/** A solve bursts into confetti from the answer this long after the end
- *  is drawn, on the beat of the answer's pop and the score's rise. The
- *  map may still be gliding to the answer then — a smooth scroll across
- *  a few thousand pixels of rows takes a second or more — so the burst
- *  does not stay where the card was when it began: it follows the card
- *  wherever the scroll carries it (burstShift). */
-export const CONFETTI_AFTER_MS = 560;
-export const CONFETTI_MS = 2400;
-export const CONFETTI_PIECES = 150;
-export const CONFETTI_COLOURS: Record<Theme, readonly string[]> = {
-  dark: ['#b69cff', '#ffd166', '#7ad7ff', '#ff86b1', '#86e39a', '#ffffff'],
-  light: ['#6b3fe4', '#e0a100', '#1c9ad6', '#e24a86', '#2fa84f', '#3a2f8f'],
-};
-
-/** How far the confetti is drawn from where it burst, so it stays on the
- *  answer's card: the card's centre now, on the screen, less the burst's
- *  origin, which was the card's centre when it burst. The pieces fly in
- *  the burst's own frame and the whole of it is carried by this, so the
- *  map gliding on to the card after the burst, or the reader scrolling
- *  during it, takes the confetti along. Nothing moves once the card is
- *  gone. */
-export function burstShift(
-  origin: { x: number; y: number },
-  card: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'> | null,
-): { dx: number; dy: number } {
-  if (!card) return { dx: 0, dy: 0 };
-  return { dx: card.left + card.width / 2 - origin.x, dy: card.top + card.height / 2 - origin.y };
+/** The score `elapsed` ms into its count: ease-out cubic, landing on the
+ *  score itself. */
+export function countUp(score: number, elapsed: number): number {
+  const p = Math.min(1, Math.max(0, elapsed / SCORE_COUNT_MS));
+  return Math.round(score * (1 - Math.pow(1 - p, 3)));
 }
 
-/** The result replaces the play panel this long after the end, once the
- *  answer has landed and the map has turned; its parts come in one after
- *  another while it is fresh. */
-export const RESULTS_AFTER_MS = 1300;
-export const RESULTS_FRESH_MS = 2600;
-export const RESULTS_IN_MS = 460;
-export function resultsDelay(i: number): number {
-  return 60 + i * 80;
-}
+/** How long "Sure? Show it" waits for its second press before it goes
+ *  back to Show the answer. */
+export const REVEAL_CONFIRM_MS = 3500;
 
-/** The result's numbers count up this long. */
-export const COUNT_UP_MS = 900;
+/** The Movies sheet on a phone: 90% of the visual viewport tall, closed
+ *  by a drag of its top edge past 90px, and otherwise springing back. */
+export const SHEET_PHONE_SHARE = 0.9;
+export const SHEET_CLOSE_PX = 90;
+export const SHEET_SPRING_MS = 250;
+export const SHEET_SPRING_EASE = 'cubic-bezier(0.2, 0.9, 0.3, 1)';
 
-/** The intro arriving: the screen fades in, and its parts rise into place
- *  one after another. */
-export const INTRO_IN_MS = 240;
-export const INTRO_PART_MS = 520;
-export function introDelay(i: number): number {
-  return 80 + i * 70;
-}
-
-/** The intro leaving, before the game starts or the rules close: it
- *  fades up and away, quickly. */
-export const INTRO_OUT_MS = 260;
-export const INTRO_OUT_EASE = 'cubic-bezier(0.4, 0, 1, 1)';
-export const INTRO_OUT_KEYFRAMES: Keyframe[] = [
-  { opacity: 1, transform: 'scale(1)' },
-  { opacity: 0, transform: 'scale(1.03)' },
-];
-
-/** The intro's cards and the glow under Play breathe while it is up. */
-export const FAN_MIDDLE_MS = 1900;
-export const FAN_LEFT_MS = 2300;
-export const FAN_RIGHT_MS = 2100;
-export const GLOW_MS = 1300;
-
-/** While the intro is up, a blank card behind it now and then starts to
- *  turn over and thinks better of it. */
-export const TWINKLE_EVERY_MS = 750;
-export const TWINKLE_MS = 760;
-export const TWINKLE_EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
-export const TWINKLE_KEYFRAMES: Keyframe[] = [
-  { transform: 'rotateY(0deg)' },
-  { transform: 'rotateY(34deg)' },
-  { transform: 'rotateY(0deg)' },
-];
-
-/** A new name lands with a bounce. */
-export const NAME_BOUNCE_MS = 420;
-
-/** How long the guess list stays after the field loses the focus, so a
+/** How long the results list stays after the field loses the focus, so a
  *  press on a row lands before the list goes. */
 export const LIST_CLOSE_MS = 120;
 
@@ -1565,5 +1466,35 @@ export const LIST_CLOSE_MS = 120;
  *  header's search waits as long. */
 export const SEARCH_WAIT_MS = 250;
 
-/** The most guesses the list offers. */
-export const MAX_SUGGESTIONS = 6;
+// ---- touch ----
+
+/** Every control's hit area is at least 44px, even where it looks smaller,
+ *  through a transparent ::before on the control, set this far out
+ *  (inset, vertical then horizontal). The stylesheet's rules are checked
+ *  against these. */
+export const HIT_INSETS = {
+  /** A wrong guess's chip, 26px tall. */
+  triedChip: '-9px -3px',
+  /** Show the answer, 32px. */
+  showAnswer: '-6px 0',
+  /** A fact for sale, 34px. */
+  fact: '-5px -3px',
+  /** A shown row's Movies button, 34px. */
+  movies: '-5px -2px',
+  /** Next name, 36px. */
+  next: '-4px 0',
+  /** A leaderboard tab, 30px. */
+  tab: '-7px 0',
+} as const;
+
+/** The Movies sheet's chips are this tall on a phone, a finger's size
+ *  without a hit area of their own. */
+export const SHEET_CHIP_PHONE_H = 40;
+
+/** A landscape phone: under 520px tall and wider than tall. The guess bar
+ *  becomes a 340px column on the right of the cast. */
+export const LANDSCAPE_MAX_H = 520;
+export const LANDSCAPE_QUERY = `(max-height: ${LANDSCAPE_MAX_H - 0.02}px) and (orientation: landscape)`;
+export function isLandscapePhone(width: number, height: number): boolean {
+  return height < LANDSCAPE_MAX_H && width > height;
+}

@@ -641,13 +641,13 @@ const dailyTitle = "Daily · Cinedikt"
 // isDailyPath in web/src/movieParam.ts reads it.
 const dailyPath = "/daily"
 
-// What a preview of Daily's link says: the game by its name, Point
-// Blank, which GAME_NAME in web/src/daily.ts is the page's own copy of,
-// and the two must agree. The card stays the site's own: a picture of
-// the day's map would give the answer away.
+// What a preview of Daily's link says: the game by its name, Name Drop,
+// which GAME_NAME in web/src/daily.ts is the page's own copy of, and the
+// two must agree. The card stays the site's own: a picture of the day's
+// movie, or of anyone in it, would give the answer away.
 const (
-	dailyShareTitle = "Cinedikt Daily: Point Blank"
-	dailyShareText  = "One hidden movie a day. Every movie on its map shares an actor or director with it."
+	dailyShareTitle = "Cinedikt Daily: Name Drop"
+	dailyShareText  = "One hidden movie a day. Its cast shows up one name at a time."
 )
 
 // nameDaily names Daily in the tags a scraper reads: its tab title, a

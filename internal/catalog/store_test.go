@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -175,6 +176,54 @@ func TestLoadKeepsOnlyMoviesAndTheirPeople(t *testing.T) {
 	}
 	if tvPeople != 0 {
 		t.Errorf("%d people known only from television were stored", tvPeople)
+	}
+}
+
+// TestARuntimeIsLoadedOrNull: minutes where IMDb has them, null where
+// it writes \N, never a zero.
+func TestARuntimeIsLoadedOrNull(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	loadFixture(t, s)
+	got := map[string]*int{}
+	rows, err := s.pool.Query(ctx, `SELECT tconst, runtime_minutes FROM catalog_next.titles`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var minutes *int
+		if err := rows.Scan(&id, &minutes); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = minutes
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]int{"tt0133093": 136, "tt0234215": 138, "tt0111161": 142, "tt0000002": 88, "tt0000003": 70} {
+		if got[id] == nil || *got[id] != want {
+			t.Errorf("%s runs %v minutes, want %d", id, got[id], want)
+		}
+	}
+	if m, ok := got["tt0000001"]; !ok || m != nil {
+		t.Errorf("the film IMDb has no runtime for runs %v (%v), want null", m, ok)
+	}
+}
+
+// TestTitleBasicsMustHaveARuntime column: a file without one is not the
+// file the import knows, and is refused rather than loaded without it.
+func TestTitleBasicsMustHaveARuntime(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if err := s.ResetStaging(ctx); err != nil {
+		t.Fatal(err)
+	}
+	old := "tconst\ttitleType\tprimaryTitle\toriginalTitle\tisAdult\tstartYear\tendYear\tgenres\n" +
+		"tt0133093\tmovie\tThe Matrix\tThe Matrix\t0\t1999\t\\N\tAction,Sci-Fi"
+	if _, _, err := s.LoadTitles(ctx, quietLogger(), gzipped(t, old)); err == nil || !strings.Contains(err.Error(), "runtimeMinutes") {
+		t.Errorf("a title.basics with no runtimes: %v", err)
 	}
 }
 

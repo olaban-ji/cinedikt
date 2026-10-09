@@ -147,12 +147,11 @@ describe('the theme tokens', () => {
     // header lying over the map pushes the pinned year labels; the
     // --trailer- ones are an open trailer player's measurements, which
     // trailer.ts works out; --syn-tr is the panel synopsis's transition,
-    // timed for whatever is changing it (synopsis.ts); --tone-ink is what
-    // is written on a Daily leaderboard avatar's --tone (daily.ts's
-    // avatarColours).
+    // timed for whatever is changing it (synopsis.ts). --tone is a
+    // person's colour (personColour.ts), and on the Daily a person's or a
+    // wrong guess's warmth (daily.ts's toneStyle).
     const inline = new Set([
       '--tone',
-      '--tone-ink',
       '--swatch-r',
       '--i',
       '--at',
@@ -168,14 +167,30 @@ describe('the theme tokens', () => {
       '--trailer-well',
       '--trailer-origin',
       '--syn-tr',
+      // The visual viewport's top and height, which the Daily sets on the
+      // app's box so the guess bar rides above an on-screen keyboard.
+      '--vv-top',
+      '--vv-h',
     ]);
     // Set by the very rule that reads it: the sheet's wash is an oklch()
     // made from --h, which has to live in a custom property to ship as
     // written, and has one value per theme. A person's face is the same
     // drawing at three sizes: .cd-face and its parts read the size, the
     // photo's inset, the director's corner and the fade, which the face's
-    // own rules set (.cd-face-chip and the rest).
-    const local = new Set(['--wash', '--face', '--face-inset', '--face-r', '--face-fade']);
+    // own rules set (.cd-face-chip and the rest). Name Drop's hidden card
+    // is lit in white whatever the theme, as a poster is, and its sheen,
+    // edge, "?" and stand-in title's shadow are set on .cd-daily.
+    const local = new Set([
+      '--wash',
+      '--face',
+      '--face-inset',
+      '--face-r',
+      '--face-fade',
+      '--nd-sheen',
+      '--nd-edge',
+      '--nd-q',
+      '--nd-glow',
+    ]);
     const used = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]));
     const missing = [...used].filter((v) => !defined.has(v) && !inline.has(v) && !local.has(v));
     expect(missing).toEqual([]);

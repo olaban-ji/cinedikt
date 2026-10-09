@@ -3,10 +3,11 @@ package catalog
 // Cinedikt Daily's puzzles: the job that picks one for every day ahead,
 // and the reads of them.
 //
-// A day's answer is a well-known movie, its board the app's own map of
-// it with the answer hidden. What makes a fair answer and how its board
-// is dealt are internal/daily's to decide; this file reads the
-// candidates and each one's map, and keeps what was picked in
+// A day's answer is a well-known movie, its cast shown one name at a
+// time, and the Movies sheets the six's own movies, with the map's film
+// test and its cap. What makes a fair answer and what its puzzle holds
+// are internal/daily's to decide; this file reads the candidates, each
+// one's people and their movies, and keeps what was picked in
 // meta.daily_puzzles, copied whole, so nothing about a puzzle moves when
 // the catalog does.
 
@@ -16,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -54,6 +56,10 @@ type DailyJob struct {
 	Days int
 	// Now is the clock; nil is time.Now. A test moves it.
 	Now func() time.Time
+	// Client fetches the poster of a candidate the colour job has not
+	// reached, to work its colour out; nil is one with ColourFetch's
+	// deadline.
+	Client *http.Client
 }
 
 // Run is one pass.
@@ -121,7 +127,7 @@ func (j *DailyJob) Run(ctx context.Context) error {
 		picked++
 		// Never the answer, nor how far down the day's order it was:
 		// whoever reads the logs may want to play it too.
-		j.Logger.Info("daily puzzle picked", "day", daily.DayString(day), "no", p.No, "cards", len(p.Cards))
+		j.Logger.Info("daily puzzle picked", "day", daily.DayString(day), "no", p.No, "movies", len(p.Movies))
 	}
 	if picked > 0 || len(failed) > 0 {
 		j.Logger.Info("daily puzzles pass", "picked", picked, "failed", len(failed),
@@ -145,7 +151,7 @@ func (j *DailyJob) pick(ctx context.Context, day time.Time, no int, cands []dail
 		return nil, err
 	}
 	order := daily.Order(day, cands, recent)
-	p, err := j.Store.firstFair(ctx, j.Logger, no, day, order)
+	p, err := j.Store.firstFair(ctx, j.Logger, j.Client, no, day, order)
 	if errors.Is(err, errNoneFair) {
 		return nil, fmt.Errorf("catalog: none of %d candidates can be the daily answer for %s", len(order), daily.DayString(day))
 	}
@@ -156,18 +162,23 @@ func (j *DailyJob) pick(ctx context.Context, day time.Time, no int, cands []dail
 // puzzle.
 var errNoneFair = errors.New("catalog: no candidate makes a fair puzzle")
 
-// firstFair deals puzzle No. no on day from the first candidate in order
-// that makes a fair one, reading each one's map only when it is reached,
-// or is errNoneFair. It is the pick, for the job and for development's
-// Play again alike, so a day dealt again is held to every rule the day
-// was. logger, when there is one, hears why a candidate was passed over,
-// by its place in the order and never by name.
-func (s *Store) firstFair(ctx context.Context, logger *slog.Logger, no int, day time.Time, order []daily.Candidate) (*daily.Puzzle, error) {
+// firstFair makes puzzle No. no on day from the first candidate in order
+// that makes a fair one, reading each one's people and movies only when
+// it is reached, or is errNoneFair. It is the pick, for the job and for
+// development's Play again alike, so a day dealt again is held to every
+// rule the day was. logger, when there is one, hears why a candidate was
+// passed over, by its place in the order and never by name; client
+// fetches a poster whose colour is not known yet, nil being one with
+// ColourFetch's deadline.
+func (s *Store) firstFair(ctx context.Context, logger *slog.Logger, client *http.Client, no int, day time.Time, order []daily.Candidate) (*daily.Puzzle, error) {
+	if client == nil {
+		client = &http.Client{Timeout: ColourFetch}
+	}
 	for i, c := range order {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		p, err := s.dailyPuzzleOf(ctx, no, day, c)
+		p, err := s.dailyPuzzleOf(ctx, client, no, day, c)
 		var unfit daily.Unfit
 		if errors.As(err, &unfit) {
 			if logger != nil {
@@ -196,15 +207,46 @@ func (u unnamed) Error() string { return strings.ReplaceAll(u.err.Error(), u.id,
 
 func (u unnamed) Unwrap() error { return u.err }
 
+// ErrNoRuntimes is a live catalog imported before titles kept IMDb's
+// runtime, which the Length fact is. Nothing can be picked from it: every
+// candidate would be unfit, and the pass would say so of every day ahead
+// rather than once why. The next import brings the column, and the pass
+// after it picks as usual; until then the page answers "not-ready".
+var ErrNoRuntimes = errors.New("catalog: the catalog predates runtimes; the next import adds them")
+
+// hasRuntimes is whether the live catalog's titles keep runtimes.
+func (s *Store) hasRuntimes(ctx context.Context) (bool, error) {
+	var has bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		    SELECT 1 FROM information_schema.columns
+		    WHERE table_schema = $1 AND table_name = 'titles' AND column_name = 'runtime_minutes')`, Live).Scan(&has)
+	if err != nil {
+		return false, fmt.Errorf("catalog: look for runtimes: %w", err)
+	}
+	return has, nil
+}
+
 // dailyCandidates are the movies that could be an answer: the most voted
 // 250 of each era in the opening screen's pool, so every one is well
-// known and the eras are spread, each rated and with a poster, which
-// the end of the game shows. Nothing is asked of its synopsis: no clue
-// is a line of its text any more, so a movie OMDb has no plot for is as
-// fair an answer as any.
+// known and the eras are spread, each rated and with a poster, which the
+// end of the game shows and whose colour fills the hidden card until
+// then. Nothing is asked of its synopsis: no fact is a line of its text,
+// so a movie OMDb has no plot for is as fair an answer as any. A
+// candidate with no runtime or no colour yet is still one; the pick
+// decides (dailyPuzzleOf). ErrNoRuntimes before the catalog has runtimes
+// at all.
 func (s *Store) dailyCandidates(ctx context.Context) ([]daily.Candidate, error) {
+	has, err := s.hasRuntimes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !has {
+		return nil, ErrNoRuntimes
+	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.tconst, t.primary_title, t.start_year, r.average_rating::float8, p.released,
+		       coalesce(t.runtime_minutes, 0), coalesce(p.colour::text, ''), p.poster_url,
 		       f.era, t.genres, f.num_votes
 		FROM `+Live+`.first_run f
 		JOIN `+Live+`.titles t USING (tconst)
@@ -221,7 +263,8 @@ func (s *Store) dailyCandidates(ctx context.Context) ([]daily.Candidate, error) 
 	for rows.Next() {
 		var c daily.Candidate
 		var released *time.Time
-		if err := rows.Scan(&c.ID, &c.Title, &c.Year, &c.Rating, &released, &c.Era, &c.Genres, &c.Votes); err != nil {
+		if err := rows.Scan(&c.ID, &c.Title, &c.Year, &c.Rating, &released, &c.Length, &c.Colour, &c.Poster,
+			&c.Era, &c.Genres, &c.Votes); err != nil {
 			return nil, fmt.Errorf("catalog: scan daily candidate: %w", err)
 		}
 		c.MD = monthDay(released)
@@ -239,79 +282,138 @@ func monthDay(released *time.Time) int {
 	return int(released.Month())*100 + released.Day()
 }
 
-// dailyPuzzleOf reads a candidate's people and map and deals its
-// puzzle, or says, as daily.Unfit, why it cannot be one. The map is the
-// app's own, peopleOn and spine, so the board is exactly the map a
-// reader would open, with the same film test and the same cap.
-func (s *Store) dailyPuzzleOf(ctx context.Context, no int, day time.Time, c daily.Candidate) (*daily.Puzzle, error) {
+// chipDirector is peopleOn's role for a director: anyone in the crew's
+// directors or credited as one, though they acted in it too.
+const chipDirector = "director"
+
+// dailyPuzzleOf reads a candidate's people and their movies and makes
+// its puzzle, or says, as daily.Unfit, why it cannot be one. The people
+// are the app's own chip row (peopleOn), billed cast in billing order and
+// directors in crew order, so the six are the six a reader would see on
+// its map, and someone who directed it is never one of them. What is
+// cheap to refuse on is refused before what is not: the runtime, then
+// the people, then the colour, which may mean fetching the poster, then
+// the movies, of which each of the six needs daily.MinSheet besides the
+// answer.
+func (s *Store) dailyPuzzleOf(ctx context.Context, client *http.Client, no int, day time.Time, c daily.Candidate) (*daily.Puzzle, error) {
+	// Build says the same, as it says the rest, but saying it here saves
+	// reading what could never make a puzzle.
+	if c.Length <= 0 {
+		return nil, daily.Unfit("it has no runtime")
+	}
 	people, _, err := s.peopleOn(ctx, c.ID)
 	if err != nil {
 		return nil, err
 	}
-	slots := make([]daily.Slot, len(people))
-	directors, cast := 0, 0
+	ids := make([]string, len(people))
+	var cast, directors []daily.Named
 	for i, p := range people {
-		slots[i] = daily.Slot{ID: p.ID, Name: p.Name, Role: p.Role}
-		if p.Role == daily.RoleDirector {
-			directors++
+		ids[i] = p.ID
+		if p.Role == chipDirector {
+			directors = append(directors, daily.Named{ID: p.ID, Name: p.Name})
 		} else {
-			cast++
+			cast = append(cast, daily.Named{ID: p.ID, Name: p.Name})
 		}
 	}
-	// Build says the same, but saying it here saves reading a map that
-	// could never be a board.
-	if directors < daily.MinDirectors || cast < daily.MinCast {
-		return nil, daily.Unfit(fmt.Sprintf("it has %d directors and %d billed cast", directors, cast))
+	if len(directors) < daily.MinDirectors || len(cast) < daily.MinCast {
+		return nil, daily.Unfit(fmt.Sprintf("it has %d directors and %d billed cast", len(directors), len(cast)))
 	}
-	spine, err := s.spine(ctx, c.ID, people)
+	if c.Colour, err = s.candidateColour(ctx, client, c); err != nil {
+		return nil, err
+	}
+	if !daily.ColourOK(c.Colour) {
+		return nil, daily.Unfit("its poster has no colour")
+	}
+	six := make([]string, daily.MinCast)
+	for i, p := range cast[:daily.MinCast] {
+		six[i] = p.ID
+	}
+	films, err := s.sheetFilms(ctx, c.ID, six, ids)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, len(spine))
-	for i, row := range spine {
-		ids[i] = row[0].(string)
+	return daily.Build(no, day, c, cast, directors, films)
+}
+
+// candidateColour is a candidate's poster colour: the colour job's, or,
+// for one it has not reached, worked out now from the poster just as the
+// job would, at the size it uses and then the address kept, and kept for
+// it. Empty when neither picture can be read: the candidate is passed
+// over, and may be an answer another day, once the job has it.
+func (s *Store) candidateColour(ctx context.Context, client *http.Client, c daily.Candidate) (string, error) {
+	if c.Colour != "" {
+		return c.Colour, nil
 	}
-	named, err := s.titlesAndVotes(ctx, ids)
+	target := PosterAt(c.Poster, colourWidth)
+	hex, err := PosterColour(ctx, client, target)
+	if err != nil && target != c.Poster && ctx.Err() == nil {
+		hex, err = PosterColour(ctx, client, c.Poster)
+	}
 	if err != nil {
-		return nil, err
+		// Not the error itself, which names the poster's address and so
+		// the movie: only that there is no colour.
+		return "", ctx.Err()
 	}
-	films := make([]daily.MapFilm, 0, len(spine))
-	for _, row := range spine {
-		id := row[0].(string)
-		f := daily.MapFilm{ID: id, Title: named[id].title, Year: row[1].(int), MD: row[3].(int), Votes: named[id].votes, People: row[4].([]int)}
-		if score, ok := row[2].(float64); ok {
-			f.Rating = &score
-		}
-		films = append(films, f)
+	if err := s.saveColour(ctx, c.ID, hex); err != nil {
+		return "", fmt.Errorf("catalog: keep a candidate's colour: %w", err)
 	}
-	return daily.Build(no, day, c, slots, films)
+	return hex, nil
 }
 
-type titleVotes struct {
-	title string
-	votes int
-}
-
-// titlesAndVotes is the title and vote count of each movie: what a card
-// is called, and how well known it is, which the spine leaves out.
-func (s *Store) titlesAndVotes(ctx context.Context, ids []string) (map[string]titleVotes, error) {
+// sheetFilms are the movies the six's Movies sheets are made from: each
+// one's daily.MaxSheet most voted, as the map caps a spine, the answer
+// first among each one's, read together, so a movie in one's top that
+// another of the six is on below their own cap is read once, for the
+// first. daily.Build orders each one's the same way to keep whose sheets
+// a movie is on, so it is on no sheet whose cap it missed. Every one is
+// rated and passes the map's film test, with which of the answer's
+// people are credited on it, all of them rather than only the six, by
+// the credits a map counts (actor, actress or director, and the crew's
+// directors), so a close relative can be told.
+func (s *Store) sheetFilms(ctx context.Context, answer string, six, people []string) ([]daily.MapFilm, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.tconst, t.primary_title, coalesce(r.num_votes, 0)
-		FROM `+Live+`.titles t
-		LEFT JOIN `+Live+`.ratings r USING (tconst)
-		WHERE t.tconst = ANY($1)`, ids)
+		WITH credits AS (
+		    SELECT pr.tconst, pr.nconst
+		    FROM `+Live+`.principals pr
+		    WHERE pr.nconst = ANY($2) AND pr.category IN ('actor', 'actress', 'director')
+		    UNION
+		    SELECT d.tconst, d.nconst
+		    FROM `+Live+`.directors d
+		    WHERE d.nconst = ANY($2)
+		), who AS (
+		    SELECT tconst, array_agg(nconst ORDER BY nconst) AS people
+		    FROM credits
+		    GROUP BY tconst
+		), capped AS (
+		    SELECT c.tconst,
+		           row_number() OVER (PARTITION BY c.nconst
+		                              ORDER BY (c.tconst = $3) DESC, r.num_votes DESC, c.tconst) AS n
+		    FROM credits c
+		    JOIN `+Live+`.titles t USING (tconst)
+		    JOIN `+Live+`.ratings r USING (tconst)
+		    LEFT JOIN meta.posters p USING (tconst)
+		    WHERE c.nconst = ANY($1) AND `+gridFilm+`
+		)
+		SELECT t.tconst, t.primary_title, t.start_year, r.average_rating::float8, p.released, t.genres,
+		       r.num_votes, who.people
+		FROM (SELECT DISTINCT tconst FROM capped WHERE n <= $4) k
+		JOIN who USING (tconst)
+		JOIN `+Live+`.titles t USING (tconst)
+		JOIN `+Live+`.ratings r USING (tconst)
+		LEFT JOIN meta.posters p USING (tconst)`, six, people, answer, daily.MaxSheet)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: titles and votes: %w", err)
+		return nil, fmt.Errorf("catalog: daily sheets for %s: %w", answer, err)
 	}
 	defer rows.Close()
-	out := make(map[string]titleVotes, len(ids))
+	var out []daily.MapFilm
 	for rows.Next() {
-		var id string
-		var tv titleVotes
-		if err := rows.Scan(&id, &tv.title, &tv.votes); err != nil {
-			return nil, fmt.Errorf("catalog: scan title and votes: %w", err)
+		var f daily.MapFilm
+		var released *time.Time
+		if err := rows.Scan(&f.ID, &f.Title, &f.Year, &f.Rating, &released, &f.Genres, &f.Votes, &f.People); err != nil {
+			return nil, fmt.Errorf("catalog: scan daily sheet movie: %w", err)
 		}
-		out[id] = tv
+		f.MD = monthDay(released)
+		out = append(out, f)
 	}
 	return out, rows.Err()
 }
@@ -386,8 +488,9 @@ func (s *Store) putDailyPuzzle(ctx context.Context, p *daily.Puzzle) (bool, erro
 	}
 	tag, err := s.pool.Exec(ctx, `
 		INSERT INTO meta.daily_puzzles
-		    (no, day, answer, title, year, rating, md, people, genres, cards, start, era, genre, picked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+		    (no, day, answer, title, year, rating, md, length, colour, genres, directors, billed, movies,
+		     era, genre, picked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
 		ON CONFLICT (day) DO NOTHING`,
 		append([]any{p.No, p.Day}, cols...)...)
 	if err != nil {
@@ -399,24 +502,33 @@ func (s *Store) putDailyPuzzle(ctx context.Context, p *daily.Puzzle) (bool, erro
 // puzzleColumns is what a puzzle keeps besides its number and day, in
 // the columns' order from answer to genre.
 func puzzleColumns(p *daily.Puzzle) ([]any, error) {
-	people, err := json.Marshal(p.People)
-	if err != nil {
-		return nil, err
+	// A nil list is a SQL or JSON null, which the columns refuse; none
+	// is empty.
+	directors, billed, movies := p.Directors, p.Cast, p.Movies
+	if directors == nil {
+		directors = []daily.Named{}
 	}
-	cards, err := json.Marshal(p.Cards)
-	if err != nil {
-		return nil, err
+	if billed == nil {
+		billed = []daily.Billed{}
 	}
-	// A nil list is a SQL null, which the columns refuse; none is empty.
-	genres, start := p.Answer.Genres, p.Start
+	if movies == nil {
+		movies = []daily.Movie{}
+	}
+	var docs [3][]byte
+	for i, v := range []any{directors, billed, movies} {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		docs[i] = raw
+	}
+	genres := p.Answer.Genres
 	if genres == nil {
 		genres = []string{}
 	}
-	if start == nil {
-		start = []string{}
-	}
-	return []any{p.Answer.ID, p.Answer.Title, p.Answer.Year, p.Answer.Rating, p.Answer.MD,
-		people, genres, cards, start, p.Era, p.Genre}, nil
+	a := p.Answer
+	return []any{a.ID, a.Title, a.Year, a.Rating, a.MD, a.Length, a.Colour, genres,
+		docs[0], docs[1], docs[2], p.Era, p.Genre}, nil
 }
 
 // DailyPuzzle is the puzzle for a day, or ErrNotFound when none has been
@@ -432,23 +544,28 @@ func (s *Store) DailyPuzzleNo(ctx context.Context, no int) (*daily.Puzzle, error
 
 func (s *Store) dailyPuzzle(ctx context.Context, where string, arg any) (*daily.Puzzle, error) {
 	var p daily.Puzzle
-	var people, cards []byte
+	var directors, billed, movies []byte
+	a := &p.Answer
 	err := s.pool.QueryRow(ctx, `
-		SELECT no, day, answer, title, year, rating::float8, md, people, genres, cards, start, era, genre
+		SELECT no, day, answer, title, year, rating::float8, md, length, colour, genres, directors, billed, movies,
+		       era, genre
 		FROM meta.daily_puzzles WHERE `+where, arg).
-		Scan(&p.No, &p.Day, &p.Answer.ID, &p.Answer.Title, &p.Answer.Year, &p.Answer.Rating, &p.Answer.MD,
-			&people, &p.Answer.Genres, &cards, &p.Start, &p.Era, &p.Genre)
+		Scan(&p.No, &p.Day, &a.ID, &a.Title, &a.Year, &a.Rating, &a.MD, &a.Length, &a.Colour, &a.Genres,
+			&directors, &billed, &movies, &p.Era, &p.Genre)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("catalog: daily puzzle %v: %w", arg, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("catalog: read daily puzzle %v: %w", arg, err)
 	}
-	if err := json.Unmarshal(people, &p.People); err != nil {
-		return nil, fmt.Errorf("catalog: decode daily puzzle %d's people: %w", p.No, err)
-	}
-	if err := json.Unmarshal(cards, &p.Cards); err != nil {
-		return nil, fmt.Errorf("catalog: decode daily puzzle %d's cards: %w", p.No, err)
+	for _, doc := range []struct {
+		what string
+		raw  []byte
+		into any
+	}{{"directors", directors, &p.Directors}, {"cast", billed, &p.Cast}, {"movies", movies, &p.Movies}} {
+		if err := json.Unmarshal(doc.raw, doc.into); err != nil {
+			return nil, fmt.Errorf("catalog: decode daily puzzle %d's %s: %w", p.No, doc.what, err)
+		}
 	}
 	p.Day = daily.Today(p.Day)
 	return &p, nil

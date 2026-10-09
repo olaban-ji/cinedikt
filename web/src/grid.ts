@@ -355,6 +355,61 @@ export function metricsFor(width: number, s: GridSettings, compact = width < 640
   };
 }
 
+/** A map laid out at sizes of its own rather than the page's: the Daily's
+ *  Movies sheet, one person's movies on a small map inside a panel. Every
+ *  number the layout spaces cards by is here, so nothing of the page's
+ *  map leaks into it. Left out, layoutGrid lays out at the map's own
+ *  sizes (metricsFor, GAP and the row padding beside it), exactly as it
+ *  always has.
+ *
+ *  A sized map is exactly as wide as it is given, never scrolled
+ *  sideways, and has no unrated column: pass settings with showUnrated
+ *  off, so a film with no rating is left off rather than stacked against
+ *  the rail. */
+export interface LayoutSizes {
+  cardW: number;
+  cardH: number;
+  /** The poster down the card's left side, inside its padding. */
+  posterW: number;
+  posterH: number;
+  railW: number;
+  /** Between cards, on both axes: the map's is GAP. */
+  gap: number;
+  /** A year's row above its first lane and below its last: the map's
+   *  are 12 and 6. */
+  padTop: number;
+  padBottom: number;
+  /** The extra room above a year more than one after the last: the
+   *  map's is 10. */
+  gapMark: number;
+  /** Clear of the rail before the lowest rating's card, and of the plot's
+   *  right edge after the highest's: the map's are 10 and 16. */
+  edgeLeft: number;
+  edgeRight: number;
+  /** Below the last row: the map's is 110, room for its floating
+   *  buttons. */
+  bottomPad: number;
+}
+
+/** The metrics for a sized map: the plot exactly `width`, no unrated
+ *  column, the rating running between the two edges. The small card,
+ *  so it never asks for the large card's named markers. */
+function sizedMetrics(width: number, s: LayoutSizes): Metrics {
+  return {
+    compact: true,
+    cardW: s.cardW,
+    cardH: s.cardH,
+    posterW: s.posterW,
+    posterH: s.posterH,
+    railW: s.railW,
+    plotW: width,
+    unratedW: 0,
+    titleLines: 2,
+    left: s.railW + s.cardW / 2 + s.edgeLeft,
+    right: width - s.cardW / 2 - s.edgeRight,
+  };
+}
+
 export function clampRating(r: number): number {
   return Math.min(Math.max(r, R_LO), R_HI);
 }
@@ -507,8 +562,8 @@ export function warmSpan(scrollTop: number, viewH: number): { top: number; botto
 
 /** How far the reader can scroll before a new band of cards is mounted.
  *  Well inside the screen that is already warm, so the mount happens
- *  before those cards reach the glass. The map and the Daily's board
- *  both move their warm band by it. */
+ *  before those cards reach the glass. The map moves its warm band by
+ *  it, and the Daily's Movies sheet the band of posters it loads. */
 export const WARM_STEP = 64;
 
 /** The top of the screen in the plot, `lift` being how far down the
@@ -519,15 +574,16 @@ export function warmTop(scrollTop: number, lift: number): number {
 
 /** A year's band across the plot: striped every other row, lit for the
  *  searched film's year, ruled for a decade; or the break's. The map and
- *  the Daily's board draw the same bands, so a modifier added here
- *  reaches both. */
+ *  the Daily's Movies sheet draw the same bands, so a modifier added
+ *  here reaches both. */
 export function bandClass(r: Row): string {
   if (r.isBreak) return 'cd-band cd-band-break';
   return `cd-band${r.index % 2 === 1 ? ' cd-band-odd' : ''}${r.anchorYear ? ' cd-band-anchor' : ''}${r.decade ? ' cd-band-decade' : ''}`;
 }
 
 /** A year's label on the rail: a decade's numeral larger, the searched
- *  film's year lit. For the map and the Daily's board alike. */
+ *  film's year lit. The map's: the Daily's Movies sheet labels its
+ *  years inside their rows, at its own small size. */
 export function railYearClass(r: Row): string {
   return `cd-rail-year${r.decade ? ' cd-rail-decade' : ''}${r.anchorYear ? ' cd-rail-anchor' : ''}`;
 }
@@ -548,6 +604,10 @@ const BOTTOM_PAD = 110;
 
 /** Extra room above a row whose year is more than one after the last. */
 const GAP_MARK = 10;
+
+/** A year's row above its first lane of cards, and below its last. */
+const ROW_PAD_TOP = 12;
+const ROW_PAD_BOTTOM = 6;
 
 /** The height of the break row between the searched film and a year
  *  range that does not hold it. */
@@ -680,8 +740,17 @@ export function layoutGrid(
   lit?: (f: SpineFilm) => boolean,
   /** The compact card, for a phone or a landscape phone. See metricsFor. */
   compact?: boolean,
+  /** Sizes of its own, for a small map that is not the page's (see
+   *  LayoutSizes). They replace the card, the rail and every gap, and
+   *  `compact` is not read. */
+  sizes?: LayoutSizes,
 ): GridLayout {
-  const m = metricsFor(width, settings, compact);
+  const m = sizes ? sizedMetrics(width, sizes) : metricsFor(width, settings, compact);
+  const gap = sizes?.gap ?? GAP;
+  const padTop = sizes?.padTop ?? ROW_PAD_TOP;
+  const padBottom = sizes?.padBottom ?? ROW_PAD_BOTTOM;
+  const gapMark = sizes?.gapMark ?? GAP_MARK;
+  const bottomPad = sizes?.bottomPad ?? BOTTOM_PAD;
   // The rating floor is not a filter, it is a highlight: every film the
   // page holds is laid out, and the floor only decides what is lit. The
   // unrated column and the year range are a different thing — turning
@@ -740,7 +809,7 @@ export function layoutGrid(
       previous = year;
     }
     // A jump in the years is worth seeing, whichever way the rows run.
-    if (previous !== null && Math.abs(year - previous) > 1) top += GAP_MARK;
+    if (previous !== null && Math.abs(year - previous) > 1) top += gapMark;
     previous = year;
 
     // The whole axis runs one way. If the newest year is at the top,
@@ -761,16 +830,16 @@ export function layoutGrid(
         f.rating == null
           ? m.railW + 8
           : Math.round(xOf(f.rating, m) - m.cardW / 2);
-      const { lane, left } = fitLane(lanes, ideal, m.cardW, floor);
+      const { lane, left } = fitLane(lanes, ideal, m.cardW, floor, gap);
       lanes[lane] = left + m.cardW;
       floor = lane;
       placedHere.push({ film: f, left, top: 0, lane });
     }
 
-    const height = 12 + Math.max(lanes.length, 1) * (m.cardH + GAP) + 6;
+    const height = padTop + Math.max(lanes.length, 1) * (m.cardH + gap) + padBottom;
     const rowTop = top;
     for (const p of placedHere) {
-      cards.push({ ...p, top: rowTop + 12 + p.lane * (m.cardH + GAP) });
+      cards.push({ ...p, top: rowTop + padTop + p.lane * (m.cardH + gap) });
     }
     rows.push({
       year,
@@ -790,7 +859,7 @@ export function layoutGrid(
     cards,
     lines: gridLines(m),
     plotW: m.plotW,
-    plotH: top + BOTTOM_PAD,
+    plotH: top + bottomPad,
     unratedEdge: m.railW + m.unratedW,
     axisTitleLeft: m.railW + m.unratedW + AXIS_TITLE_GAP,
     anchor: cards.find((c) => c.film.isAnchor) ?? null,
@@ -975,13 +1044,16 @@ export function fitLane(
    *  rating drops into an early lane and sits above films from months
    *  before it — an order the row appears to have and does not. */
   from = 0,
+  /** The room kept between two cards in a lane: the map's GAP, or a
+   *  sized map's own (LayoutSizes). */
+  gap = GAP,
 ): { lane: number; left: number } {
   for (let i = from; i < lanes.length; i++) {
-    if (ideal >= lanes[i] + GAP) return { lane: i, left: ideal };
+    if (ideal >= lanes[i] + gap) return { lane: i, left: ideal };
   }
   const nudge = Math.round(cardW * NUDGE_RATIO);
   for (let i = from; i < lanes.length; i++) {
-    if (lanes[i] + GAP - ideal <= nudge) return { lane: i, left: lanes[i] + GAP };
+    if (lanes[i] + gap - ideal <= nudge) return { lane: i, left: lanes[i] + gap };
   }
   return { lane: lanes.length, left: ideal };
 }

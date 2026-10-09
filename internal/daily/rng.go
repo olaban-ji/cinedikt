@@ -2,11 +2,11 @@ package daily
 
 import "hash/fnv"
 
-// Rand is a small seeded generator, mulberry32, the one the prototype
-// draws its stand-in boards with. A puzzle's shuffles are seeded from
-// its day, so picking the same day again from the same catalog picks
-// the same movie and deals the same card ids: a pick that is retried
-// after a failure, or run by a second process, does not choose afresh.
+// Rand is a small seeded generator, mulberry32, the one the prototypes
+// draw with. A day's order of candidates is seeded from its day, so
+// picking the same day again from the same catalog picks the same movie:
+// a pick that is retried after a failure, or run by a second process,
+// does not choose afresh.
 //
 // It is deliberately not math/rand: Go keeps no promise that a seeded
 // shuffle there gives the same order in the next release, and a puzzle

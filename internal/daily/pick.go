@@ -7,18 +7,25 @@ import (
 	"time"
 )
 
-// Choosing a day's puzzle. The catalog reads the candidates and each
-// one's map; what makes a movie a fair answer, and how its board is
-// dealt, is decided here.
+// Choosing a day's puzzle. The catalog reads the candidates, each one's
+// people and their movies; what makes a movie a fair answer, and what its
+// puzzle holds, is decided here.
 
 // Candidate is a movie that could be a day's answer, with what the pick
-// needs to know before it reads the movie's map.
+// needs to know before it reads the movie's people.
 type Candidate struct {
 	ID     string
 	Title  string
 	Year   int
 	Rating float64
 	MD     int
+	// Length is IMDb's runtime in minutes, 0 when it has none.
+	Length int
+	// Colour is what the poster averages to, "#rrggbb", or empty while
+	// the colour job has not reached it; Poster is the poster's address,
+	// which the pick works the colour out from then.
+	Colour string
+	Poster string
 	// Era is the movie's era in the opening screen's pool, the most
 	// voted 250 of each: the lower year of its band.
 	Era    int
@@ -89,85 +96,190 @@ func OrderBy(r *Rand, cands []Candidate, recent Recent) []Candidate {
 	return out
 }
 
-// MapFilm is one movie on a candidate's map, as the app's own map has
-// it, with its title and votes.
+// MapFilm is one movie of the six's, as the catalog reads it for the
+// Movies sheets: what a card says, how well known it is, and which of
+// the answer's people it credits, by id. Every one is rated and passes
+// the map's film test.
 type MapFilm struct {
 	ID     string
 	Title  string
 	Year   int
-	Rating *float64
+	Rating float64
 	MD     int
+	Genres []string
 	Votes  int
-	// People are the candidate's people on it, as slots.
-	People []int
+	// People are the answer's people it credits, cast and directors and
+	// not only the six, as actor, actress or director: enough to tell a
+	// close relative.
+	People []string
 }
 
-// The least a map must offer to be a day's board.
+// What a candidate must have to be a day's answer.
 const (
-	// MinCards is enough cards that the board is a search rather than a
-	// guess between a handful.
-	MinCards = 40
-	// MinDirectors and MinCast are enough people that the Director and
-	// Actor clues each have something to sell, and the three starting
-	// cards can come through three different actors.
+	// MinDirectors is enough for the Director fact to sell somebody.
 	MinDirectors = 1
-	MinCast      = 3
-	// StartCards is how many cards are face up from the beginning.
-	StartCards = 3
+	// MinCast is the six the game shows: a movie with fewer billed cast
+	// has no star to work up to.
+	MinCast = Slots
+	// MaxSheet caps each of the six's movies on the Movies sheets at
+	// their most voted, as MaxSpine caps a map: a career is wider than a
+	// screen, and the most voted survive. The answer always makes it.
+	MaxSheet = 400
+	// MinSheet is how many movies besides the answer each of the six's
+	// sheet must hold. A sheet is free to open, and the sixth-billed's
+	// is open from Play: one holding only the answer, or the answer and
+	// a movie or two, would hand it over by elimination, where it is
+	// meant to sit among the cards unmarked.
+	MinSheet = 4
 )
 
-// Unfit is why a candidate cannot be a day's answer.
+// Unfit is why a candidate cannot be a day's answer. It never names the
+// candidate: whoever reads the logs may want to play it.
 type Unfit string
 
 func (u Unfit) Error() string { return "daily: " + string(u) }
 
-// Build deals a candidate's puzzle from its people and its map, or says
-// why it cannot be one.
+// Build makes a candidate's puzzle from its people and their movies, or
+// says why it cannot be one. cast is the answer's billed cast in billing
+// order, the star first, and directors its directors in crew order; a
+// person who both acted in it and directed it is a director, as the
+// app's chip row has them, so the Director fact never names a hidden
+// cast member. films are the six's movies (MapFilm).
 //
-// The board is every movie on the map that has a rating, the answer
-// left out. An unrated movie has no place on the rating axis the game
-// narrows on, so it is left off rather than parked in a column of its
-// own. The cards' ids are dealt after a shuffle seeded from the day, so
-// a card's number says nothing about how well known it is.
-func Build(no int, day time.Time, a Candidate, people []Slot, films []MapFilm) (*Puzzle, error) {
-	var directors, cast int
-	for _, s := range people {
-		if s.Role == RoleDirector {
-			directors++
-		} else {
-			cast++
-		}
-	}
-	if directors < MinDirectors {
+// The six are the first six of cast, kept in reveal order: sixth-billed
+// first, the star last. Each one's sheet is their own MaxSheet most
+// voted, the answer first and ties to the lower id, as sheetFilms orders
+// them, and must hold MinSheet movies besides the answer. Each one's
+// "Also in" movie is the most voted of theirs that credits none of the
+// other five, is not the answer, and is not a close relative, which
+// would give the answer away; ties fall to the lower id, so a pick made
+// twice keeps the same one. The movies kept are those on someone's
+// sheet, sorted by year then id, so where a movie sits in the list says
+// nothing about how well known it is.
+func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []MapFilm) (*Puzzle, error) {
+	if len(directors) < MinDirectors {
 		return nil, Unfit("it has no director")
 	}
-	if cast < MinCast {
-		return nil, Unfit(fmt.Sprintf("it has %d billed cast, fewer than %d", cast, MinCast))
+	if len(cast) < MinCast {
+		return nil, Unfit(fmt.Sprintf("it has %d billed cast, fewer than %d", len(cast), MinCast))
 	}
-	cards := make([]Card, 0, len(films))
-	for _, f := range films {
-		if f.ID == a.ID || f.Rating == nil {
+	if a.Length <= 0 {
+		return nil, Unfit("it has no runtime")
+	}
+	if !ColourOK(a.Colour) {
+		return nil, Unfit("its poster has no colour")
+	}
+	six := make([]Billed, MinCast)
+	for i, c := range cast[:MinCast] {
+		six[MinCast-1-i] = Billed{ID: c.ID, Name: c.Name, Billing: i + 1}
+	}
+	slot := make(map[string]int, len(six))
+	for i, b := range six {
+		slot[b.ID] = i
+	}
+	directed := make(map[string]bool, len(directors))
+	for _, d := range directors {
+		directed[d.ID] = true
+	}
+	// from is the film each movie was made from, by index, nil for an
+	// answer made from the candidate.
+	movies := make([]Movie, 0, len(films)+1)
+	from := make([]*MapFilm, 0, len(films)+1)
+	answer := false
+	for i := range films {
+		f := &films[i]
+		m := Movie{ID: f.ID, Title: f.Title, Year: f.Year, Rating: f.Rating, MD: f.MD,
+			Genres: nonNilStrings(slices.Clone(f.Genres)), Cast: []int{}, Sheets: []int{}}
+		for _, id := range f.People {
+			if s, ok := slot[id]; ok {
+				m.Cast = append(m.Cast, s)
+			}
+			m.Dir = m.Dir || directed[id]
+		}
+		slices.Sort(m.Cast)
+		m.Cast = slices.Compact(m.Cast)
+		if len(m.Cast) == 0 {
 			continue
 		}
-		on := slices.Clone(f.People)
-		slices.Sort(on)
-		if on == nil {
-			on = []int{}
+		answer = answer || f.ID == a.ID
+		movies = append(movies, m)
+		from = append(from, f)
+	}
+	// The answer is on every one of the six's sheets. The catalog's read
+	// always has it; were it ever missing, its card is made from the
+	// candidate, crediting all six, so no sheet lacks it.
+	if !answer {
+		movies = append(movies, Movie{ID: a.ID, Title: a.Title, Year: a.Year, Rating: a.Rating, MD: a.MD,
+			Genres: nonNilStrings(slices.Clone(a.Genres)), Cast: []int{0, 1, 2, 3, 4, 5}, Sheets: []int{}, Dir: true})
+		from = append(from, nil)
+	}
+	// Each one's sheet is their own MaxSheet most voted. The catalog
+	// reads every one's top MaxSheet together, so a movie of someone's
+	// that is below their own cap can be there because another of the
+	// six is on it and their cap let it in: it goes on that one's sheet
+	// only. On the first's, with only them showing on its card, it would
+	// say that someone hidden is in it, and a sheet run past MaxSheet
+	// would say that such cards were there to find.
+	first := func(i int) int {
+		if movies[i].ID == a.ID {
+			return 0
 		}
-		cards = append(cards, Card{Film: f.ID, Title: f.Title, Year: f.Year, Rating: *f.Rating, MD: f.MD, Votes: f.Votes, People: on})
+		return 1
 	}
-	if len(cards) < MinCards {
-		return nil, Unfit(fmt.Sprintf("its map has %d rated movies, fewer than %d", len(cards), MinCards))
+	votes := func(i int) int {
+		if from[i] == nil {
+			return 0
+		}
+		return from[i].Votes
 	}
-	// Sorted first, so the deal depends on the day and the map alone.
-	slices.SortFunc(cards, func(x, y Card) int { return cmp.Compare(x.Film, y.Film) })
-	Shuffle(Seeded(DayString(day)+"/cards"), cards)
-	for i := range cards {
-		cards[i].ID = cardID(i + 1)
+	for s := range six {
+		var theirs []int
+		for i, m := range movies {
+			if slices.Contains(m.Cast, s) {
+				theirs = append(theirs, i)
+			}
+		}
+		slices.SortFunc(theirs, func(x, y int) int {
+			return cmp.Or(cmp.Compare(first(x), first(y)), cmp.Compare(votes(y), votes(x)), cmp.Compare(movies[x].ID, movies[y].ID))
+		})
+		for _, i := range theirs[:min(len(theirs), MaxSheet)] {
+			movies[i].Sheets = append(movies[i].Sheets, s)
+		}
 	}
-	start := Starts(cards)
-	if len(start) < StartCards {
-		return nil, Unfit("its map has no three starting cards through three different people")
+	// A movie on nobody's sheet is never shown, so it is not kept.
+	kept, keptFrom := make([]Movie, 0, len(movies)), make([]*MapFilm, 0, len(movies))
+	for i, m := range movies {
+		if len(m.Sheets) > 0 {
+			kept, keptFrom = append(kept, m), append(keptFrom, from[i])
+		}
+	}
+	movies, from = kept, keptFrom
+	for s := range six {
+		n := 0
+		for _, m := range movies {
+			if m.ID != a.ID && slices.Contains(m.Sheets, s) {
+				n++
+			}
+		}
+		if n < MinSheet {
+			return nil, Unfit(fmt.Sprintf("one of the six has %d other movies, fewer than %d", n, MinSheet))
+		}
+	}
+	also := make([]*MapFilm, len(six))
+	for i, m := range movies {
+		f := from[i]
+		if f == nil || f.ID == a.ID || len(m.Cast) != 1 || len(f.People) >= RelativeShared {
+			continue
+		}
+		if b := also[m.Cast[0]]; b == nil || f.Votes > b.Votes || (f.Votes == b.Votes && f.ID < b.ID) {
+			also[m.Cast[0]] = f
+		}
+	}
+	slices.SortFunc(movies, func(x, y Movie) int { return cmp.Or(cmp.Compare(x.Year, y.Year), cmp.Compare(x.ID, y.ID)) })
+	for i, f := range also {
+		if f != nil {
+			six[i].Also = &Also{ID: f.ID, Title: f.Title, Year: f.Year}
+		}
 	}
 	genre := ""
 	if len(a.Genres) > 0 {
@@ -178,43 +290,35 @@ func Build(no int, day time.Time, a Candidate, people []Slot, films []MapFilm) (
 		Day: Today(day),
 		Answer: Answer{
 			ID: a.ID, Title: a.Title, Year: a.Year, Rating: a.Rating, MD: a.MD,
-			Genres: nonNilStrings(slices.Clone(a.Genres)),
+			Length: a.Length, Colour: a.Colour, Genres: nonNilStrings(slices.Clone(a.Genres)),
 		},
-		People: people,
-		Cards:  cards,
-		Start:  start,
-		Era:    a.Era,
-		Genre:  genre,
+		Directors: slices.Clone(directors),
+		Cast:      six,
+		Movies:    movies,
+		Era:       a.Era,
+		Genre:     genre,
 	}, nil
 }
 
-// Starts are the starting cards: the least known cards on the map that
-// are not close relatives, each linked to the answer through people
-// none of the others is. Walking the cards from the fewest votes up and
-// taking each one whose people are all still unused does both: the
-// three show three different ways in, and none of them is a movie
-// everybody knows.
-func Starts(cards []Card) []string {
-	order := slices.Clone(cards)
-	slices.SortStableFunc(order, func(x, y Card) int {
-		return cmp.Or(cmp.Compare(x.Votes, y.Votes), cmp.Compare(x.Film, y.Film))
-	})
-	used := map[int]bool{}
-	var out []string
-	for _, c := range order {
-		if c.Relative() || len(c.People) == 0 {
-			continue
-		}
-		if slices.ContainsFunc(c.People, func(i int) bool { return used[i] }) {
-			continue
-		}
-		for _, i := range c.People {
-			used[i] = true
-		}
-		out = append(out, c.ID)
-		if len(out) == StartCards {
-			break
+// ColourOK is whether a colour is one the poster colour job writes:
+// "#rrggbb", in lower case.
+func ColourOK(c string) bool {
+	if len(c) != 7 || c[0] != '#' {
+		return false
+	}
+	for _, r := range c[1:] {
+		if !('0' <= r && r <= '9' || 'a' <= r && r <= 'f') {
+			return false
 		}
 	}
-	return out
+	return true
+}
+
+// nonNilStrings is a list as the API and the database want it: empty
+// rather than null.
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }

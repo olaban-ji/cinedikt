@@ -3,8 +3,8 @@ package daily
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +13,16 @@ import (
 var live = Live{
 	Posters: map[string]string{
 		"tt0133093": "https://img.example/matrix.jpg",
-		"tt0067433": "https://img.example/man-and-boy.jpg",
 		"tt0111257": "https://img.example/speed.jpg",
-		"tt0234215": "https://img.example/reloaded.jpg",
+		"tt0106977": "https://img.example/fugitive.jpg",
+		"tt0115736": "https://img.example/bound.jpg",
+		"tt0209144": "https://img.example/memento.jpg",
 	},
-	Photos: map[string]string{"nm0000206": "https://image.tmdb.org/t/p/w185/keanu.jpg"},
+	Photos: map[string]string{
+		"nm0000206": "https://image.tmdb.org/t/p/w185/keanu.jpg",
+		"nm0001592": "https://image.tmdb.org/t/p/w185/joe.jpg",
+		"nm0905154": "https://image.tmdb.org/t/p/w185/lana.jpg",
+	},
 }
 
 func rendered(t *testing.T, v any) string {
@@ -29,37 +34,11 @@ func rendered(t *testing.T, v any) string {
 	return string(raw)
 }
 
-// hidden fails the test when body names the answer, or names any card
-// the game has face down: by id or by title, as a JSON string, so "The
-// Matrix" is not mistaken for "The Matrix Reloaded".
-func hidden(t *testing.T, p *Puzzle, s *State, body, when string) {
-	t.Helper()
-	for _, secret := range []string{p.Answer.ID, p.Answer.Title} {
-		if strings.Contains(body, `"`+secret+`"`) {
-			t.Errorf("%s: the answer's %q is in %s", when, secret, body)
-		}
-	}
-	for _, c := range p.Cards {
-		if s != nil && s.Up(c.ID) {
-			continue
-		}
-		if s == nil && slices.Contains(p.Start, c.ID) {
-			continue
-		}
-		for _, secret := range []string{c.Film, c.Title} {
-			if strings.Contains(body, `"`+secret+`"`) {
-				t.Errorf("%s: face-down card %s's %q is in the body", when, c.ID, secret)
-			}
-		}
-	}
-}
-
-// yearSaid is everywhere body says year other than as a movie's own:
-// every number or string that is the year, by its path, unless it is
-// the "year" of an object with an "id", which is a card or a movie
-// saying its own year, as every card does and every guess may. The year
-// clue's entry has no id.
-func yearSaid(t *testing.T, body string, year int) []string {
+// said is every place body says value, by its path: a string equal to
+// it, or a number equal to it. A value an object with an "id" says as
+// its own "year" is skipped when skipOwnYear is set: a guess or an
+// "Also in" saying its own year, as a movie may.
+func said(t *testing.T, body string, value any, skipOwnYear bool) []string {
 	t.Helper()
 	var v any
 	if err := json.Unmarshal([]byte(body), &v); err != nil {
@@ -72,7 +51,7 @@ func yearSaid(t *testing.T, body string, year int) []string {
 		case map[string]any:
 			_, movie := x["id"]
 			for k, e := range x {
-				if !movie || k != "year" {
+				if !(skipOwnYear && movie && k == "year") {
 					walk(path+"."+k, e)
 				}
 			}
@@ -81,11 +60,11 @@ func yearSaid(t *testing.T, body string, year int) []string {
 				walk(fmt.Sprintf("%s[%d]", path, i), e)
 			}
 		case float64:
-			if x == float64(year) {
+			if n, ok := value.(float64); ok && x == n {
 				out = append(out, path)
 			}
 		case string:
-			if x == strconv.Itoa(year) {
+			if s, ok := value.(string); ok && x == s {
 				out = append(out, path)
 			}
 		}
@@ -95,297 +74,448 @@ func yearSaid(t *testing.T, body string, year int) []string {
 	return out
 }
 
-// yearHidden fails the test when a game says the answer's year anywhere
-// but the year clue's entry, or says it there before the clue is bought.
-func yearHidden(t *testing.T, p *Puzzle, game Game, when string) {
+// secretsKept fails the test when a game's body, before the end, says
+// anything it may not: the answer's id, title, year, rating, length,
+// poster or genres, a director before the Director fact, a hidden cast
+// member's id or name, or a fact not bought. What it may say is checked
+// too: exactly the facts bought, each where the facts are.
+func secretsKept(t *testing.T, p *Puzzle, s *State, game Game, when string) {
 	t.Helper()
-	var want []string
-	for i, e := range game.Log {
-		if e.Type == EntryYear {
-			want = append(want, fmt.Sprintf(".log[%d].year", i))
+	body := rendered(t, game)
+	a := p.Answer
+	for _, secret := range []any{a.ID, a.Title, live.Posters[a.ID], a.Rating, float64(a.Length)} {
+		if got := said(t, body, secret, false); got != nil {
+			t.Errorf("%s: the answer's %v is said at %v", when, secret, got)
 		}
 	}
-	if got := yearSaid(t, rendered(t, game), p.Answer.Year); !slices.Equal(got, want) {
-		t.Errorf("%s: the answer's year is said at %v, want %v", when, got, want)
+	if got := said(t, body, float64(a.Year), true); got != nil {
+		t.Errorf("%s: the answer's year is said at %v", when, got)
+	}
+	for _, g := range a.Genres {
+		got := said(t, body, g, false)
+		var want []string
+		if s.Facts[KindGenre] {
+			want = []string{fmt.Sprintf(".facts.genre[%d]", slices.Index(a.Genres, g))}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: the genre %s is said at %v, want %v", when, g, got, want)
+		}
+	}
+	for i, d := range p.Directors {
+		var want []string
+		if s.Facts[KindDirector] {
+			want = []string{fmt.Sprintf(".facts.director[%d].name", i)}
+		}
+		if got := said(t, body, d.Name, false); !slices.Equal(got, want) {
+			t.Errorf("%s: %s is said at %v, want %v", when, d.Name, got, want)
+		}
+	}
+	for i, b := range p.Cast {
+		if s.Shown(i) {
+			continue
+		}
+		for _, secret := range []string{b.ID, b.Name} {
+			if got := said(t, body, secret, false); got != nil {
+				t.Errorf("%s: hidden slot %d's %q is said at %v", when, i, secret, got)
+			}
+		}
+		if b.Also != nil && !s.Guessed(b.Also.ID) {
+			if got := said(t, body, b.Also.ID, false); got != nil {
+				t.Errorf("%s: hidden slot %d's Also in is said at %v", when, i, got)
+			}
+		}
+	}
+	var facts map[string]any
+	if err := json.Unmarshal([]byte(rendered(t, game.Facts)), &facts); err != nil {
+		t.Fatal(err)
+	}
+	have := slices.Sorted(maps.Keys(facts))
+	var bought []string
+	for _, kind := range factKinds {
+		if s.Facts[kind] {
+			bought = append(bought, map[string]string{KindLength: "length", KindRating: "rating", KindGenre: "genre",
+				KindDecade: "decade", KindYears: "years", KindDirector: "director"}[kind])
+		}
+	}
+	slices.Sort(bought)
+	if !slices.Equal(have, bought) {
+		t.Errorf("%s: the facts say %v, want only the ones bought, %v", when, have, bought)
+	}
+	if game.End != nil || strings.Contains(body, `"end":{`) {
+		t.Errorf("%s: a game in play has an end", when)
 	}
 }
 
-// TestNothingBeforeTheEndNamesTheAnswerOrAFaceDownCard is the fairness
-// rule: at load, and after every kind of move short of the end, nothing
-// the page is sent names the answer or a card it has not turned over,
-// and nothing says the answer's year but the year clue once it is
-// bought. Only the starting cards are sent in full at load.
-func TestNothingBeforeTheEndNamesTheAnswerOrAFaceDownCard(t *testing.T) {
+// TestNothingBeforeTheEndSaysWhatIsHidden is the fairness rule: after
+// Play, and after every kind of move short of the end, nothing a game is
+// rendered as names the answer or says its year, rating, length, poster
+// or genres, names a director before they are bought, or anyone in the
+// cast still hidden, and every fact not bought is absent. Three games
+// between them make every kind of move: one buys every fact, one adds
+// overlaps and asks for names, and one guesses movies from the answer's
+// decade and genre, which say their own years.
+func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 	p := matrix()
-	load := rendered(t, map[string]any{"cards": p.Faces(), "start": p.Opened(live), "clues": p.Clues()})
-	hidden(t, p, nil, load, "at load")
-	if got := yearSaid(t, load, p.Answer.Year); got != nil {
-		t.Errorf("at load the answer's year is said at %v", got)
-	}
-	for _, id := range []string{"tt0067433", "tt0108065", "tt0109190"} {
-		if !strings.Contains(load, `"`+id+`"`) {
-			t.Errorf("starting card %s is not sent in full at load", id)
-		}
-	}
-
-	// Two games between them make every kind of move, each kept short
-	// of spending its last point. The second guesses a movie from the
-	// answer's year, which says its own year and "same", as a guess
-	// earns, before it buys the year.
 	for _, moves := range [][]struct{ kind, arg string }{
-		{{KindFlip, "c7"}, {KindDirector, ""}, {KindActor, ""}, {KindGenres, ""},
-			{KindGuess, "tt0111257"}, {KindGuess, "tt0034583"}, {KindFlip, "c1"}},
-		{{KindGuess, "tt9000001"}, {KindGuess, "tt9000002"}, {KindActor, ""}, {KindYear, ""}, {KindGuess, "tt0209144"}},
+		{{KindLength, ""}, {KindRating, ""}, {KindGenre, ""}, {KindDecade, ""}, {KindYears, ""}, {KindDirector, ""}},
+		{{KindOverlap, "nm0001592"}, {KindNext, ""}, {KindOverlap, "nm0287825"}, {KindNext, ""}, {KindNext, ""}},
+		{{KindGuess, "tt0120601"}, {KindGuess, "tt0115736"}, {KindGuess, "tt9000002"}, {KindGuess, "tt0209144"}},
 	} {
 		g := play(t, p)
-		hidden(t, p, g.state(), rendered(t, Render(p, g.record(), live)), "after Play")
-		yearHidden(t, p, Render(p, g.record(), live), "after Play")
+		secretsKept(t, p, g.state(), Render(p, g.record(), live), "after Play")
 		for _, m := range moves {
 			s := g.do(m.kind, m.arg)
 			if s.Done {
 				t.Fatalf("%s %s ended the game; the test means to stop short of the end", m.kind, m.arg)
 			}
-			game := Render(p, g.record(), live)
-			hidden(t, p, s, rendered(t, game), "after "+m.kind+" "+m.arg)
-			yearHidden(t, p, game, "after "+m.kind+" "+m.arg)
+			secretsKept(t, p, s, Render(p, g.record(), live), "after "+m.kind+" "+m.arg)
 		}
 	}
 
 	g := play(t, p)
-	g.do(KindFlip, "c7")
-	s := g.do(KindGuess, "tt0133093")
+	g.do(KindNext, "")
+	g.do(KindGuess, "tt0133093")
 	body := rendered(t, Render(p, g.record(), live))
-	if !strings.Contains(body, `"tt0133093"`) || !strings.Contains(body, `"The Matrix"`) {
-		t.Errorf("the end does not name the answer: %s", body)
-	}
-	if !s.Done {
-		t.Fatal("the right guess did not end the game")
-	}
-}
-
-// TestTheLogHasAnEntryPerMove, in the API's shapes: "start" first, then
-// one per move, the guess that spent the last point followed by "out".
-func TestTheLogHasAnEntryPerMove(t *testing.T) {
-	p := matrix()
-	g := play(t, p)
-	g.do(KindFlip, "c5")
-	g.do(KindDirector, "")
-	g.do(KindYear, "")
-	g.do(KindActor, "")
-	g.do(KindActor, "")
-	g.do(KindGenres, "")
-	g.do(KindGuess, "tt0034583")
-	g.do(KindGuess, "tt9000001")
-
-	game := Render(p, g.record(), live)
-	var types []string
-	for _, e := range game.Log {
-		types = append(types, e.Type)
-	}
-	want := []string{"start", "flip", "person", "year", "person", "person", "genres", "guess", "guess", "out"}
-	if !slices.Equal(types, want) {
-		t.Errorf("log = %v, want %v", types, want)
-	}
-	if game.Phase != PhaseDone || game.Pts != 0 || game.Won || game.Seq != 8 {
-		t.Errorf("game = %+v", game)
-	}
-
-	var log []map[string]any
-	if err := json.Unmarshal([]byte(rendered(t, game.Log)), &log); err != nil {
-		t.Fatal(err)
-	}
-	flip := log[1]
-	if flip["card"] != "c5" || flip["cost"] != 55.0 || flip["film"].(map[string]any)["title"] != "Speed" {
-		t.Errorf("flip = %v", flip)
-	}
-	if poster := flip["film"].(map[string]any)["poster"]; poster != "https://img.example/speed.jpg" {
-		t.Errorf("flip poster = %v", poster)
-	}
-	person := log[2]
-	people := person["people"].([]any)
-	if person["role"] != "director" || person["cost"] != 150.0 || len(people) != 2 {
-		t.Errorf("person = %v", person)
-	}
-	if lana := people[0].(map[string]any); lana["name"] != "Lana Wachowski" || lana["slot"] != 0.0 ||
-		!slices.Equal(anyStrings(lana["cards"]), []string{"c1", "c6", "c9"}) {
-		t.Errorf("Lana = %v", lana)
-	}
-	if year := rendered(t, game.Log[3]); year != `{"type":"year","cost":200,"year":1999}` {
-		t.Errorf("year = %s", year)
-	}
-	if genres := log[6]; !slices.Equal(anyStrings(genres["genres"]), []string{"Action", "Sci-Fi"}) {
-		t.Errorf("genres = %v", genres)
-	}
-	// Casablanca is off the board and shares nobody: card null, shared
-	// empty, and the hints the guess earned.
-	guess := log[7]
-	if guess["card"] != nil || len(guess["shared"].([]any)) != 0 || guess["year"] != "newer" || guess["rating"] != "higher" {
-		t.Errorf("guess = %v", guess)
-	}
-	if film := guess["film"].(map[string]any); film["title"] != "Casablanca" || film["year"] != 1942.0 || film["rating"] != 8.5 {
-		t.Errorf("guessed film = %v", film)
+	for _, want := range []string{`"tt0133093"`, `"The Matrix"`, `"Lana Wachowski"`, `"Keanu Reeves"`, `"length":136`, `"rating":8.7`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the end does not say %s: %s", want, body)
+		}
 	}
 }
 
-func anyStrings(v any) []string {
-	var out []string
-	for _, x := range v.([]any) {
-		out = append(out, x.(string))
-	}
-	return out
-}
-
-// TestAGuessedMovieWithNothingKnownSaysNull: no year is 0, no rating is
-// null, and no hint is null rather than a guess at one.
-func TestAGuessedMovieWithNothingKnownSaysNull(t *testing.T) {
-	p := matrix()
-	g := play(t, p)
-	g.do(KindGuess, "tt9000002")
-	body := rendered(t, Render(p, g.record(), live).Log[1])
-	want := `{"type":"guess","cost":100,"film":{"id":"tt9000002","title":"Nor This, Nor When","year":0,"rating":null,"md":0},` +
-		`"card":null,"shared":[],"year":null,"rating":null}`
-	if body != want {
-		t.Errorf("entry = %s\nwant    %s", body, want)
-	}
-}
-
-// TestACloseRelativeIsNamelessUntilNamed: turned over, it says only how
-// many people it shares; guessed by name, or at the end, it is a card
-// like any other.
-func TestACloseRelativeIsNamelessUntilNamed(t *testing.T) {
-	p := matrix()
-	g := play(t, p)
-	g.do(KindFlip, "c1")
-	entry := rendered(t, Render(p, g.record(), live).Log[1])
-	if want := `{"type":"flip","card":"c1","cost":55,"relative":{"shared":7}}`; entry != want {
-		t.Errorf("relative = %s, want %s", entry, want)
-	}
-	g.do(KindGuess, "tt0234215")
-	game := Render(p, g.record(), live)
-	if f := game.Log[1].Film; f == nil || f.Title != "The Matrix Reloaded" || game.Log[1].Relative != nil {
-		t.Errorf("guessed by name, the relative's flip says %+v", game.Log[1])
-	}
-	if guess := game.Log[2]; guess.Card != "c1" || len(guess.Shared) != 7 {
-		t.Errorf("the guess of the relative = %+v", guess)
-	}
-
-	over := play(t, p)
-	over.do(KindFlip, "c1")
-	over.do(KindReveal, "")
-	if f := Render(p, over.record(), live).Log[1].Film; f == nil || f.ID != "tt0234215" {
-		t.Errorf("at the end the relative's flip says %+v", f)
-	}
-}
-
-// TestKnownIsEveryoneBoughtOrFoundInSlotOrder, with their cards and the
-// photo where there is one.
-func TestKnownIsEveryoneBoughtOrFoundInSlotOrder(t *testing.T) {
+// TestAHiddenSlotIsOnlyItsNumber, field for field, and a shown one says
+// who, their "Also in", how they came to show, and the guess that filled
+// them in.
+func TestAHiddenSlotIsOnlyItsNumber(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
 	g.do(KindGuess, "tt0209144")
-	g.do(KindActor, "")
-	known := Render(p, g.record(), live).Known
-	var slots []int
-	for _, k := range known {
-		slots = append(slots, k.Slot)
+	slots := Render(p, g.record(), live).Slots
+	want := []string{
+		`{"slot":0,"shown":true,"person":{"id":"nm0001592","name":"Joe Pantoliano","hue":205,"photo":"https://image.tmdb.org/t/p/w185/joe.jpg"},"also":{"id":"tt0106977","title":"The Fugitive","year":1993},"via":"start"}`,
+		`{"slot":1,"shown":true,"person":{"id":"nm0287825","name":"Gloria Foster","hue":78},"also":{"id":"tt0067433","title":"Man and Boy","year":1971},"via":"guess"}`,
+		`{"slot":2,"shown":false}`,
+		`{"slot":3,"shown":true,"person":{"id":"nm0005251","name":"Carrie-Anne Moss","hue":345},"also":{"id":"tt0241303","title":"Chocolat","year":2000},"via":"guess","from":{"id":"tt0209144","title":"Memento"}}`,
+		`{"slot":4,"shown":false}`,
+		`{"slot":5,"shown":false}`,
 	}
-	if !slices.Equal(slots, []int{2, 4, 7}) {
-		t.Errorf("known slots = %v, want Keanu bought and Moss and Pantoliano found", slots)
+	if len(slots) != Slots {
+		t.Fatalf("%d slots", len(slots))
 	}
-	if known[0].Photo != live.Photos["nm0000206"] || !slices.Equal(known[0].Cards, []string{"c1", "c5"}) {
-		t.Errorf("Keanu = %+v", known[0])
+	for i, w := range want {
+		if got := rendered(t, slots[i]); got != w {
+			t.Errorf("slot %d = %s\nwant     %s", i, got, w)
+		}
 	}
-	if known[1].Photo != "" {
-		t.Errorf("a person with no photo has %q", known[1].Photo)
+	// Someone with no "Also in" says none.
+	p.Cast[2].Also = nil
+	g.do(KindNext, "")
+	if got := rendered(t, Render(p, g.record(), live).Slots[2]); strings.Contains(got, "also") || !strings.Contains(got, `"via":"next"`) {
+		t.Errorf("Weaving, with no Also in, = %s", got)
 	}
 }
 
-// TestTheEndShowsEverything: the answer with its genres and poster,
-// every card with what it is and its people, and everyone, with the
-// time in whole seconds.
+// TestTheLogHasAnEntryPerMove, in the API's shapes, the wrong guess the
+// points could not cover followed by "out".
+func TestTheLogHasAnEntryPerMove(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	g.do(KindNext, "")
+	g.do(KindDecade, "")
+	g.do(KindOverlap, "nm0287825")
+	g.do(KindGuess, "tt0111257")
+	g.do(KindDirector, "")
+	g.do(KindGuess, "tt0034583")
+	g.do(KindGuess, "tt0076759")
+	game := Render(p, g.record(), live)
+	var lines []string
+	for _, e := range game.Log {
+		lines = append(lines, rendered(t, e))
+	}
+	want := []string{
+		`{"type":"next","cost":100,"slot":1}`,
+		`{"type":"fact","kind":"decade","cost":100}`,
+		`{"type":"overlap","person":"nm0287825","cost":250}`,
+		`{"type":"guess","cost":100,"guess":{"id":"tt0111257","title":"Speed","year":1994,"cost":100,"shared":[5],"sameDecade":true,"sharesGenre":true,"warmth":2}}`,
+		`{"type":"fact","kind":"director","cost":250}`,
+		`{"type":"guess","cost":150,"guess":{"id":"tt0034583","title":"Casablanca","year":1942,"cost":150,"shared":[],"sameDecade":false,"sharesGenre":false,"warmth":0}}`,
+		`{"type":"guess","cost":200,"guess":{"id":"tt0076759","title":"Star Wars","year":1977,"cost":200,"shared":[],"sameDecade":false,"sharesGenre":true,"warmth":1}}`,
+		`{"type":"out"}`,
+	}
+	if !slices.Equal(lines, want) {
+		t.Errorf("log =\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+	if game.Phase != PhaseDone || game.Pts != 0 || game.Won || game.GaveUp || game.Seq != 7 {
+		t.Errorf("game = %+v", game)
+	}
+
+	won := play(t, p)
+	won.do(KindGuess, "tt0133093")
+	if log := rendered(t, Render(p, won.record(), live).Log); log != `[{"type":"win"}]` {
+		t.Errorf("a win logs %s", log)
+	}
+	gave := play(t, p)
+	gave.do(KindReveal, "")
+	if log := rendered(t, Render(p, gave.record(), live).Log); log != `[{"type":"gaveup"}]` {
+		t.Errorf("giving up logs %s", log)
+	}
+	if log := rendered(t, Render(p, play(t, p).record(), live).Log); log != `[]` {
+		t.Errorf("a new game logs %s", log)
+	}
+}
+
+// TestEachFactIsSaidAsTheGameSellsIt: the length and rating as bands,
+// the genres, the decade and the five years as their first years, and
+// the directors by name with their hues and photos.
+func TestEachFactIsSaidAsTheGameSellsIt(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	for _, kind := range factKinds {
+		g.do(kind, "")
+	}
+	got := rendered(t, Render(p, g.record(), live).Facts)
+	want := `{"length":2,"rating":3,"genre":["Action","Sci-Fi"],"decade":1990,"years":1995,"director":[` +
+		`{"id":"nm0905154","name":"Lana Wachowski","hue":118,"photo":"https://image.tmdb.org/t/p/w185/lana.jpg"},` +
+		`{"id":"nm0905152","name":"Lilly Wachowski","hue":255}]}`
+	if got != want {
+		t.Errorf("facts = %s\nwant    %s", got, want)
+	}
+	// A band that is 0 is still said, and a movie with no genres says so.
+	p.Answer.Length, p.Answer.Rating, p.Answer.Genres = 85, 5.4, nil
+	if got := rendered(t, Render(p, g.record(), live).Facts); !strings.HasPrefix(got, `{"length":0,"rating":0,"genre":[],`) {
+		t.Errorf("the lowest bands and no genres = %s", got)
+	}
+	if got := rendered(t, Render(p, play(t, p).record(), live).Facts); got != `{}` {
+		t.Errorf("no facts bought = %s", got)
+	}
+}
+
+// TestTheEndShowsEverything: every slot, those the player never saw as
+// shown by the end, the answer with every fact exact, its poster and
+// colour, and the directors.
 func TestTheEndShowsEverything(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
-	g.do(KindFlip, "c9")
+	g.do(KindNext, "")
 	g.do(KindGuess, "tt0133093")
 	rec := g.record()
-	done := rec.Started.Add(3*time.Minute + 41*time.Second + 600*time.Millisecond)
+	done := rec.Started.Add(3*time.Minute + 41*time.Second)
 	rec.Finished = &done
 	game := Render(p, rec, live)
-	if game.Phase != PhaseDone || !game.Won || game.Pts != 940 || game.Secs == nil || *game.Secs != 222 {
-		t.Errorf("game = %+v, secs %v", game, game.Secs)
+	if game.Phase != PhaseDone || !game.Won || game.Pts != 900 || game.FinishedAt == nil || !game.FinishedAt.Equal(done) {
+		t.Errorf("game = %+v", game)
 	}
-	if game.FinishedAt == nil || !game.FinishedAt.Equal(done) {
-		t.Errorf("finishedAt = %v", game.FinishedAt)
+	var via []string
+	for _, sl := range game.Slots {
+		if !sl.Shown || sl.Person == nil {
+			t.Errorf("slot %d is hidden at the end", sl.Slot)
+			continue
+		}
+		via = append(via, sl.Via)
 	}
-	if last := game.Log[len(game.Log)-1]; last.Type != EntryWin {
-		t.Errorf("the right guess logs %q, want win", last.Type)
+	if want := []string{"start", "next", "end", "end", "end", "end"}; !slices.Equal(via, want) {
+		t.Errorf("at the end the slots show by %v, want %v", via, want)
 	}
-	end := game.End
-	if end == nil {
-		t.Fatal("no end")
-	}
-	if end.Answer.ID != "tt0133093" || end.Answer.Poster != live.Posters["tt0133093"] || !slices.Equal(end.Answer.Genres, []string{"Action", "Sci-Fi"}) {
-		t.Errorf("answer = %+v", end.Answer)
-	}
-	if len(end.Cards) != len(p.Cards) || end.Cards[0].Film.Title != "The Matrix Reloaded" || len(end.Cards[0].People) != 7 {
-		t.Errorf("cards = %+v", end.Cards)
-	}
-	if len(end.People) != len(p.People) || end.People[7].Name != "Joe Pantoliano" {
-		t.Errorf("people = %+v", end.People)
+	end := rendered(t, game.End)
+	want := `{"answer":{"id":"tt0133093","title":"The Matrix","year":1999,"rating":8.7,"length":136,"genres":["Action","Sci-Fi"],` +
+		`"colour":"#26382d","poster":"https://img.example/matrix.jpg"},"directors":[` +
+		`{"id":"nm0905154","name":"Lana Wachowski","hue":118,"photo":"https://image.tmdb.org/t/p/w185/lana.jpg"},` +
+		`{"id":"nm0905152","name":"Lilly Wachowski","hue":255}]}`
+	if end != want {
+		t.Errorf("end = %s\nwant  %s", end, want)
 	}
 
 	playing := Render(p, play(t, p).record(), live)
-	if playing.End != nil || playing.FinishedAt != nil || playing.Secs != nil || playing.Phase != PhasePlay {
-		t.Errorf("a game in play has %+v", playing)
+	body := rendered(t, playing)
+	for _, want := range []string{`"end":null`, `"finishedAt":null`, `"overlaps":[]`, `"log":[]`, `"facts":{}`, `"nextCost":100`, `"phase":"play"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("a game in play lacks %s: %s", want, body)
+		}
 	}
-	if body := rendered(t, playing); !strings.Contains(body, `"end":null`) || !strings.Contains(body, `"secs":null`) {
-		t.Errorf("a game in play says %s", body)
+	if strings.Contains(body, "secs") {
+		t.Errorf("a game has a clock: %s", body)
 	}
 }
 
 // TestTimesAreWrittenInUTCToTheMillisecond, as the response's "now" is,
-// whatever zone and precision the database handed them back in; the
-// seconds are still taken from the moments as kept.
+// whatever zone and precision the database handed them back in.
 func TestTimesAreWrittenInUTCToTheMillisecond(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
 	g.do(KindReveal, "")
 	rec := g.record()
 	lagos := time.FixedZone("WAT", 3600)
-	rec.Started = time.Date(2026, 10, 8, 10, 0, 0, 123456789, lagos)
+	rec.Started = time.Date(2026, 10, 9, 10, 0, 0, 123456789, lagos)
 	done := rec.Started.Add(95*time.Second + 400*time.Microsecond)
 	rec.Finished = &done
 	body := rendered(t, Render(p, rec, live))
-	for _, want := range []string{`"startedAt":"2026-10-08T09:00:00.123Z"`, `"finishedAt":"2026-10-08T09:01:35.123Z"`, `"secs":95`} {
+	for _, want := range []string{`"startedAt":"2026-10-09T09:00:00.123Z"`, `"finishedAt":"2026-10-09T09:01:35.123Z"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the game lacks %s: %s", want, body)
 		}
 	}
 }
 
-// TestWantsAreWhatTheGameShows: the posters and photos read for an
-// answer are the ones it draws, and every one of them once it is over.
+// TestWantsAreWhatTheGameShows: the photos read for an answer are of
+// the people it shows, and the directors once bought; the answer's
+// poster and everyone once it is over; nothing before Play.
 func TestWantsAreWhatTheGameShows(t *testing.T) {
 	p := matrix()
-	films, people := p.Wants(nil)
-	if !slices.Equal(films, []string{"tt0067433", "tt0108065", "tt0109190"}) || people != nil {
+	if films, people := p.Wants(nil); films != nil || people != nil {
 		t.Errorf("before Play: %v, %v", films, people)
 	}
 	g := play(t, p)
-	g.do(KindFlip, "c7")
-	g.do(KindGuess, "tt0034583")
-	g.do(KindDirector, "")
-	films, people = p.Wants(g.record())
-	if !slices.Equal(films, []string{"tt0067433", "tt0108065", "tt0109190", "tt0209144", "tt0034583"}) {
-		t.Errorf("films = %v", films)
+	g.do(KindGuess, "tt0209144")
+	films, people := p.Wants(g.record())
+	if films != nil || !slices.Equal(people, []string{"nm0001592", "nm0287825", "nm0005251"}) {
+		t.Errorf("after Memento: %v, %v", films, people)
 	}
-	if !slices.Equal(people, []string{"nm0905154", "nm0905152"}) {
-		t.Errorf("people = %v", people)
+	g.do(KindDirector, "")
+	if _, people = p.Wants(g.record()); !slices.Equal(people[3:], []string{"nm0905154", "nm0905152"}) {
+		t.Errorf("after the director: %v", people)
 	}
 	g.do(KindReveal, "")
 	films, people = p.Wants(g.record())
-	if !slices.Contains(films, "tt0133093") || len(films) != 3+1+len(p.Cards) || len(people) != len(p.People) {
-		t.Errorf("at the end: %d films, %d people", len(films), len(people))
+	if !slices.Equal(films, []string{"tt0133093"}) || len(people) != Slots+2 {
+		t.Errorf("at the end: %v, %v", films, people)
+	}
+}
+
+// sheetJSON is a sheet as the API sends it.
+func sheetJSON(t *testing.T, movies []SheetMovie) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	if err := json.Unmarshal([]byte(rendered(t, movies)), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestASheetShowsOnlyWhatTheGameShows: only a slot showing has one; each
+// movie lists the slots showing it credits, never one still hidden; a
+// director is marked only once Director is bought; and the answer is a
+// card like the rest, with the same fields.
+func TestASheetShowsOnlyWhatTheGameShows(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	for _, slot := range []int{1, 5, -1, 6} {
+		if _, ok := p.SheetOf(g.state(), slot, live); ok {
+			t.Errorf("slot %d, not showing, has a sheet", slot)
+		}
+	}
+	joe, ok := p.SheetOf(g.state(), 0, live)
+	if !ok {
+		t.Fatal("the sixth-billed has no sheet")
+	}
+	var got []string
+	for _, m := range joe {
+		got = append(got, fmt.Sprintf("%s %v %v", m.ID, m.On, m.Dir))
+	}
+	// Memento credits Moss too, and the answer everyone, but only
+	// Pantoliano is showing; Bound's directors are not bought.
+	if want := []string{"tt0106977 [0] false", "tt0115736 [0] false", "tt0133093 [0] false", "tt0209144 [0] false"}; !slices.Equal(got, want) {
+		t.Errorf("Pantoliano's sheet = %v, want %v", got, want)
+	}
+	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), " ") }
+	cards := sheetJSON(t, joe)
+	for _, c := range cards {
+		if keys(c) != keys(cards[0]) {
+			t.Errorf("%v has fields %s, %v has %s", c["id"], keys(c), cards[0]["id"], keys(cards[0]))
+		}
+		if _, dir := c["dir"]; dir {
+			t.Errorf("%v says dir before Director is bought", c["id"])
+		}
+	}
+
+	g.do(KindGuess, "tt0209144")
+	g.do(KindDirector, "")
+	joe, _ = p.SheetOf(g.state(), 0, live)
+	got = nil
+	for _, m := range joe {
+		got = append(got, fmt.Sprintf("%s %v %v", m.ID, m.On, m.Dir))
+	}
+	if want := []string{"tt0106977 [0] false", "tt0115736 [0] true", "tt0133093 [0 1 3] true", "tt0209144 [0 3] false"}; !slices.Equal(got, want) {
+		t.Errorf("Pantoliano's sheet after Memento and Director = %v, want %v", got, want)
+	}
+	if moss, ok := p.SheetOf(g.state(), 3, live); !ok || len(moss) != 4 {
+		t.Errorf("Moss, filled in, has %d movies, %v", len(moss), ok)
+	}
+
+	// Once it is over, anyone in the cast has one, crediting everyone.
+	g.do(KindReveal, "")
+	keanu, ok := p.SheetOf(g.state(), 5, live)
+	if !ok || len(keanu) != 4 || !slices.Equal(keanu[1].On, []int{0, 1, 2, 3, 4, 5}) || keanu[1].ID != "tt0133093" {
+		t.Errorf("Keanu's sheet at the end = %+v, %v", keanu, ok)
+	}
+}
+
+// TestASheetHasEveryPosterOrNone: the answer always has a poster, so a
+// sheet where only some cards had theirs would mark it out. Pantoliano's
+// four all have one in live, and are sent with them; Keanu's do not,
+// and none is sent, the answer's included.
+func TestASheetHasEveryPosterOrNone(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	g.do(KindReveal, "")
+	if !slices.Equal(p.SheetWants(0), []string{"tt0106977", "tt0115736", "tt0133093", "tt0209144"}) {
+		t.Errorf("Pantoliano's sheet wants %v", p.SheetWants(0))
+	}
+	joe, _ := p.SheetOf(g.state(), 0, live)
+	for _, m := range joe {
+		if m.Poster == "" || m.Poster != live.Posters[m.ID] {
+			t.Errorf("%s has poster %q with every poster there", m.ID, m.Poster)
+		}
+	}
+	keanu, _ := p.SheetOf(g.state(), 5, live)
+	for _, m := range keanu {
+		if m.Poster != "" {
+			t.Errorf("%s has poster %q though John Wick has none", m.ID, m.Poster)
+		}
+	}
+	if body := rendered(t, keanu); strings.Contains(body, "poster") || strings.Contains(body, "matrix.jpg") {
+		t.Errorf("Keanu's sheet says %s", body)
+	}
+}
+
+// TestASheetIsOnlyTheMoviesOnIt: Memento, on Moss's sheet but below
+// Pantoliano's cap, is on hers and lights him there once both show, and
+// is not on his. A puzzle kept before sheets were, with none, has every
+// movie crediting a slot on that slot's sheet, as it did then.
+func TestASheetIsOnlyTheMoviesOnIt(t *testing.T) {
+	p := matrix()
+	memento := slices.IndexFunc(p.Movies, func(m Movie) bool { return m.ID == "tt0209144" })
+	p.Movies[memento].Sheets = []int{3}
+	g := play(t, p)
+	g.do(KindGuess, "tt0209144")
+	ids := func(movies []SheetMovie) []string {
+		var out []string
+		for _, m := range movies {
+			out = append(out, m.ID)
+		}
+		return out
+	}
+	joe, _ := p.SheetOf(g.state(), 0, live)
+	if want := []string{"tt0106977", "tt0115736", "tt0133093"}; !slices.Equal(ids(joe), want) || !slices.Equal(p.SheetWants(0), want) {
+		t.Errorf("Pantoliano's sheet = %v, wants %v; want %v", ids(joe), p.SheetWants(0), want)
+	}
+	moss, ok := p.SheetOf(g.state(), 3, live)
+	i := slices.IndexFunc(moss, func(m SheetMovie) bool { return m.ID == "tt0209144" })
+	if !ok || i < 0 || !slices.Equal(moss[i].On, []int{0, 3}) {
+		t.Errorf("Moss's sheet = %+v, %v; want Memento lighting [0 3]", moss, ok)
+	}
+
+	var kept []Movie
+	if err := json.Unmarshal([]byte(`[{"id":"tt0209144","title":"Memento","year":2000,"rating":8.4,"md":1011,`+
+		`"genres":["Mystery","Thriller"],"cast":[0,3],"dir":false}]`), &kept); err != nil {
+		t.Fatal(err)
+	}
+	p.Movies = kept
+	for _, slot := range []int{0, 3} {
+		if got := p.SheetWants(slot); !slices.Equal(got, []string{"tt0209144"}) {
+			t.Errorf("kept before sheets were, slot %d's sheet wants %v", slot, got)
+		}
+	}
+	if got := p.SheetWants(1); len(got) != 0 {
+		t.Errorf("kept before sheets were, Foster's sheet wants %v", got)
 	}
 }

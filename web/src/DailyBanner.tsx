@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { fetchDaily, fetchDailyWeek, type DailyToday, type DailyWeek } from './api';
-import { GAME_NAME, clockOffset, dailyDayText, fmtN, standingText, watchMidnight } from './daily';
+import { GAME_NAME, bannerLabel, bannerLine, clockOffset, dailyDayText, watchMidnight } from './daily';
 import { DAILY_PATH } from './movieParam';
 import { animate } from './motion';
 import { useReducedMotion } from './theme';
@@ -55,11 +55,11 @@ export interface BannerView {
   sub: string;
   /** The button's word: Play, Keep going or Results. */
   go: string;
-  /** The link's name for a screen reader. It holds every word the eye is
-   *  given, the button's included, so a reader who says "click Results"
-   *  to their speech software is understood. The name is a sentence of
-   *  its own, as the handoff writes it: "Cinedikt Daily, No. 142: Point
-   *  Blank. Play". */
+  /** The link's name for a screen reader, as the handoff writes it
+   *  (daily.ts's bannerLabel): "Cinedikt Daily, No. 143: Name Drop.
+   *  Play", "… Keep going" during a game, and "Cinedikt Daily, No. 143.
+   *  See your result" once it is over. The line beside the button is for
+   *  the eye: the page behind the link says it all again. */
   label: string;
 }
 
@@ -70,26 +70,18 @@ export interface BannerView {
 export function bannerView(today: BannerToday | null): BannerView {
   if (!today) return { no: '', day: '', sub: '', go: 'Play', label: `Cinedikt Daily: ${BANNER_TITLE}` };
   const g = today.game;
-  const [sub, go] =
-    g?.phase === 'done'
-      ? [g.won ? `${fmtN(g.pts)} points today` : 'Missed today', 'Results']
-      : g?.phase === 'play'
-        ? [`${fmtN(g.pts)} points left`, 'Keep going']
-        : // Not started: the reader's own place this week, which is
-          // over the days before today, when they have one; otherwise the
-          // crowd. Nobody yet is not a crowd worth mentioning; "0 playing
-          // today" would say the game is empty, not that it is new.
-          [
-            standingText(today.week) || (today.played > 0 ? `${fmtN(today.played)} playing today` : ''),
-            'Play',
-          ];
+  // The line's rules are daily.ts's (bannerLine): before the game, the
+  // reader's place this week, which is over the days before today, or
+  // otherwise the crowd.
+  const sub = bannerLine(g, today.played, today.week);
+  const go = g?.phase === 'done' ? 'Results' : g?.phase === 'play' ? 'Keep going' : 'Play';
   const no = `No. ${today.no}`;
   return {
     no,
     day: dailyDayText(today.date),
     sub,
     go,
-    label: `Cinedikt Daily, ${no}: ${BANNER_TITLE}. ${sub ? `${sub}. ` : ''}${go}`,
+    label: bannerLabel(today.no, g),
   };
 }
 
@@ -149,7 +141,7 @@ export function askForBanner(
 /** Asks for today's puzzle for the banner, as askForBanner does, and
  *  again at the reader's midnight for as long as it is followed, since
  *  today is their own date and a screen left open over it would offer a
- *  map that has ended. Each answer brings its own midnight and its own
+ *  game that has ended. Each answer brings its own midnight and its own
  *  reading of the server's clock to wait on, and an ask at midnight that
  *  fails takes the banner away, as any failure does. Hands back what
  *  stops it: the request in flight is called off and the watch with it. */
@@ -240,8 +232,8 @@ export function DailyBanner({
       onClick={onDaily}
       aria-label={view.label}
     >
-      {/* Two cards face down and the hidden one standing over them, as
-          the game's intro fans them. */}
+      {/* Two cards face down and the hidden one standing over them, in
+          the accent, as the start screen's design draws the game. */}
       <span className="cd-daily-banner-fan" aria-hidden="true">
         <span className="cd-daily-banner-card cd-daily-banner-card-l" />
         <span className="cd-daily-banner-card cd-daily-banner-card-r" />

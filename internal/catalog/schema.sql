@@ -13,7 +13,10 @@ CREATE UNLOGGED TABLE {{schema}}.titles (
     original_title  text NOT NULL,
     is_adult        boolean NOT NULL,
     start_year      int,
-    genres          text[] NOT NULL DEFAULT '{}'
+    genres          text[] NOT NULL DEFAULT '{}',
+    -- IMDb's runtime in minutes, null where it has none: the Daily's
+    -- Length fact, and nothing else reads it.
+    runtime_minutes int
 );
 
 CREATE UNLOGGED TABLE {{schema}}.names (

@@ -186,8 +186,9 @@ export function chipEvents(
  *  A mouse wheel and a trackpad's vertical flick both send deltaY, and a
  *  row that only scrolls horizontally does nothing with it — so on a
  *  desktop the chips past the edge could only be reached by dragging.
- *  A horizontal gesture already works and is left alone. */
-function wheelSideways(e: WheelEvent<HTMLDivElement>, row: HTMLDivElement | null) {
+ *  A horizontal gesture already works and is left alone. The Daily's
+ *  Movies sheet has a row of chips like this one, and uses it too. */
+export function wheelSideways(e: WheelEvent<HTMLDivElement>, row: HTMLDivElement | null) {
   if (!row || e.deltaX !== 0 || e.deltaY === 0) return;
   const room = row.scrollWidth - row.clientWidth;
   if (room <= 0) return;

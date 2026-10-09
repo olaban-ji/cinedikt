@@ -1152,9 +1152,9 @@ export function GridApp() {
     <div className="cd-app" data-quick={quick || undefined}>
       <header
         ref={headerRef}
-        // The Daily's board is ruled off from the header as a map is.
-        // The header never lies over it: the page under it places its
-        // panel and its intro against its own box, which starts below.
+        // The Daily is ruled off from the header as a map is. The header
+        // never lies over it: the page under it places its guess bar and
+        // its toast against its own box, which starts below.
         className={headerClass({
           map: holdsChips || daily,
           over: overlay,
@@ -1192,7 +1192,7 @@ export function GridApp() {
             // The Daily's own: its pill, the puzzle's number and day, and
             // "How it works". No search, and so none of its shortcuts:
             // the game has "/" for its own guess field, and a search that
-            // opened a map would walk out of a game whose clock runs on.
+            // opened a map would walk out of a game part way through.
             <DailyHeaderTail
               day={day}
               phone={screen.phone}
@@ -1317,7 +1317,10 @@ export function GridApp() {
       ) : pageDrawn === 'about' ? (
         <AboutPage dim={loading} />
       ) : pageDrawn === 'daily' ? (
-        <DailyPage onDay={setDay} rulesSignal={rulesAsked} dim={loading} />
+        // Map this movie leaves for the answer's map as a pick from search
+        // does, the Daily held dimmed behind the progress line until it
+        // arrives.
+        <DailyPage onDay={setDay} rulesSignal={rulesAsked} dim={loading} onOpenMovie={setMovieId} />
       ) : (
         <ColdStart
           onPick={setMovieId}
@@ -1466,8 +1469,8 @@ export function GridApp() {
         />
       )}
 
-      {/* The Daily has a toast of its own, under the header where the
-          phone's sheet cannot cover it. Two would talk over each other. */}
+      {/* The Daily has a toast of its own, raised clear of its guess
+          bar. Two would talk over each other. */}
       {!daily && <Toast spec={toast.spec} visible={toast.visible} onMap={onMap} />}
       <p className="cd-sr-live" aria-live="polite">
         {!payload

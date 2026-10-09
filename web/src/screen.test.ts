@@ -117,6 +117,7 @@ const VOCABULARY: Record<Exclude<keyof Screen, 'cls'>, string> = {
  *  classes. */
 const OTHERS = [
   '(max-height: 859.98px)',
+  '(max-width: 359.98px)',
   '(hover: hover)',
   '(prefers-reduced-motion: reduce)',
   '(forced-colors: active)',

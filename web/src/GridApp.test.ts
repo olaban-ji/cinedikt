@@ -455,8 +455,8 @@ describe('the opening screen’s Daily banner', () => {
     const banner = /<a class="cd-daily-banner[\s\S]*?<\/a>/.exec(page())?.[0] ?? '';
     expect(banner).toContain('cd-daily-banner-waiting');
     expect(banner).toContain('<span class="cd-daily-pill">Daily</span>');
-    expect(banner).toContain('<span class="cd-daily-banner-title">Point Blank</span>');
-    expect(banner).toContain('aria-label="Cinedikt Daily: Point Blank"');
+    expect(banner).toContain('<span class="cd-daily-banner-title">Name Drop</span>');
+    expect(banner).toContain('aria-label="Cinedikt Daily: Name Drop"');
     // No number and no line about today until the server says.
     expect(banner).not.toContain('cd-daily-banner-meta');
     expect(banner).not.toContain('cd-daily-banner-sub');

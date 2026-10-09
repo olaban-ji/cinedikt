@@ -29,12 +29,13 @@ function gameOf(over: Partial<DailyGame>): DailyGame {
     seq: 0,
     startedAt: '2026-10-08T09:00:00Z',
     finishedAt: null,
-    secs: null,
     won: false,
     gaveUp: false,
     nextCost: 100,
-    log: [{ type: 'start' }],
-    known: [],
+    slots: Array.from({ length: 6 }, (_, slot) => ({ slot, shown: false as const })),
+    facts: {},
+    overlaps: [],
+    log: [],
     end: null,
     ...over,
   };
@@ -50,19 +51,19 @@ const today = (game: DailyGame | null, played = 61240): BannerToday => ({
 });
 
 const playing = gameOf({ phase: 'play', pts: 640 });
-const won = gameOf({ phase: 'done', pts: 640, won: true, secs: 187 });
+const won = gameOf({ phase: 'done', pts: 640, won: true });
 const missed = gameOf({ phase: 'done', pts: 0, won: false, gaveUp: true });
 
 const render = (day: BannerState, onDaily = () => {}) =>
   renderToStaticMarkup(createElement(DailyBanner, { day, onDaily }));
 
 describe('what the banner says', () => {
-  it('is titled with the game’s name, Point Blank, as the title screen is', () => {
-    expect(BANNER_TITLE).toBe('Point Blank');
+  it('is titled with the game’s name, Name Drop, as the title screen is', () => {
+    expect(BANNER_TITLE).toBe('Name Drop');
     expect(BANNER_TITLE).toBe(GAME_NAME);
     // The handoff's label: the name ends its own sentence before the
     // button's word.
-    expect(bannerView(today(null, 0)).label).toBe('Cinedikt Daily, No. 142: Point Blank. Play');
+    expect(bannerView(today(null, 0)).label).toBe('Cinedikt Daily, No. 142: Name Drop. Play');
   });
 
   it('sets the name in Young Serif at 19px, and 17px on a phone', () => {
@@ -85,7 +86,7 @@ describe('what the banner says', () => {
       day: 'Thursday 8 October',
       sub: '61,240 playing today',
       go: 'Play',
-      label: 'Cinedikt Daily, No. 142: Point Blank. 61,240 playing today. Play',
+      label: 'Cinedikt Daily, No. 142: Name Drop. Play',
     });
   });
 
@@ -94,7 +95,7 @@ describe('what the banner says', () => {
     const v = bannerView(today(null, 0));
     expect(v.sub).toBe('');
     expect(v.go).toBe('Play');
-    expect(v.label).toBe('Cinedikt Daily, No. 142: Point Blank. Play');
+    expect(v.label).toBe('Cinedikt Daily, No. 142: Name Drop. Play');
     expect(bannerView(today(null, 1)).sub).toBe('1 playing today');
   });
 
@@ -102,24 +103,37 @@ describe('what the banner says', () => {
     const v = bannerView(today(playing));
     expect(v.sub).toBe('640 points left');
     expect(v.go).toBe('Keep going');
-    expect(v.label).toBe('Cinedikt Daily, No. 142: Point Blank. 640 points left. Keep going');
+    // The handoff names it as before Play, ending on the button's own
+    // words, so a reader who says what they see is understood.
+    expect(v.label).toBe('Cinedikt Daily, No. 142: Name Drop. Keep going');
   });
 
   it('offers the result once today is over, with the points kept or the miss', () => {
-    expect(bannerView(today(won))).toMatchObject({ sub: '640 points today', go: 'Results' });
+    expect(bannerView(today(won))).toMatchObject({
+      sub: '640 points today',
+      go: 'Results',
+      label: 'Cinedikt Daily, No. 142. See your result',
+    });
     expect(bannerView(today(gameOf({ phase: 'done', pts: 1000, won: true })))).toMatchObject({
       sub: '1,000 points today',
     });
-    expect(bannerView(today(missed))).toMatchObject({ sub: 'Missed today', go: 'Results' });
+    expect(bannerView(today(missed))).toMatchObject({
+      sub: 'Missed today',
+      go: 'Results',
+      label: 'Cinedikt Daily, No. 142. See your result',
+    });
     // Run out of points is missed as surely as asking for the answer.
     expect(bannerView(today(gameOf({ phase: 'done', pts: 0 }))).sub).toBe('Missed today');
   });
 
-  it('puts every word the eye is given into the link’s name, the button’s included', () => {
+  it('is named as the handoff names it, the line beside the button left to the eye', () => {
+    // The page behind the link says the line again, and more.
     for (const g of [null, playing, won, missed]) {
       const v = bannerView(today(g));
-      for (const words of [v.no, BANNER_TITLE, v.sub, v.go]) expect(v.label).toContain(words);
+      expect(v.label).toContain('Cinedikt Daily, No. 142');
+      expect(v.label).not.toContain(v.sub);
     }
+    expect(bannerView(today(null)).label).toContain(BANNER_TITLE);
   });
 
   it('draws the box with nothing guessed while the puzzle is on its way', () => {
@@ -129,7 +143,7 @@ describe('what the banner says', () => {
       sub: '',
       // The room "Play" takes, kept; the stylesheet holds the word back.
       go: 'Play',
-      label: 'Cinedikt Daily: Point Blank',
+      label: 'Cinedikt Daily: Name Drop',
     });
   });
 
@@ -149,7 +163,7 @@ describe('the banner’s line with a place this week', () => {
     expect(bannerView(ranked(null))).toMatchObject({
       sub: '1,204th this week',
       go: 'Play',
-      label: 'Cinedikt Daily, No. 142: Point Blank. 1,204th this week. Play',
+      label: 'Cinedikt Daily, No. 142: Name Drop. Play',
     });
     // Even on a day nobody has played yet.
     expect(bannerView({ ...ranked(null), played: 0 }).sub).toBe('1,204th this week');
@@ -229,7 +243,7 @@ describe('the banner', () => {
   it('is one link to /daily, the whole of it, named for what it says', () => {
     const html = render({ state: 'ready', today: today(playing) });
     expect(html).toMatch(
-      /^<a class="cd-daily-banner" href="\/daily" aria-label="Cinedikt Daily, No. 142: Point Blank. 640 points left. Keep going">/,
+      /^<a class="cd-daily-banner" href="\/daily" aria-label="Cinedikt Daily, No. 142: Name Drop. Keep going">/,
     );
     // The button is drawn, not a control nested inside the link.
     expect(html).not.toContain('<button');
@@ -244,7 +258,7 @@ describe('the banner', () => {
     expect(html).toContain(
       '<span class="cd-daily-pill">Daily</span><span class="cd-daily-banner-meta">No. 142<span class="cd-daily-banner-day"> · Thursday 8 October</span></span>',
     );
-    expect(html).toContain('<span class="cd-daily-banner-title">Point Blank</span>');
+    expect(html).toContain('<span class="cd-daily-banner-title">Name Drop</span>');
     expect(html).toContain('<span class="cd-daily-banner-sub">61,240 playing today</span>');
     expect(html).toMatch(
       /<span class="cd-daily-banner-go"><span class="cd-daily-banner-shine" aria-hidden="true"><\/span><span class="cd-daily-banner-label">Play<\/span><svg [^>]*aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"><\/path><\/svg><\/span>/,
@@ -258,7 +272,7 @@ describe('the banner', () => {
   it('is drawn while the puzzle is on its way, marked waiting and holding the number back', () => {
     const html = render({ state: 'waiting' });
     expect(html).toMatch(/^<a class="cd-daily-banner cd-daily-banner-waiting" href="\/daily"/);
-    expect(html).toContain('<span class="cd-daily-banner-title">Point Blank</span>');
+    expect(html).toContain('<span class="cd-daily-banner-title">Name Drop</span>');
     expect(html).not.toContain('cd-daily-banner-meta');
     expect(html).not.toContain('cd-daily-banner-sub');
   });

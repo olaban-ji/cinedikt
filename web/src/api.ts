@@ -404,78 +404,124 @@ export async function searchMovies(
 // One hidden movie a day, played against the server: the page sends what
 // the reader does and draws the game the server sends back. Nothing here
 // ever holds the answer before the game is over — the server does not
-// send it — so these shapes are what the page has to work with, and no
-// more.
+// send it, nor a hidden name, nor a fact nobody has paid for — so these
+// shapes are what the page has to work with, and no more.
 
-/** A movie as the Daily shows it: a card turned over, a starting movie,
- *  a guess, or the answer at the end. `rating` is a number for every card
- *  and for the answer; a guessed movie can be unrated (null), and its
- *  year is 0 when the catalog has none. */
-export interface DailyFilm {
-  id: string;
-  title: string;
-  year: number;
-  rating: number | null;
-  /** Month and day as MMDD, 0 when the date says only a year. */
-  md: number;
-  /** Absent when the catalog has no picture for it. */
-  poster?: string;
-}
-
-/** One of the answer's people, once the reader knows them. */
+/** One of the people on today's movie, once the reader may see them: a
+ *  cast member whose slot is showing, a director bought as a fact, or
+ *  anyone at all once the game is over. */
 export interface DailyPerson {
   /** An IMDb name id, such as nm0000206. */
   id: string;
   name: string;
-  role: 'director' | 'cast';
-  /** Their place in the puzzle's people: directors first, then the cast
-   *  in billing order. It is their colour, HUES[slot % 16], and it never
+  /** 0–359, from their place on the movie: the cast in billing order, the
+   *  star first, then the directors. The page makes the colour from it
+   *  (daily.ts's hueColour), the same for everyone playing, and it never
    *  changes during a game. */
-  slot: number;
+  hue: number;
   /** TMDb's 185px photo, when there is one to show. */
   photo?: string;
-  /** The board cards they are on, so their dots can be drawn. */
-  cards: string[];
 }
 
-/** Which side of a wrong guess the answer is on. */
-export type DailyYearHint = 'older' | 'newer' | 'same';
-export type DailyRatingHint = 'higher' | 'lower' | 'same';
+/** Another movie a cast member is in, with none of the other five on it:
+ *  the "Also in" line under their name. */
+export interface DailyAlso {
+  id: string;
+  title: string;
+  /** 0 when the catalog has none. */
+  year: number;
+}
 
-/** One line of the game's record, as the panel's feed tells it. */
-export type DailyEntry =
-  | { type: 'start' }
-  | { type: 'flip'; card: string; cost: number; film: DailyFilm; relative?: undefined }
-  | { type: 'flip'; card: string; cost: number; relative: { shared: number }; film?: undefined }
-  | { type: 'person'; role: 'director' | 'actor'; cost: number; people: DailyPerson[] }
-  | { type: 'genres'; cost: number; genres: string[] }
-  /** The answer's year, which the server sends with this entry and never
-   *  before it, or before the end. */
-  | { type: 'year'; cost: number; year: number }
+/** One of the six names, in reveal order: slot 0 is the sixth-billed, who
+ *  shows from the start, and slot 5 the star. A hidden slot is its number
+ *  and nothing else, so no name can be read off the page early. */
+export type DailySlot =
+  | { slot: number; shown: false }
   | {
-      type: 'guess';
-      cost: number;
-      film: DailyFilm;
-      /** The board card the guessed movie is, which turns over; null
-       *  when it is not on the board. */
-      card: string | null;
-      shared: DailyPerson[];
-      /** Where the answer sits relative to the guess. Null when the
-       *  guess has no year, or no rating, to compare. */
-      year: DailyYearHint | null;
-      rating: DailyRatingHint | null;
-    }
+      slot: number;
+      shown: true;
+      person: DailyPerson;
+      also?: DailyAlso;
+      /** How it came to show: from the start, bought with Next name, or
+       *  through a wrong guess, which fills in anyone it shares and then
+       *  shows the next name. "end" is a name shown only because the game
+       *  is over, never seen in play: none of the other three is true of
+       *  it. Which names the reader saw is the log's to say (seenSlots),
+       *  not this. */
+      via: 'start' | 'next' | 'guess' | 'end';
+      /** The guessed movie that filled it in, when a guess did: the
+       *  "From your guess, Speed" line. */
+      from?: { id: string; title: string };
+    };
+
+/** The facts that can be bought, in the order the facts row offers them.
+ *  `years` narrows `decade`, and is only for sale once the decade has
+ *  been bought. */
+export type DailyFactKind = 'length' | 'rating' | 'genre' | 'decade' | 'years' | 'director';
+
+/** The facts bought so far. Only a bought fact is there at all. Length
+ *  and rating come as one of four bands each, and the years as a decade
+ *  or a five-year span, so no single number can be checked against a
+ *  candidate: the exact values only come with the end. */
+export interface DailyFacts {
+  /** 0 "Under 1h 30m", 1 "1h 30m to 2h", 2 "2h to 2h 30m", 3 "Over 2h 30m". */
+  length?: number;
+  /** 0 "Below 6.0", 1 "6.0 to 6.9", 2 "7.0 to 7.9", 3 "8.0 or higher". */
+  rating?: number;
+  /** IMDb's genres. */
+  genre?: string[];
+  /** The decade's first year: 1990. */
+  decade?: number;
+  /** The five years' first: 1995, for 1995–1999. */
+  years?: number;
+  /** Every director, in the crew's order. */
+  director?: DailyPerson[];
+}
+
+/** How close a wrong guess was: 0 cold, 1 warm, 2 hot. */
+export type DailyWarmth = 0 | 1 | 2;
+
+/** What a wrong guess learned, worked out by the server when it was made
+ *  and kept with it. Never which genre, and never which way in time or
+ *  rating: those are facts the reader pays for. */
+export interface DailyGuess {
+  id: string;
+  title: string;
+  /** 0 when the catalog has none. */
+  year: number;
+  cost: number;
+  /** The slots of the six it credits. Directors do not count. */
+  shared: number[];
+  sameDecade: boolean;
+  sharesGenre: boolean;
+  warmth: DailyWarmth;
+}
+
+/** One line of the game's record. A last wrong guess that runs the points
+ *  out logs "guess" and then "out"; a right guess logs "win". */
+export type DailyEntry =
+  | { type: 'next'; cost: number; slot: number }
+  | { type: 'fact'; kind: DailyFactKind; cost: number }
+  /** An overlap bought on the Movies sheet, for this person's id. */
+  | { type: 'overlap'; person: string; cost: number }
+  | { type: 'guess'; cost: number; guess: DailyGuess }
   | { type: 'win' }
   | { type: 'gaveup' }
   | { type: 'out' };
 
-/** Everything the game kept back, sent once it is over. */
-export interface DailyEnd {
-  answer: DailyFilm & { genres: string[] };
-  /** Every card, its people as slots. */
-  cards: { id: string; film: DailyFilm; people: number[] }[];
-  /** Every one of the answer's people, with their cards. */
-  people: DailyPerson[];
+/** Today's movie, sent once the game is over and never before. */
+export interface DailyAnswer {
+  id: string;
+  title: string;
+  year: number;
+  rating: number;
+  /** Its runtime, in minutes. */
+  length: number;
+  genres: string[];
+  /** The poster's average, "#rrggbb", as DailyToday's `colour`. */
+  colour: string;
+  /** Absent when the catalog has no picture for it. */
+  poster?: string;
 }
 
 /** A game, as the server has recorded it. */
@@ -489,27 +535,21 @@ export interface DailyGame {
   /** RFC 3339. */
   startedAt: string;
   finishedAt: string | null;
-  /** Whole seconds from Play to the end, once it is over. */
-  secs: number | null;
   won: boolean;
   gaveUp: boolean;
   /** What the next wrong guess costs. */
   nextCost: number;
-  /** "start" first, then one entry per move. A last wrong guess that
-   *  runs the points out logs "guess" and then "out". */
+  /** Always six, in reveal order. Every one is shown once the game is
+   *  over. */
+  slots: DailySlot[];
+  facts: DailyFacts;
+  /** The people whose overlap has been bought on the Movies sheet, by id:
+   *  each is a free toggle there for the rest of the game. */
+  overlaps: string[];
+  /** One entry per move, in order. */
   log: DailyEntry[];
-  /** The people bought and the people found, in slot order. */
-  known: DailyPerson[];
-  end: DailyEnd | null;
-}
-
-/** A card on the board before anything is known about it: where it goes,
- *  and nothing else. The id is opaque, so its number says nothing. */
-export interface DailyCard {
-  id: string;
-  year: number;
-  rating: number;
-  md: number;
+  /** Everything the game kept back, sent once it is over. */
+  end: null | { answer: DailyAnswer; directors: DailyPerson[] };
 }
 
 export interface DailyPlayer {
@@ -531,13 +571,11 @@ export interface DailyToday {
    *  server's time rather than the reader's. RFC 3339. */
   now: string;
   /** The reader's next midnight, in the zone the page sent, as an
-   *  instant: when their next map starts. RFC 3339. */
+   *  instant: when their next movie starts. RFC 3339. */
   next: string;
-  cards: DailyCard[];
-  /** The three movies showing from the start, the only ones sent whole. */
-  start: { card: string; film: DailyFilm }[];
-  /** How many directors and cast the answer has, for the clue buttons. */
-  clues: { directors: number; cast: number };
+  /** Today's poster's average colour, "#rrggbb", sent from the start: it
+   *  fills the hidden card, which says nothing a search could use. */
+  colour: string;
   player: DailyPlayer;
   /** Games started on this puzzle, by anyone, from every zone that has
    *  had its date: the count rolls on for as long as the puzzle is
@@ -551,58 +589,77 @@ export interface DailyToday {
   dev?: boolean;
 }
 
-/** The clues the panel sells. */
-export type DailyClue = 'director' | 'actor' | 'genres' | 'year';
-
-/** What the reader can do to a game in progress. */
+/** What the reader can do to a game in progress, one request each. */
 export type DailyMove =
-  | { kind: 'flip'; card: string }
-  | { kind: 'buy'; clue: DailyClue }
+  | { kind: 'next' }
+  | { kind: 'buy'; fact: DailyFactKind }
+  /** For a person showing, by id: lights only the movies they share with
+   *  the person the Movies sheet is open on. */
+  | { kind: 'overlap'; person: string }
   | { kind: 'guess'; film: string }
   | { kind: 'reveal' };
 
+/** One of a showing person's movies, for the Movies sheet. Today's movie
+ *  is among them when they are in it, and looks like every other: there
+ *  is a poster for every one of them, or for none. */
+export interface DailyMovie {
+  id: string;
+  title: string;
+  year: number;
+  rating: number;
+  genres: string[];
+  poster?: string;
+  /** The slots showing now that are credited on it, the person's own
+   *  included. A hidden slot is never listed. */
+  on: number[];
+  /** One of today's directors is on it. Only there once Director has
+   *  been bought. */
+  dir?: true;
+}
+
+export interface DailyMovies {
+  /** The person asked about, by id. */
+  person: string;
+  movies: DailyMovie[];
+}
+
 export type DailyTab = 'today' | 'week';
 
-/** A player on a leaderboard. On the week's board `pts` is the week's sum
- *  and `days` its Monday-to-Sunday points, null for a day not played. */
+/** A player on a leaderboard. On the week's board `pts` is the total
+ *  since Monday and `days` each day's points, Monday to the puzzle's day,
+ *  0 for a day not played. */
 export interface DailyBoardRow {
-  rank: number;
+  /** A competition rank: one more than the players with more points, so
+   *  equal scores share it. */
+  place: number;
+  /** Another listed player shares this place ("=7,804"). */
+  tied: boolean;
   name: string;
-  /** 0–359, for their avatar. */
+  /** 0–359. */
   hue: number;
   pts: number;
-  /** Today's time, on today's board only: a week row never carries it.
-   *  The reader's own time for the week is `you.secs`. */
-  secs?: number;
+  days?: number[];
   you: boolean;
-  days?: (number | null)[];
 }
 
-/** Where the leaderboard skips ranks. */
-export interface DailyBoardGap {
-  gap: true;
-}
-
+/** A leaderboard: the players around the reader, never a top list, which
+ *  would be the only reason to look an answer up. Today's is two above,
+ *  the reader, one on their score and one below; the week's two ahead
+ *  and two behind. Empty without the reader on it. */
 export interface DailyBoard {
   tab: DailyTab;
-  /** The players on this board, and the reader if they are not on it. */
+  /** The players on this board. */
   total: number;
-  /** The reader's own place, which they see whether or not they are
-   *  listed; null without a game to place. */
-  you: null | {
-    rank: number;
-    pts: number;
-    secs: number;
-    /** On the board for everyone to see: false until they have played on
-     *  enough earlier days. */
-    listed: boolean;
-    days?: (number | null)[];
-  };
-  rows: (DailyBoardRow | DailyBoardGap)[];
+  /** The reader's own place; null without a game to place. */
+  you: null | { place: number; tied: boolean; pts: number; days?: number[] };
+  rows: DailyBoardRow[];
   /** Today's board only: the share of finished players who kept fewer
    *  points, and the share of finished games that were won, in percent. */
   beat: number | null;
   solved: number | null;
+  /** Today's board only: how many finished scores fell in each hundred,
+   *  0–99 up to 900–999, and then 1,000 on its own. Eleven counts. */
+  chart?: number[] | null;
 }
 
 // Every Daily request carries the reader's time zone, as `tz`: each
@@ -644,7 +701,8 @@ function dailyPost<T>(path: string, body: unknown, signal?: AbortSignal): Promis
 }
 
 /** Today's puzzle, for the reader's date. 503 with reason "not-ready"
- *  until that date's puzzle has been picked. It never writes, so the
+ *  until that date's puzzle has been picked, and while the catalog is
+ *  older than the runtimes a puzzle needs. It never writes, so the
  *  opening screen can ask on every visit. */
 export function fetchDaily(signal?: AbortSignal): Promise<DailyToday> {
   return dailyGet<DailyToday>('/daily', signal);
@@ -653,16 +711,15 @@ export function fetchDaily(signal?: AbortSignal): Promise<DailyToday> {
 /** Another generated name. With a player already made it renames them;
  *  without one it only proposes, and nothing is written until Play.
  *  `shown` is the name on the screen, sent so the server never offers
- *  it again: a reader who presses New name always sees it change, even
- *  when the pool of names is small. */
+ *  it again. */
 export function renameDaily(shown: string, signal?: AbortSignal): Promise<DailyPlayer> {
   return dailyPost<DailyPlayer>('/daily/name', { name: shown }, signal);
 }
 
 /** Starts the reader's game on puzzle `no`, under the name they were
- *  shown, making them a player first if they are not one yet. A game
+ *  offered, making them a player first if they are not one yet. A game
  *  already started comes back as it stands. The game keeps the zone it
- *  is started in: its map ends at that zone's midnight, whatever zone a
+ *  is started in: its day ends at that zone's midnight, whatever zone a
  *  later move says it is from. */
 export function playDaily(
   no: number,
@@ -673,17 +730,17 @@ export function playDaily(
 }
 
 /** The reader's place on this week's board, as the This week tab ranks
- *  it: by points, then by time, among the same players. `players` is
- *  the board's size, the reader counted. */
+ *  it: a competition rank by points, among the same players. `players`
+ *  is the board's size, the reader counted. */
 export interface DailyWeek {
   rank: number;
   players: number;
 }
 
-/** The reader's standing, for the opening screens: the streak the title
- *  screen shows, and their place this week, which is null with no
- *  points this week to place (a Monday before playing, say) and for a
- *  reader who has never played. */
+/** The reader's standing, for the start screen's banner: their streak,
+ *  which no screen shows now, and their place this week, which is null with no points this week to
+ *  place (a Monday before playing, say) and for a reader who has never
+ *  played. */
 export interface DailyMe {
   streak: number;
   week: DailyWeek | null;
@@ -692,8 +749,8 @@ export interface DailyMe {
 /** The reader's standing on their own puzzle's week. Before they have
  *  finished today's game it is over the days before today, so not having
  *  played yet never counts against them; once they have, today is in it.
- *  It never writes, and the server keeps it for a minute, so both opening
- *  screens can ask on every visit; a reader with no cookie is simply
+ *  It never writes, and the server keeps it for a minute, so the banner
+ *  can ask on every visit; a reader with no cookie is simply
  *  nobody, `{ streak: 0, week: null }`. */
 export function fetchDailyMe(signal?: AbortSignal): Promise<DailyMe> {
   return dailyGet<DailyMe>('/daily/me', signal);
@@ -703,7 +760,7 @@ export function fetchDailyMe(signal?: AbortSignal): Promise<DailyMe> {
  *  something else: null with no place to show, and null too when it
  *  cannot be had. A place that fails is no place, so it never takes the
  *  screen it sits on away, and never leaves an older one standing in its
- *  stead: the banner and both of the title screen's asks go through it. */
+ *  stead. */
 export function fetchDailyWeek(signal?: AbortSignal): Promise<DailyWeek | null> {
   return fetchDailyMe(signal).then(
     (me) => me.week,
@@ -711,10 +768,59 @@ export function fetchDailyWeek(signal?: AbortSignal): Promise<DailyWeek | null> 
   );
 }
 
-/** One move in a game in progress. `key` names this move for good, so
- *  sending it again after a lost answer is never charged twice; `seq` is
- *  the number of moves the page has seen, so a move from a point the game
- *  has passed is refused ("stale") with the game as it stands. */
+// The moves. Each is one request to its own address, carrying `key` and
+// `seq`, and each answers with the game as it now stands. `key` names the
+// move for good, so sending it again after a lost answer is never
+// charged twice; `seq` is the number of moves the page has seen, so a
+// move from a point the game has passed is refused ("stale") with the
+// game as it stands.
+
+/** Shows the next hidden name, for NEXT_COST. */
+export function nextName(no: number, key: string, seq: number, signal?: AbortSignal): Promise<{ game: DailyGame }> {
+  return dailyPost(`/daily/${no}/next`, { key, seq }, signal);
+}
+
+/** Buys a fact about the movie. */
+export function buyFact(
+  no: number,
+  kind: DailyFactKind,
+  key: string,
+  seq: number,
+  signal?: AbortSignal,
+): Promise<{ game: DailyGame }> {
+  return dailyPost(`/daily/${no}/buy`, { key, seq, kind }, signal);
+}
+
+/** Buys a showing person's overlap on the Movies sheet, by their id. */
+export function buyOverlap(
+  no: number,
+  person: string,
+  key: string,
+  seq: number,
+  signal?: AbortSignal,
+): Promise<{ game: DailyGame }> {
+  return dailyPost(`/daily/${no}/overlap`, { key, seq, person }, signal);
+}
+
+/** Guesses a movie, by its IMDb id. */
+export function guessMovie(
+  no: number,
+  film: string,
+  key: string,
+  seq: number,
+  signal?: AbortSignal,
+): Promise<{ game: DailyGame }> {
+  return dailyPost(`/daily/${no}/guess`, { key, seq, film }, signal);
+}
+
+/** Shows the answer, which ends the game at nought. */
+export function revealAnswer(no: number, key: string, seq: number, signal?: AbortSignal): Promise<{ game: DailyGame }> {
+  return dailyPost(`/daily/${no}/reveal`, { key, seq }, signal);
+}
+
+/** Any one move, sent through its own call above: for a page that keeps
+ *  the move it is waiting on as a value, to send again under the same key
+ *  (daily.ts's moveSig). */
 export function sendDailyMove(
   no: number,
   move: DailyMove,
@@ -722,17 +828,27 @@ export function sendDailyMove(
   seq: number,
   signal?: AbortSignal,
 ): Promise<{ game: DailyGame }> {
-  const base = { key, seq };
   switch (move.kind) {
-    case 'flip':
-      return dailyPost(`/daily/${no}/flip`, { ...base, card: move.card }, signal);
+    case 'next':
+      return nextName(no, key, seq, signal);
     case 'buy':
-      return dailyPost(`/daily/${no}/buy`, { ...base, kind: move.clue }, signal);
+      return buyFact(no, move.fact, key, seq, signal);
+    case 'overlap':
+      return buyOverlap(no, move.person, key, seq, signal);
     case 'guess':
-      return dailyPost(`/daily/${no}/guess`, { ...base, film: move.film }, signal);
+      return guessMovie(no, move.film, key, seq, signal);
     case 'reveal':
-      return dailyPost(`/daily/${no}/reveal`, base, signal);
+      return revealAnswer(no, key, seq, signal);
   }
+}
+
+/** One showing person's movies, for the Movies sheet, from today's
+ *  snapshot: which of the showing names are on each, and whether a
+ *  director is once Director has been bought. Refused for someone who is
+ *  not a showing slot in the reader's game (400 "bad"); once the game is
+ *  over it answers for anyone in the cast. */
+export function fetchDailyMovies(no: number, person: string, signal?: AbortSignal): Promise<DailyMovies> {
+  return dailyGet<DailyMovies>(`/daily/${no}/movies?person=${encodeURIComponent(person)}`, signal);
 }
 
 /** Development only, for trying the Daily again and again on one day:
@@ -752,10 +868,6 @@ export function resetDaily(signal?: AbortSignal): Promise<void> {
 
 /** A leaderboard for puzzle `no`: today's, which is everyone who has
  *  finished that puzzle from any zone, or the week's so far. */
-export function fetchDailyBoard(
-  no: number,
-  tab: DailyTab,
-  signal?: AbortSignal,
-): Promise<DailyBoard> {
+export function fetchDailyBoard(no: number, tab: DailyTab, signal?: AbortSignal): Promise<DailyBoard> {
   return dailyGet<DailyBoard>(`/daily/${no}/board?tab=${tab}`, signal);
 }

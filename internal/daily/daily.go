@@ -1,14 +1,16 @@
 // Package daily is Cinedikt Daily's rules, with no database and no
-// clock of its own: one hidden movie a day, every movie on its map
-// shares an actor or director with it, and the player spends points on
-// clues until they name it.
+// clock of its own. The game is Name Drop: one hidden movie a day, whose
+// cast shows up one name at a time, from sixth-billed up to the star,
+// and the player spends points on names, facts and wrong guesses until
+// they name it. What is left is the score.
 //
 // The server owns the game. A game is the list of moves recorded for
-// it, and everything else about it (the points left, which cards are
-// face up, who is known) is worked out by replaying those moves through
-// the engine here. The page only ever draws what a replay says it may
-// see: until the game ends it is never told the answer, nor what is on a
-// card it has not turned over.
+// it, and everything else about it (the points left, which names are
+// showing, which facts are bought) is worked out by replaying those
+// moves through the engine here. The page only ever draws what a replay
+// says it may see: until the game ends it is never told the answer, nor
+// anyone in the cast it has not been shown, nor a fact it has not
+// bought.
 //
 // The catalog package picks each day's puzzle with the functions in
 // pick.go and keeps the games; the API renders them with view.go. Both
@@ -20,55 +22,111 @@ import (
 	"time"
 )
 
-// Start is the points every game begins with. The score is what is left.
+// Start is the points every game begins with. The score is what is left,
+// so the most anyone can score is Start.
 const Start = 1000
 
-// What each clue costs. A director and an actor cost the same: either
-// is one person, and which one gives more away depends on the map. The
-// year is dearest: it marks the answer's row on the map, which with a
-// rating line or two from wrong guesses leaves a handful of cards'
-// worth of places for it to be.
+// NameCost is what the next name costs: one more of the cast, in reveal
+// order.
+const NameCost = 100
+
+// What each fact costs. Length and rating are cheapest: each is one of
+// four wide bands. Genre, the decade and the five years inside it narrow
+// further, and the five years can only follow the decade. The director
+// is dearest, because a name can be searched: a filmography is a few
+// steps from the answer.
+//
+// The rule for any fact added here: none may give the answer away in a
+// single search. So no plot, no tagline, no quote and no characters'
+// names, since any line of a movie's text can be pasted into a search
+// engine; and no exact number while the game is on, so the length,
+// rating and years come only as ranges, and no one value can be checked
+// against a candidate. "How it starts", the first sentence of the
+// synopsis, was retired for exactly that: The Matrix's named Neo and
+// Morpheus.
 const (
-	DirectorCost = 150
-	ActorCost    = 150
-	GenresCost   = 80
-	YearCost     = 200
+	LengthCost   = 50
+	RatingCost   = 50
+	GenreCost    = 100
+	DecadeCost   = 100
+	YearsCost    = 100
+	DirectorCost = 250
 )
 
+// OverlapCost is what adding someone to another person's Movies sheet
+// costs, once per person: the sheet then lights only the movies they
+// share, which is the strongest move there is, so it is paid for.
+const OverlapCost = 250
+
 // The first wrong guess costs WrongCost, and each one after it
-// WrongStep more, so fishing for clues by guessing gets dear fast.
+// WrongStep more, so guessing never beats asking for the next name.
 const (
 	WrongCost = 100
 	WrongStep = 50
 )
-
-// FlipCost is what turning over a card costs: dearer the better it is
-// rated, because a well-rated movie tends to be a well-known one, and
-// knowing it is most of the way to placing its people. 20 to 80, in
-// steps of five.
-func FlipCost(rating float64) int {
-	return clamp(round5(20+(rating-4.5)*13), 20, 80)
-}
-
-// round5 rounds to the nearest five, a half away from zero: 52.5 is 55,
-// which is the prototype's Math.round for every rating there is.
-func round5(x float64) int {
-	return int(math.Round(x/5)) * 5
-}
-
-func clamp(n, lo, hi int) int {
-	return max(lo, min(hi, n))
-}
 
 // NextWrong is what the next wrong guess costs after wrong of them.
 func NextWrong(wrong int) int {
 	return WrongCost + WrongStep*wrong
 }
 
-// RelativeShared is how many of the answer's people a card has to share
+// RelativeShared is how many of the answer's people a movie has to share
 // with it to be a close relative: usually a sequel, which would give the
-// answer away. Its face says only how many it shares.
+// answer away. No one's "Also in" movie is ever one.
 const RelativeShared = 3
+
+// Hues are the colours of the answer's people, in their places on the
+// movie: the cast in billing order, the star first, then the directors.
+// Everyone keeps one colour all game. The page makes the colour from the
+// hue, oklch(0.76 0.13 h) in dark and oklch(0.56 0.16 h) in light; the
+// server only says which.
+var Hues = []int{232, 28, 345, 150, 78, 205, 118, 255, 180, 52, 5, 128}
+
+// HueAt is the hue of the person at place i on the movie, counting the
+// star as 0, then down the billing, then the directors.
+func HueAt(i int) int {
+	return Hues[((i%len(Hues))+len(Hues))%len(Hues)]
+}
+
+// The bands the length and rating facts are sold as. The page has the
+// words ("Under 1h 30m"); the API says which band, 0 to 3.
+
+// LengthBand is a runtime in minutes as one of four bands: under 90, 90
+// to 119, 120 to 149, and 150 or more.
+func LengthBand(minutes int) int {
+	switch {
+	case minutes < 90:
+		return 0
+	case minutes < 120:
+		return 1
+	case minutes < 150:
+		return 2
+	}
+	return 3
+}
+
+// RatingBand is an IMDb rating as one of four bands: below 6.0, 6.0 to
+// 6.9, 7.0 to 7.9, and 8.0 or higher. Compared in tenths, which is all
+// IMDb gives, so 7.0 kept as 6.9999 is still 7.0.
+func RatingBand(rating float64) int {
+	tenths := math.Round(rating * 10)
+	switch {
+	case tenths >= 80:
+		return 3
+	case tenths >= 70:
+		return 2
+	case tenths >= 60:
+		return 1
+	}
+	return 0
+}
+
+// Decade is the decade fact, the first year of it: 1999 is 1990.
+func Decade(year int) int { return year / 10 * 10 }
+
+// Years is the five-year fact, the first year of it: 1999 is 1995, shown
+// as "1995–1999".
+func Years(year int) int { return year / 5 * 5 }
 
 // dayLayout is how a puzzle's day is written: in the API, in the
 // database and as the seed of its shuffles.
@@ -197,7 +255,7 @@ var (
 	ErrPoints  = refuse(402, "points", "there are not enough points left for that")
 	ErrNoGame  = refuse(404, "no-game", "there is no game for this puzzle yet")
 	ErrUnknown = refuse(404, "unknown", "that movie is not in the catalog")
-	ErrKnown   = refuse(409, "known", "that has already been turned over, bought or guessed")
+	ErrKnown   = refuse(409, "known", "that is already showing, bought or guessed")
 	ErrDone    = refuse(409, "done", "the game is over")
 	// ErrStale is a move made from an old point: another tab, or one
 	// left open, has moved the game on since. The API sends the game as

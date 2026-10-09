@@ -3,6 +3,7 @@ package daily
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -118,137 +119,341 @@ func TestAnOrderDrawnFromAnotherGeneratorKeepsTheRules(t *testing.T) {
 	}
 }
 
-// matrixPeople are slots for a candidate: one director and four cast.
-var matrixPeople = []Slot{
-	{ID: "nm1", Name: "Director One", Role: RoleDirector},
-	{ID: "nm2", Name: "Actor Two", Role: RoleCast},
-	{ID: "nm3", Name: "Actor Three", Role: RoleCast},
-	{ID: "nm4", Name: "Actor Four", Role: RoleCast},
-	{ID: "nm5", Name: "Actor Five", Role: RoleCast},
+// billed is a candidate's billed cast in billing order, the star first:
+// seven, so the six are the first six and the seventh is left out.
+var billed = []Named{
+	{ID: "nm0000206", Name: "Keanu Reeves"},
+	{ID: "nm0000401", Name: "Laurence Fishburne"},
+	{ID: "nm0005251", Name: "Carrie-Anne Moss"},
+	{ID: "nm0915989", Name: "Hugo Weaving"},
+	{ID: "nm0287825", Name: "Gloria Foster"},
+	{ID: "nm0001592", Name: "Joe Pantoliano"},
+	{ID: "nm0324658", Name: "Marcus Chong"},
 }
+
+var wachowskis = []Named{{ID: "nm0905154", Name: "Lana Wachowski"}, {ID: "nm0905152", Name: "Lilly Wachowski"}}
 
 var answer = Candidate{
-	ID: "tt0133093", Title: "The Matrix", Year: 1999, Rating: 8.7, MD: 331, Era: 1995,
-	Genres: []string{"Action", "Sci-Fi"}, Votes: 2000000,
+	ID: "tt0133093", Title: "The Matrix", Year: 1999, Rating: 8.7, MD: 331, Length: 136, Colour: "#26382d",
+	Poster: "https://img.example/matrix.jpg", Era: 1995, Genres: []string{"Action", "Sci-Fi"}, Votes: 2000000,
 }
 
-// mapOf is a map of n rated movies, each through one person in turn, the
-// answer itself first as the spine has it, two unrated movies and a
-// close relative.
-func mapOf(n int) []MapFilm {
-	r := func(v float64) *float64 { return &v }
-	films := []MapFilm{{ID: "tt0133093", Title: "The Matrix", Year: 1999, Rating: r(8.7), Votes: 2000000, People: []int{0, 1, 2, 3, 4}}}
-	for i := range n {
-		films = append(films, MapFilm{
-			ID: fmt.Sprintf("tt1%06d", i), Title: fmt.Sprintf("Linked %d", i), Year: 1980 + i%40,
-			Rating: r(5 + float64(i%40)/10), Votes: 1000 * (i + 1), People: []int{i % 5},
-		})
+// sheets are the six's movies as the catalog reads them: the answer,
+// crediting everyone; a sequel, a close relative and the most voted of
+// all; Keanu's John Wick and Speed, and a Keanu movie both Wachowskis
+// made, a close relative too; a movie Moss and Pantoliano share, which
+// is neither one's "Also in"; two of Weaving's with the same votes;
+// Foster's one, through the seventh-billed as well; nothing of
+// Fishburne's own, only the sequel and three he made with Foster; and
+// two Pantoliano made, one with Weaving and one with Moss. So each of
+// the six has MinSheet movies besides the answer, and no more.
+func sheets() []MapFilm {
+	return []MapFilm{
+		{ID: "tt0133093", Title: "The Matrix", Year: 1999, Rating: 8.7, MD: 331, Genres: []string{"Action", "Sci-Fi"}, Votes: 2000000,
+			People: []string{"nm0905154", "nm0905152", "nm0000206", "nm0000401", "nm0005251", "nm0915989", "nm0287825", "nm0001592", "nm0324658"}},
+		{ID: "tt0234215", Title: "The Matrix Reloaded", Year: 2003, Rating: 7.2, Genres: []string{"Action", "Sci-Fi"}, Votes: 9000000,
+			People: []string{"nm0905154", "nm0905152", "nm0000206", "nm0000401", "nm0005251", "nm0915989"}},
+		{ID: "tt2911666", Title: "John Wick", Year: 2014, Rating: 7.4, Genres: []string{"Action", "Thriller"}, Votes: 750000,
+			People: []string{"nm0000206"}},
+		{ID: "tt0111257", Title: "Speed", Year: 1994, Rating: 7.3, Genres: []string{"Action", "Thriller"}, Votes: 400000,
+			People: []string{"nm0000206"}},
+		{ID: "tt9000001", Title: "A Wachowski Keanu Movie", Year: 2020, Rating: 6.1, Votes: 5000000,
+			People: []string{"nm0000206", "nm0905154", "nm0905152"}},
+		{ID: "tt0209144", Title: "Memento", Year: 2000, Rating: 8.4, Genres: []string{"Mystery", "Thriller"}, Votes: 1400000,
+			People: []string{"nm0005251", "nm0001592"}},
+		{ID: "tt0241303", Title: "Chocolat", Year: 2000, Rating: 7.2, Votes: 200000, People: []string{"nm0005251"}},
+		{ID: "tt0106977", Title: "The Fugitive", Year: 1993, Rating: 7.8, Votes: 330000, People: []string{"nm0001592"}},
+		{ID: "tt0434409", Title: "V for Vendetta", Year: 2005, Rating: 8.1, Votes: 1200000, People: []string{"nm0915989"}},
+		{ID: "tt0120737", Title: "The Lord of the Rings", Year: 2001, Rating: 8.9, Votes: 1200000, People: []string{"nm0915989"}},
+		{ID: "tt0067433", Title: "Man and Boy", Year: 1971, Rating: 5.5, Votes: 900, People: []string{"nm0287825", "nm0324658"}},
+		{ID: "tt9000003", Title: "A Fishburne Foster Movie", Year: 1985, Rating: 6.2, Votes: 500, People: []string{"nm0000401", "nm0287825"}},
+		{ID: "tt9000004", Title: "Another Fishburne Foster Movie", Year: 1986, Rating: 6.4, Votes: 500, People: []string{"nm0000401", "nm0287825"}},
+		{ID: "tt9000005", Title: "A Third Fishburne Foster Movie", Year: 1987, Rating: 6.6, Votes: 500, People: []string{"nm0287825", "nm0000401"}},
+		{ID: "tt9000006", Title: "A Pantoliano Weaving Movie", Year: 1988, Rating: 5.9, Votes: 500, People: []string{"nm0001592", "nm0915989"}},
+		{ID: "tt9000007", Title: "A Pantoliano Moss Movie", Year: 1989, Rating: 6.1, Votes: 500, People: []string{"nm0001592", "nm0005251"}},
+		// Only the seventh-billed and a director: on no one's sheet.
+		{ID: "tt9000002", Title: "Nobody's", Year: 2010, Rating: 6.0, Votes: 100, People: []string{"nm0324658", "nm0905154"}},
 	}
-	films = append(films,
-		MapFilm{ID: "tt2000001", Title: "Unrated One", Year: 2020, Votes: 3, People: []int{1}},
-		MapFilm{ID: "tt2000002", Title: "Unrated Two", Year: 2021, Votes: 4, People: []int{2}},
-		MapFilm{ID: "tt0234215", Title: "The Matrix Reloaded", Year: 2003, Rating: r(7.2), Votes: 2, People: []int{4, 0, 1, 2}},
-	)
-	return films
 }
 
-func TestBuildDealsTheBoard(t *testing.T) {
-	p, err := Build(142, oct8.Add(15*time.Hour), answer, matrixPeople, mapOf(45))
+var oct9 = time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
+
+// TestBuildKeepsTheSixInRevealOrder: the first six billed, the star
+// last, each with their billing; the directors in crew order; and the
+// answer's length, colour and genres.
+func TestBuildKeepsTheSixInRevealOrder(t *testing.T) {
+	p, err := Build(143, oct9.Add(15*time.Hour), answer, billed, wachowskis, sheets())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.No != 142 || !p.Day.Equal(oct8) || p.Answer.ID != "tt0133093" || p.Era != 1995 || p.Genre != "Action" {
+	if p.No != 143 || !p.Day.Equal(oct9) || p.Era != 1995 || p.Genre != "Action" {
 		t.Errorf("puzzle = %+v", p)
 	}
-	// Forty-five linked movies and the relative: the answer and the two
-	// unrated movies are left off.
-	if len(p.Cards) != 46 {
-		t.Errorf("%d cards, want 46", len(p.Cards))
+	if a := p.Answer; a.ID != "tt0133093" || a.Length != 136 || a.Colour != "#26382d" || a.Rating != 8.7 || !slices.Equal(a.Genres, []string{"Action", "Sci-Fi"}) {
+		t.Errorf("answer = %+v", a)
 	}
-	seen := map[string]bool{}
-	for i, c := range p.Cards {
-		if c.ID != fmt.Sprintf("c%d", i+1) {
-			t.Errorf("card %d is %s, want the ids in order", i, c.ID)
-		}
-		if c.Film == "tt0133093" || strings.HasPrefix(c.Film, "tt20000") {
-			t.Errorf("%s (%s) is on the board", c.Film, c.Title)
-		}
-		seen[c.Film] = true
-	}
-	// The relative's people are sorted into slot order.
-	for _, c := range p.Cards {
-		if c.Film == "tt0234215" && (!slices.Equal(c.People, []int{0, 1, 2, 4}) || !c.Relative()) {
-			t.Errorf("the relative = %+v", c)
+	var who []string
+	for i, b := range p.Cast {
+		who = append(who, fmt.Sprintf("%s %d", b.Name, b.Billing))
+		if p.SlotOf(b.ID) != i {
+			t.Errorf("%s is in slot %d, SlotOf says %d", b.Name, i, p.SlotOf(b.ID))
 		}
 	}
-	// The deal hides how well known a card is: c1 is not simply the
-	// first movie the map listed.
-	if p.Cards[0].Film == "tt1000000" && p.Cards[1].Film == "tt1000001" {
-		t.Error("the card ids follow the map's own order")
+	want := []string{"Joe Pantoliano 6", "Gloria Foster 5", "Hugo Weaving 4", "Carrie-Anne Moss 3", "Laurence Fishburne 2", "Keanu Reeves 1"}
+	if !slices.Equal(who, want) {
+		t.Errorf("cast = %v, want %v", who, want)
 	}
-	again, err := Build(142, oct8, answer, matrixPeople, mapOf(45))
-	if err != nil {
-		t.Fatal(err)
+	if p.SlotOf("nm0324658") != -1 || p.SlotOf("nm0905154") != -1 {
+		t.Error("the seventh-billed or a director has a slot")
 	}
-	if !slices.EqualFunc(p.Cards, again.Cards, func(a, b Card) bool { return a.ID == b.ID && a.Film == b.Film }) {
-		t.Error("the same day dealt the same map two ways")
+	if !slices.Equal(p.DirectorIDs(), []string{"nm0905154", "nm0905152"}) {
+		t.Errorf("directors = %v", p.Directors)
+	}
+	again, err := Build(143, oct9, answer, billed, wachowskis, sheets())
+	if err != nil || !reflect.DeepEqual(p, again) {
+		t.Errorf("the same candidate built twice differs: %v", err)
 	}
 }
 
-// TestTheStartingCardsAreTheLeastKnownThroughDifferentPeople: the
-// relative has the fewest votes of all and is passed over, and each
-// card after the first shares nobody with those already taken.
-func TestTheStartingCardsAreTheLeastKnownThroughDifferentPeople(t *testing.T) {
-	p, err := Build(142, oct8, answer, matrixPeople, mapOf(45))
+// TestEachOfTheSixIsAlsoInTheirMostVotedMovieOfTheirOwn: never one that
+// credits another of the six, never the answer, never a close relative,
+// however well known; ties fall to the lower id, and someone with
+// nothing of their own has no "Also in".
+func TestEachOfTheSixIsAlsoInTheirMostVotedMovieOfTheirOwn(t *testing.T) {
+	p, err := Build(143, oct9, answer, billed, wachowskis, sheets())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var films []string
-	for _, id := range p.Start {
-		films = append(films, p.card(id).Film)
+	got := map[string]string{}
+	for _, b := range p.Cast {
+		if b.Also != nil {
+			got[b.Name] = fmt.Sprintf("%s %s %d", b.Also.ID, b.Also.Title, b.Also.Year)
+		}
 	}
-	// Linked 0, 1 and 2 have the fewest votes, through slots 0, 1 and 2.
-	if want := []string{"tt1000000", "tt1000001", "tt1000002"}; !slices.Equal(films, want) {
-		t.Errorf("starting cards = %v, want %v", films, want)
+	want := map[string]string{
+		// John Wick, not the Wachowskis' movie, a close relative with
+		// more votes, nor the sequel, nor the answer.
+		"Keanu Reeves": "tt2911666 John Wick 2014",
+		// Chocolat, not Memento, which Pantoliano is in too.
+		"Carrie-Anne Moss": "tt0241303 Chocolat 2000",
+		"Joe Pantoliano":   "tt0106977 The Fugitive 1993",
+		// The Lord of the Rings and V for Vendetta tie, and tt0120737
+		// sorts first.
+		"Hugo Weaving": "tt0120737 The Lord of the Rings 2001",
+		// The seventh-billed is not one of the six.
+		"Gloria Foster": "tt0067433 Man and Boy 1971",
 	}
-
-	cards := []Card{
-		{ID: "c1", Film: "tt1", Votes: 10, People: []int{2, 3}},
-		{ID: "c2", Film: "tt2", Votes: 20, People: []int{3}},
-		{ID: "c3", Film: "tt3", Votes: 30, People: []int{4}},
-		{ID: "c4", Film: "tt4", Votes: 5, People: []int{1, 5, 6}},
-		{ID: "c5", Film: "tt5", Votes: 30, People: []int{5}},
-		{ID: "c6", Film: "tt0", Votes: 30, People: []int{6}},
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("also = %v\nwant   %v", got, want)
 	}
-	// c4 is a relative; c2 shares Fishburne with c1; c6 and c3 tie on
-	// votes, and c6's id sorts first.
-	if got := Starts(cards); !slices.Equal(got, []string{"c1", "c6", "c3"}) {
-		t.Errorf("Starts = %v, want c1, c6, c3", got)
+	if fish := p.Cast[p.SlotOf("nm0000401")]; fish.Also != nil {
+		t.Errorf("Fishburne, with nothing of his own, is also in %+v", fish.Also)
 	}
 }
 
-func TestBuildRefusesAMapThatIsNoGame(t *testing.T) {
-	thin := mapOf(38)
-	noStarts := mapOf(45)
-	for i := range noStarts {
-		noStarts[i].People = []int{0}
+// TestTheSheetsAreTheSixsMoviesWithTheAnswerUnmarked: each movie says
+// which of the six it credits as slots, whose sheets it is on, here
+// everyone it credits, and whether a director is on it; the answer is
+// one of them, crediting everyone, as the sequel nearly does; a movie
+// none of the six is on is on no sheet; and the order is by year, so
+// nothing in it says which movie is best known.
+func TestTheSheetsAreTheSixsMoviesWithTheAnswerUnmarked(t *testing.T) {
+	p, err := Build(143, oct9, answer, billed, wachowskis, sheets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range p.Movies {
+		got = append(got, fmt.Sprintf("%d %s %v %v %v", m.Year, m.ID, m.Cast, m.Sheets, m.Dir))
+	}
+	want := []string{
+		"1971 tt0067433 [1] [1] false",
+		"1985 tt9000003 [1 4] [1 4] false",
+		"1986 tt9000004 [1 4] [1 4] false",
+		"1987 tt9000005 [1 4] [1 4] false",
+		"1988 tt9000006 [0 2] [0 2] false",
+		"1989 tt9000007 [0 3] [0 3] false",
+		"1993 tt0106977 [0] [0] false",
+		"1994 tt0111257 [5] [5] false",
+		"1999 tt0133093 [0 1 2 3 4 5] [0 1 2 3 4 5] true",
+		"2000 tt0209144 [0 3] [0 3] false",
+		"2000 tt0241303 [3] [3] false",
+		"2001 tt0120737 [2] [2] false",
+		"2003 tt0234215 [2 3 4 5] [2 3 4 5] true",
+		"2005 tt0434409 [2] [2] false",
+		"2014 tt2911666 [5] [5] false",
+		"2020 tt9000001 [5] [5] true",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("movies =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, m := range p.Movies {
+		if m.Genres == nil || m.Cast == nil || m.Sheets == nil {
+			t.Errorf("%s has a null list: %+v", m.ID, m)
+		}
+	}
+	// Without the answer in what the catalog read, it is made from the
+	// candidate, so every sheet still has it.
+	without := slices.DeleteFunc(sheets(), func(f MapFilm) bool { return f.ID == answer.ID })
+	q, err := Build(143, oct9, answer, billed, wachowskis, without)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(q.Movies, func(m Movie) bool { return m.ID == answer.ID })
+	if i < 0 || !slices.Equal(q.Movies[i].Cast, []int{0, 1, 2, 3, 4, 5}) || !slices.Equal(q.Movies[i].Sheets, []int{0, 1, 2, 3, 4, 5}) ||
+		!q.Movies[i].Dir || q.Movies[i].Rating != 8.7 {
+		t.Errorf("the answer made from the candidate = %+v", q.Movies)
+	}
+}
+
+// TestEachSheetIsItsOwnFourHundredMostVoted: four hundred and ten more
+// of Pantoliano's, the least voted of his, leave his fifteen fewest off
+// his sheet, though Foster is on the ten fewest and her sheet, far from
+// full, has them. On his they would be cards past his cap with only him
+// showing on them, each a sign that someone hidden is in it, and his
+// sheet run past MaxSheet would say that such cards were there to find.
+// The other five are on nobody's sheet and are not kept; and the answer,
+// made the least voted of all, is on every sheet still.
+func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
+	more := sheets()
+	more[0].Votes = 0
+	for n := 1; n <= MaxSheet+10; n++ {
+		people := []string{"nm0001592"}
+		if n <= 10 {
+			people = append(people, "nm0287825")
+		}
+		more = append(more, MapFilm{ID: fmt.Sprintf("tt97%05d", n), Title: fmt.Sprintf("Extra %d", n), Year: 1950 + n%70,
+			Rating: 6, Genres: []string{"Drama"}, Votes: n, People: people})
+	}
+	p, err := Build(143, oct9, answer, billed, wachowskis, more)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra := func(id string) int {
+		n := 0
+		fmt.Sscanf(id, "tt97%05d", &n)
+		return n
+	}
+	joe := p.SheetWants(0)
+	if len(joe) != MaxSheet || !slices.Contains(joe, answer.ID) {
+		t.Errorf("Pantoliano's sheet has %d movies, the answer among them %v; want %d", len(joe), slices.Contains(joe, answer.ID), MaxSheet)
+	}
+	for _, id := range joe {
+		if n := extra(id); n >= 1 && n <= 15 {
+			t.Errorf("Extra %d, among the fifteen least voted of his, is on Pantoliano's sheet", n)
+		}
+	}
+	// Hers: the answer, Man and Boy, the three with Fishburne and the ten.
+	gloria := p.SheetWants(1)
+	for n := 1; n <= 10; n++ {
+		if !slices.Contains(gloria, fmt.Sprintf("tt97%05d", n)) {
+			t.Errorf("Extra %d, which Foster is on, is not on her sheet", n)
+		}
+	}
+	if len(gloria) != 15 {
+		t.Errorf("Foster's sheet has %d movies, want 15: %v", len(gloria), gloria)
+	}
+	for _, m := range p.Movies {
+		if m.ID == answer.ID && !slices.Equal(m.Sheets, []int{0, 1, 2, 3, 4, 5}) {
+			t.Errorf("the answer, the least voted, is on the sheets of %v", m.Sheets)
+		}
+		if n := extra(m.ID); n >= 1 && n <= 10 && (!slices.Equal(m.Cast, []int{0, 1}) || !slices.Equal(m.Sheets, []int{1})) {
+			t.Errorf("Extra %d credits %v and is on the sheets of %v, want [0 1] and [1]", n, m.Cast, m.Sheets)
+		}
+		if n := extra(m.ID); n >= 11 && n <= 15 {
+			t.Errorf("Extra %d, on nobody's sheet, is kept", n)
+		}
+	}
+
+	// Once Foster shows, her sheet lights Pantoliano on the ten, and his
+	// stays at MaxSheet without them.
+	g := play(t, p)
+	g.do(KindNext, "")
+	hers, ok := p.SheetOf(g.state(), 1, Live{})
+	if !ok || len(hers) != 15 {
+		t.Fatalf("Foster's sheet with her showing: %d movies, %v", len(hers), ok)
+	}
+	for _, m := range hers {
+		if n := extra(m.ID); n >= 1 && n <= 10 && !slices.Equal(m.On, []int{0, 1}) {
+			t.Errorf("Extra %d on Foster's sheet lights %v, want [0 1]", n, m.On)
+		}
+	}
+	if his, _ := p.SheetOf(g.state(), 0, Live{}); len(his) != MaxSheet {
+		t.Errorf("Pantoliano's sheet with Foster showing has %d movies, want %d", len(his), MaxSheet)
+	}
+	if also := p.Cast[0].Also; also == nil || also.ID != "tt0106977" {
+		t.Errorf("Pantoliano is also in %+v, want The Fugitive", also)
+	}
+}
+
+// TestBuildRefusesACastMemberWithTooFewOtherMovies: a sheet is free to
+// open, so one with fewer than MinSheet movies besides the answer would
+// give the answer away by elimination. Pantoliano's, the sixth-billed's
+// and open from Play, without The Fugitive, or with nothing but the
+// answer, is refused, and the refusal names neither the movie nor him.
+func TestBuildRefusesACastMemberWithTooFewOtherMovies(t *testing.T) {
+	without := func(ids ...string) []MapFilm {
+		return slices.DeleteFunc(sheets(), func(f MapFilm) bool { return slices.Contains(ids, f.ID) })
 	}
 	for _, c := range []struct {
-		name   string
-		a      Candidate
-		people []Slot
-		films  []MapFilm
-		why    string
+		name  string
+		films []MapFilm
+		why   string
 	}{
-		{"a thin map", answer, matrixPeople, thin, "39 rated movies"},
-		{"no director", answer, matrixPeople[1:], mapOf(45), "no director"},
-		{"too few cast", answer, matrixPeople[:3], mapOf(45), "2 billed cast"},
-		{"one way in", answer, matrixPeople, noStarts, "no three starting cards"},
+		{"without The Fugitive", without("tt0106977"), "3 other movies, fewer than 4"},
+		{"with only the answer", []MapFilm{sheets()[0]}, "0 other movies, fewer than 4"},
 	} {
-		_, err := Build(1, oct8, c.a, c.people, c.films)
+		_, err := Build(1, oct9, answer, billed, wachowskis, c.films)
 		var unfit Unfit
 		if !errors.As(err, &unfit) || !strings.Contains(err.Error(), c.why) {
 			t.Errorf("%s: %v, want a refusal saying %q", c.name, err, c.why)
+			continue
+		}
+		for _, name := range []string{"Matrix", answer.ID, "Pantoliano", "nm0001592"} {
+			if strings.Contains(err.Error(), name) {
+				t.Errorf("%s: the refusal %q names %s", c.name, err, name)
+			}
+		}
+	}
+	if _, err := Build(1, oct9, answer, billed, wachowskis, sheets()); err != nil {
+		t.Errorf("with MinSheet movies each besides the answer: %v", err)
+	}
+}
+
+// TestBuildRefusesWhatIsNoGame: no director, fewer than six billed cast,
+// no runtime, or no poster colour, each said without naming the movie.
+func TestBuildRefusesWhatIsNoGame(t *testing.T) {
+	noRuntime, noColour, badColour := answer, answer, answer
+	noRuntime.Length = 0
+	noColour.Colour = ""
+	badColour.Colour = "#26382D"
+	for _, c := range []struct {
+		name      string
+		a         Candidate
+		cast, dir []Named
+		why       string
+	}{
+		{"no director", answer, billed, nil, "no director"},
+		{"five billed cast", answer, billed[:5], wachowskis, "5 billed cast, fewer than 6"},
+		{"no runtime", noRuntime, billed, wachowskis, "no runtime"},
+		{"no colour", noColour, billed, wachowskis, "no colour"},
+		{"a colour the job never writes", badColour, billed, wachowskis, "no colour"},
+	} {
+		_, err := Build(1, oct9, c.a, c.cast, c.dir, sheets())
+		var unfit Unfit
+		if !errors.As(err, &unfit) || !strings.Contains(err.Error(), c.why) || strings.Contains(err.Error(), "Matrix") {
+			t.Errorf("%s: %v, want a refusal saying %q", c.name, err, c.why)
+		}
+	}
+}
+
+func TestAColourIsSevenCharactersOfLowerCaseHex(t *testing.T) {
+	for c, want := range map[string]bool{
+		"#26382d": true, "#000000": true, "#ffffff": true,
+		"": false, "#26382": false, "26382d0": false, "#26382D": false, "#26382g": false, "#26382d ": false,
+	} {
+		if got := ColourOK(c); got != want {
+			t.Errorf("ColourOK(%q) = %v, want %v", c, got, want)
 		}
 	}
 }

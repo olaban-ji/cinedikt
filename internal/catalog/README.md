@@ -205,9 +205,9 @@ client.
 
 ## Cinedikt Daily
 
-What makes a fair answer, how a board is dealt and how a game is
-scored are `internal/daily`'s; this package reads the catalog for it
-and keeps what it decides. The puzzles are `daily.go`, the players and
+What makes a fair answer, what a puzzle holds and how a game is scored
+are `internal/daily`'s; this package reads the catalog for it and
+keeps what it decides. The puzzles are `daily.go`, the players and
 games `dailygames.go`. Each reader plays the puzzle for their own
 date, which the API works out from the server's clock and the time
 zone the page names; all this package keeps of zones is the one each
@@ -228,59 +228,96 @@ midnight UTC picks the new last day, and a publish wakes it in case a
 day it could not pick for has an answer in the new catalog. For a
 missing day it reads the candidates once a pass (`dailyCandidates`:
 the `first_run` pool, rated, with a poster that is `ok` with an
-address, and `gridFilm`), orders them with `daily.Order` against what
-the days around it used (`dailyRecent`: the answers 90 days either
-side, the eras of the six days before and the first genres of the
-two), and tries them in turn. Nothing is asked of a candidate's
-synopsis: no clue is a line of its text, since any line can be pasted
+address, and `gridFilm`, each with its runtime and its poster's colour
+where they are known), orders them with `daily.Order` against what the
+days around it used (`dailyRecent`: the answers 90 days either side,
+the eras of the six days before and the first genres of the two), and
+tries them in turn (`firstFair`). Nothing is asked of a candidate's
+synopsis: no fact is a line of its text, since any line can be pasted
 into a search engine, so a movie OMDb has no plot for is as fair an
-answer as any. Each candidate's people and map are read with the map's
-own `peopleOn` and `spine`, plus one query for the titles and votes
-the spine leaves out (`titlesAndVotes`), and `daily.Build` deals the
-board or says why it cannot be one, as a `daily.Unfit`. The puzzle is
-inserted with `ON CONFLICT (day) DO NOTHING`, so a second process
-picking the same day keeps whichever wrote first. A clash on `no` is
-not skipped: it means the numbering has gone wrong and a day would go
-without a puzzle for good, so it is an error the pass returns. A day
-no candidate fits is an error, the other days are picked all the same,
+answer as any.
+
+`dailyPuzzleOf` refuses a candidate, as a `daily.Unfit`, as early as
+it can, so what is cheap is asked before what is not. One with no
+runtime goes first. Then its people are read with the map's own
+`peopleOn`, and one without a director or six billed cast goes. The
+six come from peopleOn's cast, and someone who both acted in it and
+directed it is a director there, never one of the six, so the Director
+fact can never name a hidden name. Then its poster's colour
+(`candidateColour`): the colour job's, or, for a poster the job has
+not reached, one worked out now with `PosterColour`, at the job's
+`colourWidth` and then the address kept, and saved back to
+`meta.posters.colour` as the job would save it. A poster that cannot
+be read is no colour, and the candidate goes; its error, which names
+the poster's address and so the movie, is never passed on. Only then
+are the six's movies read, in one query (`sheetFilms`): each one's
+`daily.MaxSheet` (400) most voted that they are credited on as actor,
+actress or director or in the crew's directors, rated and passing
+`gridFilm`, the answer first, with every one of the answer's people
+credited on each, not only the six, so a close relative can be told.
+`daily.Build` keeps, for each movie, which of the six it credits and
+whose own cap let it in, so a movie of one's that another of the six
+is on below their own cap is on the first's sheet only; refuses a
+candidate one of whose six has fewer than `daily.MinSheet` (four)
+movies besides the answer on their sheet, a floor chosen rather than
+measured; and picks each one's Also in movie. The puzzle is inserted
+with `ON CONFLICT (day) DO NOTHING`, so a second process picking the
+same day keeps whichever wrote first. A clash on `no` is not skipped:
+it means the numbering has gone wrong and a day would go without a
+puzzle for good, so it is an error the pass returns. A day no
+candidate fits is an error, the other days are picked all the same,
 and the pass returns every such day joined, which reaches Telegram the
-way any job's failure does. On the local catalog a pass picking eight
-days from about two thousand candidates takes 1.4 seconds, the first
-candidate fitting each day. On a new database the first pass runs the
-moment the first catalog is published, while the poster pass is still
-reaching the candidates' posters, so it can find few or none; a day it
-cannot pick waits for the next pass.
+way any job's failure does. How long a pass takes on the full catalog
+has not been measured since the sheets replaced the old board. On a
+new database the first pass runs the moment the first catalog is
+published, while the poster pass is still reaching the candidates'
+posters, so it can find few or none; a day it cannot pick waits for
+the next pass.
+
+`dailyCandidates` first looks for `runtime_minutes` on the live
+`titles` (`hasRuntimes`, in `information_schema`). A live catalog
+imported before titles kept IMDb's runtime has none, and every
+candidate in it would be unfit, so a pass would report each of the ten
+days rather than once why: it returns `ErrNoRuntimes`, "catalog: the
+catalog predates runtimes; the next import adds them", and picks
+nothing, and the API answers `not-ready` for any date without a
+puzzle. The next import brings the column: `schema.sql` has it,
+`ReadTitle` reads `runtimeMinutes`, a `\N`, empty, unreadable or
+non-positive one as nothing, and `LoadTitles` requires the column in
+`title.basics` and writes a runtime of nothing as null. The pass after
+that import picks as usual. `TestThePickWaitsForACatalogWithRuntimes`
+drops the column and puts it back.
 
 Nothing a pass logs or returns names a candidate: the logs and the
 Telegram board are read by whoever runs the site, who may want to play
-too. Each pick is logged at info with its day, number and cards, and a
-pass that picked or failed anything says how many of each, how many
-candidates there were and how long it took. A `daily.Unfit` is logged
-at debug by the candidate's place in the day's order rather than its
-id, since a later catalog could grow it a map fit to be an answer. The
-store's errors name the movie they were reading by its `tconst`, so
-`firstFair`, the loop that tries the candidates in turn, hands one on
-as `unnamed`, which says "a candidate" in its place and still unwraps
-to the error it was.
+too. Each pick is logged at info with its day, number and how many
+movies its sheets hold, and a pass that picked or failed anything says
+how many of each, how many candidates there were and how long it took.
+A `daily.Unfit` is logged at debug by the candidate's place in the
+day's order rather than its id, since a later catalog could make it
+fit. The store's errors name the movie they were reading by its
+`tconst`, so `firstFair` hands one on as `unnamed`, which says "a
+candidate" in its place and still unwraps to the error it was.
 
-Development's Play again is `RepickDailyPuzzle`, in `dailydev.go`,
-the only thing that ever deals a picked day again. The API offers it
-only outside production (`WithDailyDev`); nothing here knows which it
-is in, so nothing else may call it. It reads the puzzle, the
-candidates and `dailyRecent` for its day, adds the answer it is
-replacing to the answers left out, though the day's own is among them
-already, and orders the candidates with `daily.OrderBy` from a
-generator seeded at random rather than from the day: in the day's
-order each press would only swap the same two movies back and forth.
-The same `firstFair` deals the board, so a day dealt again is held to
-every rule the job holds it to. `replaceDailyPuzzle` then writes it
-over the old one in one transaction, keeping `no` and `day`, with an
-`UPDATE` guarded on the answer it read, so a second reset of the same
-puzzle at once fails rather than perhaps dealing back the answer the
-first just dealt, and deletes every game of the puzzle, the moves
-going with them by cascade: a game is moves made on one board, and
-replayed on another it would be nonsense. The players stay. When no
-other candidate fits it is `ErrNoOtherAnswer` and nothing changes, and
+Development's Play again is `RepickDailyPuzzle`, in `dailydev.go`, the
+only thing that ever deals a picked day again. The API offers it only
+outside production (`WithDailyDev`); nothing here knows which it is
+in, so nothing else may call it. It reads the puzzle, the candidates
+and `dailyRecent` for its day, adds the answer it is replacing to the
+answers left out, though the day's own is among them already, and
+orders the candidates with `daily.OrderBy` from a generator seeded at
+random rather than from the day: in the day's order each press would
+only swap the same two movies back and forth. The same `firstFair`
+makes the puzzle, so a day dealt again is held to every rule the job
+holds it to, and a poster colour it has to work out is fetched with
+`ColourFetch`'s deadline. `replaceDailyPuzzle` then writes it over the
+old one in one transaction, keeping `no` and `day`, with an `UPDATE`
+guarded on the answer it read, so a second reset of the same puzzle at
+once fails rather than perhaps dealing back the answer the first just
+dealt, and deletes every game of the puzzle, the moves going with them
+by cascade: a game is moves made on one movie's cast, and replayed on
+another's it would be nonsense. The players stay. When no other
+candidate fits it is `ErrNoOtherAnswer` and nothing changes, and
 nothing it returns names the answer it dealt or any candidate.
 
 A puzzle's number is its day's distance from No. 1's day, plus one.
@@ -299,6 +336,15 @@ after it would move. A reader whose date is earlier gets 503
 one back, or `ErrNotFound`, with its day as its date at midnight UTC
 (`daily.Today`), as a day is kept everywhere.
 
+A puzzle row is the answer (its id, title, year, rating, `md`, runtime
+as `length`, poster colour and genres), then three JSON documents:
+`directors`, `billed`, the six in reveal order with their billing and
+Also in movie (`cast` is a word SQL keeps), and `movies`, each with
+the slots it credits (`cast`), the slots whose own sheet it is on
+(`sheets`) and whether a director is on it (`dir`); and the era and
+first genre the next days are mixed against. `puzzleColumns` writes a
+nil list as an empty one, since the columns refuse null.
+
 `meta.daily_players` is a cookie's SHA-256, a generated name, unique,
 and a hue; `CreateDailyPlayer` and `RenameDailyPlayer` answer
 `ErrNameTaken` when the name is somebody's, and the API draws again. A
@@ -307,22 +353,24 @@ the zone it was started in, and its moves in `meta.daily_moves`.
 `zone` is the IANA name as `zone.String()` writes it. `StartDailyGame`
 on a game the player already has returns it as it is, its zone
 included, so pressing Play from somewhere else never moves the
-midnight it ends at. The column is added by
-`ALTER TABLE … ADD COLUMN IF NOT EXISTS`, `NOT NULL DEFAULT 'UTC'`, so
-a database that held the table before gains it, and the games already
-in it, all played on UTC's day, read as UTC.
+midnight it ends at.
 
-The Year clue, which replaced "How it starts", changed a database made
-before it the same way. `meta.daily_puzzles` loses `opening`, the
-first sentence of a synopsis that clue sold, by
-`ALTER TABLE … DROP COLUMN IF EXISTS`; the year needs nothing kept,
-since it is the puzzle's own `year`. `meta.daily_moves`' kind check,
-which `CREATE TABLE IF NOT EXISTS` leaves as it was, naming `story`,
-is dropped and added again naming `year`, once: a `DO` block does it
-only while the check does not name `year`, since adding a check reads
-every move ever made. `TestMetaBringsTheFirstDailyTablesToTheYear`
-applies `meta.sql` twice over fresh tables and twice over the old
-ones.
+The Daily's tables were first made for Point Blank, the board of blank
+cards Name Drop replaced, which was never released: production never
+had them. Its puzzles held a board and its moves turned cards over, so
+nothing of it replays as Name Drop. `meta.sql` drops `daily_moves`,
+`daily_games` and `daily_puzzles` in a `DO` block, only while
+`daily_puzzles` still has its `cards` column, which only that shape
+had, and the `CREATE TABLE IF NOT EXISTS` statements after it make
+them in Name Drop's: no time on a game, the board's index on points
+alone, `zone` in the `CREATE` rather than added after, and a kind
+check naming Name Drop's kinds. On a fresh database, and on one
+already in the new shape, the block does nothing, every time the file
+runs. `daily_players` is kept: a player is a cookie and a name, the
+same in either game. `TestMetaBringsPointBlanksTablesToNameDrop`
+applies `meta.sql` twice over no daily tables, twice over Point
+Blank's and twice over Name Drop's, and finds the same shape every
+time.
 
 `DailyAct` makes each move in one transaction holding the game's row
 (`FOR UPDATE`), in this order: a key already recorded is a retry,
@@ -333,50 +381,63 @@ request names, is over, and the move is `daily.ErrDay`; a `seq` other
 than the number of moves recorded is `daily.ErrStale`, returned with
 the game; anything else is replayed, checked by `daily.Apply`,
 inserted, and copied onto the game's row (`pts`, `moves`, and at the
-end `finished_at`, `won`, `gave_up` and `ms`), which is all the boards
-and the streak read. A wrong guess is looked up live, in the same
-transaction (`lookGuess`): its title, year, rating and date, and which
-of the answer's people it credits in the principals as actor, actress
-or director, or in `directors`, the credits that put a movie on a map.
-What that says is kept in the move's `detail`, so a game replays
-without the catalog, whatever later imports do to the guessed movie.
+end `finished_at`, `won` and `gave_up`), which is all the boards and
+the streak read. A wrong guess is looked up live, in the same
+transaction (`lookGuess`): its title, year and genres, and which of
+the six it credits in the principals as actor, actress or director, or
+in `directors`, the credits that put a movie on a map. What that says,
+the title and year, the slots of the six it credits, and whether it
+shares the answer's decade and any genre, is kept in the move's
+`detail`, so a game replays without the catalog, whatever later
+imports do to the guessed movie.
 
 `DailyLive` reads the posters and photos a game shows, fresh for every
 answer: posters from `meta.posters`, photos from `meta.people` only
 while younger than the 175 days anything of TMDb's is kept
-(`photoServed`). Neither is copied into a puzzle, and nothing of a
+(`photoServed`). A Movies sheet asks it for the poster of every movie
+on the sheet (`daily.Puzzle.SheetWants`), so the sheet can give all of
+them or none. Neither is copied into a puzzle, and nothing of a
 synopsis is, OMDb's or TMDb's, so the Daily keeps nothing of TMDb's
 past its six months.
 
-`DailyBoard` ranks in SQL and reads only the rows the board shows: the
-players who have finished `daily.EarlierGames` earlier puzzles, and
-always the reader, ranked by points, then time, then player id, the
-top `daily.TopRows` and `daily.Around` either side of the reader. Both
-tabs go by puzzle number and puzzle day, never by a clock. Today's is
-every finished game of the puzzle, whichever zone it was played in, so
-it stays open for the fifty hours or so its date is current somewhere.
-The week adds up each player's finished games of the puzzles whose
-days fall from the ISO Monday of the puzzle's day (`daily.Monday`) to
-that day, with each day's points. Today's two shares count every
-finished game, listed or not. `DailyStreak` reads the puzzles up to
-the reader's own, newest first, each with whether the player finished
-it with points, and stops at the first that breaks the run; a missing
-day has no row and breaks nothing. `DailyPlayed` counts the games
-started on a puzzle, in every zone, through `daily_games_no`, an index
-on `meta.daily_games (no)`: the board's index is partial, finished
-games only, and `UNIQUE (player, no)` leads with the player, so
-neither can count all of a puzzle's games, which the opening screen's
-banner asks for on every visit.
+`DailyBoard` places in SQL and reads only the rows the board shows.
+The board is the players who have finished `daily.EarlierGames`
+earlier puzzles, and always the reader, placed over the whole board by
+points alone (`placedSQL`): `rank()` for a competition place, a count
+over the points for whether it is tied, and a position that breaks
+ties by player id. Today reads the two nearest above the reader, them,
+the first-joined other on their score and the nearest below; the week,
+the two either side of them by position. `daily.Around` picks the same
+lines from those as it would from the whole board, and the board's
+size is one count more. Both tabs go by puzzle number and puzzle day,
+never by a clock. Today's is every finished game of the puzzle,
+whichever zone it was played in, so it stays open for the fifty hours
+or so its date is current somewhere. The week adds up each player's
+finished games of the puzzles whose days fall from the ISO Monday of
+the puzzle's day (`daily.Monday`) to that day, with each day's points.
+Today's figures (`todaysFigures`) are one `GROUP BY` over every
+finished game of the puzzle, listed or not: the share won, the share
+that scored fewer points than the reader, and the chart's eleven bars
+(`daily.Bar`). `DailyStreak` reads the puzzles up to the reader's own,
+newest first, each with whether the player finished it with points,
+and stops at the first that breaks the run; a missing day has no row
+and breaks nothing. `DailyPlayed` counts the games started on a
+puzzle, in every zone, through `daily_games_no`, an index on
+`meta.daily_games (no)`: the board's index is partial, finished games
+only, and `UNIQUE (player, no)` leads with the player, so neither can
+count all of a puzzle's games, which the opening screen's banner asks
+for on every visit.
 
 `DailyStanding` is the reader's place on the week's board, which is
-all the opening screens show of it: the same SQL as the tab
-(`weekSQL`), so the same players in the same order, over the days
+all the opening screen's banner shows of it: the same SQL as the tab
+(`weekSQL`), so the same players in the same places, over the days
 `daily.StandingDays` gives, from the Monday through the day before the
 puzzle's until the reader has finished it, and through its day after.
-It answers the reader's rank and how many players the board ranks, the
-reader counted, or nil when they are not on it or have nothing on it,
-as on a Monday before playing. Like the tab, it ranks the whole board
-to read one row; the API keeps each answer a minute.
+It answers the reader's competition place and how many players the
+board places, the reader counted, or nil when they are not on it or
+have nothing on it, as on a Monday before playing. Like the tab, it
+places the whole board to read one row; the API keeps each answer a
+minute.
 
 `DailyNames` reads what the API names players from, off every movie
 that is not adult and has at least `daily.NameVotes` (25,000) votes:
@@ -396,7 +457,9 @@ with no `ON DELETE`, so a puzzle somebody has played cannot be deleted
 by accident. The tests empty all four (`resetDaily`) and add what a
 puzzle needs to the published fixture: ten candidates, one for each
 day a full pass keeps, one in each of the opening screen pool's eight
-eras and a second in two of them, all sharing their people; sixty
-movies through those people, so every candidate's map holds 69 rated
-cards, the other nine candidates among them as close relatives; and
-one unrated movie that must stay off every board.
+eras and a second in two of them, each with a runtime, a poster and
+its colour, and all eight people, a director and seven billed cast, on
+every one of them; sixty movies through those people, one each, so
+every candidate's sheets hold 56 movies, the other nine candidates
+among them as close relatives; and one unrated movie that must be on
+no sheet.
