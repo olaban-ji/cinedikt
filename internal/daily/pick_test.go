@@ -251,6 +251,57 @@ func TestEachOfTheSixIsAlsoInTheirMostVotedMovieOfTheirOwn(t *testing.T) {
 	}
 }
 
+// TestAnAlsoInNeverSharesTheAnswersTitle: a franchise movie that shares
+// only one person is no close relative, but shown as someone's "Also in"
+// it names the answer. So it is passed over, however well known, for
+// their next most voted.
+func TestAnAlsoInNeverSharesTheAnswersTitle(t *testing.T) {
+	films := append(sheets(),
+		MapFilm{ID: "tt9000008", Title: "The Matrix: Pantoliano's Story", Year: 2004, Rating: 6.0, Votes: 990000,
+			People: []string{"nm0001592"}},
+		MapFilm{ID: "tt9000009", Title: "Matrices", Year: 2006, Rating: 5.5, Votes: 980000,
+			People: []string{"nm0005251"}},
+	)
+	p, err := Build(143, oct9, answer, billed, wachowskis, films)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if also := p.Cast[p.SlotOf("nm0001592")].Also; also == nil || also.ID != "tt0106977" {
+		t.Errorf("Pantoliano is also in %+v, want The Fugitive", also)
+	}
+	// "Matrices" is another word, not the answer's title.
+	if also := p.Cast[p.SlotOf("nm0005251")].Also; also == nil || also.ID != "tt9000009" {
+		t.Errorf("Moss is also in %+v, want Matrices", also)
+	}
+}
+
+// TestTitlesAreSharedWordForWord: a sequel, a subtitle, a dropped
+// article or a plural is the same title; a longer word that only starts
+// the same way is not.
+func TestTitlesAreSharedWordForWord(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"Halloween", "Halloween III: Season of the Witch", true},
+		{"The Matrix", "The Matrix Reloaded", true},
+		{"The Matrix", "Matrix", true},
+		{"Alien", "Aliens", true},
+		{"Toy Story 3", "Toy Story", true},
+		{"The Godfather Part II", "THE GODFATHER", true},
+		{"Up", "Up in the Air", true},
+		{"Heat", "Heathers", false},
+		{"Carrie", "Fried Green Tomatoes", false},
+		{"Glass", "Glass Onion", true},
+		{"Grass", "Glass", false},
+		{"", "Anything", false},
+	} {
+		if got := sharesTitle(c.a, c.b); got != c.want {
+			t.Errorf("sharesTitle(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 // TestTheSheetsAreTheSixsMoviesWithTheAnswerUnmarked: each movie says
 // which of the six it credits as slots, whose sheets it is on, here
 // everyone it credits, and whether a director is on it; the answer is

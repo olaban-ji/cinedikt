@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // Choosing a day's puzzle. The catalog reads the candidates, each one's
@@ -151,9 +153,10 @@ func (u Unfit) Error() string { return "daily: " + string(u) }
 // voted, the answer first and ties to the lower id, as sheetFilms orders
 // them, and must hold MinSheet movies besides the answer. Each one's
 // "Also in" movie is the most voted of theirs that credits none of the
-// other five, is not the answer, and is not a close relative, which
-// would give the answer away; ties fall to the lower id, so a pick made
-// twice keeps the same one. The movies kept are those on someone's
+// other five, is not the answer, is not a close relative and does not
+// share the answer's title (sharesTitle), any of which would give the
+// answer away; ties fall to the lower id, so a pick made twice keeps the
+// same one. The movies kept are those on someone's
 // sheet, sorted by year then id, so where a movie sits in the list says
 // nothing about how well known it is.
 func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []MapFilm) (*Puzzle, error) {
@@ -268,7 +271,7 @@ func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []
 	also := make([]*MapFilm, len(six))
 	for i, m := range movies {
 		f := from[i]
-		if f == nil || f.ID == a.ID || len(m.Cast) != 1 || len(f.People) >= RelativeShared {
+		if f == nil || f.ID == a.ID || len(m.Cast) != 1 || len(f.People) >= RelativeShared || sharesTitle(f.Title, a.Title) {
 			continue
 		}
 		if b := also[m.Cast[0]]; b == nil || f.Votes > b.Votes || (f.Votes == b.Votes && f.ID < b.ID) {
@@ -321,4 +324,49 @@ func nonNilStrings(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// sharesTitle says whether either title holds the other whole, word for
+// word: Halloween and Halloween III: Season of the Witch, The Matrix and
+// The Matrix Reloaded, Alien and Aliens. A sequel or a remake shown as
+// someone's "Also in" names the answer as surely as the answer itself,
+// and a franchise often shares only one person with it, too few to be a
+// close relative. Words are compared without case, punctuation, a
+// leading article or a plural s, so Aliens is still Alien. A short
+// answer title rules out more than it needs to (Up, every movie with "up"
+// in its name), which only means someone's next most voted is shown.
+func sharesTitle(a, b string) bool {
+	x, y := titleWords(a), titleWords(b)
+	if len(x) == 0 || len(y) == 0 {
+		return false
+	}
+	if len(x) < len(y) {
+		x, y = y, x
+	}
+	// Whether the shorter run of words, y, sits whole inside x.
+	for i := 0; i+len(y) <= len(x); i++ {
+		if slices.Equal(x[i:i+len(y)], y) {
+			return true
+		}
+	}
+	return false
+}
+
+// titleWords is a title as the words sharesTitle compares: lower case,
+// split at anything that is not a letter or a digit, without a leading
+// "the", "a" or "an", and with a plural s taken off words longer than
+// three letters.
+func titleWords(title string) []string {
+	words := strings.FieldsFunc(strings.ToLower(title), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if len(words) > 1 && (words[0] == "the" || words[0] == "a" || words[0] == "an") {
+		words = words[1:]
+	}
+	for i, w := range words {
+		if len(w) > 3 && strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") {
+			words[i] = strings.TrimSuffix(w, "s")
+		}
+	}
+	return words
 }
