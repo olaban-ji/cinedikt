@@ -647,16 +647,26 @@ const dailyPath = "/daily"
 
 // What a preview of Daily's link says: the game by its name, Name Drop,
 // which GAME_NAME in web/src/daily.ts is the page's own copy of, and the
-// two must agree. The card stays the site's own: a picture of the day's
-// movie, or of anyone in it, would give the answer away.
+// two must agree.
 const (
 	dailyShareTitle = "Cinedikt Daily: Name Drop"
 	dailyShareText  = "One hidden movie a day. Its cast shows up one name at a time."
 )
 
+// dailyCard is the card a preview of Daily's link shows: the title
+// screen's own picture, a hidden poster beside the names, under the
+// game's name, and the same every day. A picture of the day's movie, or
+// of anyone in it, would give the answer away. It is a file of the
+// page's own, web/public/og-daily.png, and like ogGeneric its ?v= is
+// how a new one reaches an unfurler still holding the old.
+const (
+	dailyCard    = "/og-daily.png?v=1"
+	dailyCardAlt = "Cinedikt Daily: Name Drop. Guess today’s movie from its cast, one name at a time."
+)
+
 // nameDaily names Daily in the tags a scraper reads: its tab title, a
-// title and a line for the preview of a shared link, and its address
-// without the slash however it was reached.
+// title, a line and a card for the preview of a shared link, and its
+// address without the slash however it was reached.
 func nameDaily(body []byte, origin, path string) []byte {
 	if path != dailyPath && path != dailyPath+"/" {
 		return body
@@ -664,6 +674,9 @@ func nameDaily(body []byte, origin, path string) []byte {
 	body = titleTag.ReplaceAllLiteral(body, []byte("<title>"+html.EscapeString(dailyTitle)+"</title>"))
 	body = setMeta(body, ogTitle, dailyShareTitle)
 	body = setMeta(body, ogDesc, dailyShareText)
+	body = setMeta(body, ogImage, origin+dailyCard)
+	body = setMeta(body, twImage, origin+dailyCard)
+	body = setMeta(body, ogAlt, dailyCardAlt)
 	body = setMeta(body, ogURL, origin+dailyPath)
 	return body
 }

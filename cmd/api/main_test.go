@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html"
+	"image/png"
 	"io"
 	"log/slog"
 	"net/http"
@@ -436,8 +437,8 @@ func TestTheAboutPageIsNamed(t *testing.T) {
 
 // Daily is named for a scraper at its one address, however it was
 // reached: its own title, and a preview that names the game, Name Drop,
-// and says what it is. The card stays the site's: a picture of the day's
-// movie would give it away.
+// says what it is, and shows its own card, the same every day, rather
+// than a picture of the day's movie, which would give it away.
 func TestTheDailyPageIsNamed(t *testing.T) {
 	var asked []string
 	var mu sync.Mutex
@@ -455,11 +456,12 @@ func TestTheDailyPageIsNamed(t *testing.T) {
 			`<meta property="og:title" content="Cinedikt Daily: Name Drop" />`,
 			`content="One hidden movie a day. Its cast shows up one name at a time."`,
 			`<meta property="og:url" content="https://cinedikt.com/daily" />`,
-			// What stays the generic page's: the card, what the card is
-			// said to be, and the description search engines read.
-			`<meta property="og:image" content="https://cinedikt.com` + ogGeneric + `" />`,
-			`<meta name="twitter:image" content="https://cinedikt.com` + ogGeneric + `" />`,
-			`<meta property="og:image:alt" content="Cinedikt — a movie’s cast and directors, and everything they made" />`,
+			`<meta property="og:image" content="https://cinedikt.com/og-daily.png?v=1" />`,
+			`<meta name="twitter:image" content="https://cinedikt.com/og-daily.png?v=1" />`,
+			`<meta property="og:image:alt" content="Cinedikt Daily: Name Drop. Guess today’s movie from its cast, one name at a time." />`,
+			// What stays the generic page's: the description search
+			// engines read.
+			`content="Start from a movie and follow its cast and directors across a timeline of everything they went on to make."`,
 		} {
 			if !strings.Contains(head, want) {
 				t.Errorf("GET %s is missing %s", path, want)
@@ -473,15 +475,16 @@ func TestTheDailyPageIsNamed(t *testing.T) {
 			}
 		}
 		// Nothing else about the page changes.
-		for _, tag := range []*regexp.Regexp{titleTag, ogTitle, ogDesc, ogURL} {
+		named := []*regexp.Regexp{titleTag, ogTitle, ogDesc, ogURL, ogImage, twImage, ogAlt}
+		for _, tag := range named {
 			head = tag.ReplaceAllString(head, "")
 		}
 		want := generic
-		for _, tag := range []*regexp.Regexp{titleTag, ogTitle, ogDesc, ogURL} {
+		for _, tag := range named {
 			want = tag.ReplaceAllString(want, "")
 		}
 		if head != want {
-			t.Errorf("GET %s changed more than its title, description and address", path)
+			t.Errorf("GET %s changed more than its title, description, card and address", path)
 		}
 	}
 	// Neither is a movie route, so nothing is looked up, and a path
@@ -493,6 +496,28 @@ func TestTheDailyPageIsNamed(t *testing.T) {
 	defer mu.Unlock()
 	if len(asked) != 0 {
 		t.Errorf("the catalog was read for %v on Daily", asked)
+	}
+}
+
+// TestTheDailyCardIsThere: the card Daily's preview names is one of the
+// page's own files, a PNG at the 1200×630 the page's tags say every card
+// is, and under the 300 kB past which WhatsApp shows a link with no
+// picture at all.
+func TestTheDailyCardIsThere(t *testing.T) {
+	file, _, _ := strings.Cut(dailyCard, "?")
+	body, err := os.ReadFile(filepath.Join("..", "..", "web", "public", file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) >= 300_000 {
+		t.Errorf("the Daily card is %d bytes, want under 300 kB", len(body))
+	}
+	cfg, err := png.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Width != ogW || cfg.Height != ogH {
+		t.Errorf("the Daily card is %d×%d, want %d×%d", cfg.Width, cfg.Height, ogW, ogH)
 	}
 }
 
