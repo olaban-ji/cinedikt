@@ -1656,6 +1656,9 @@ export function midnightText(game: Pick<DailyGame, 'phase'> | null): string {
  *  picked movie. Development only, and it says so: a server in
  *  production never offers it (DailyToday's `dev`). */
 export const PLAY_AGAIN = 'Play again (development only)';
+/** The button while the server deals the new movie, which can take a
+ *  moment: the press is heard, and a second one is not taken. */
+export const PLAY_AGAIN_BUSY = 'Starting again…';
 
 /** Said when Play again could not start the reader again. The page is
  *  left as it was, and pressing again is safe. */

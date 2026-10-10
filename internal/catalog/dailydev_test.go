@@ -294,3 +294,67 @@ func TestAPracticeGameIsOnNoBoardCountOrFigure(t *testing.T) {
 		t.Errorf("listed after today: %v, want only %d", listed, real.ID)
 	}
 }
+
+// TestPlayAgainKeepsItsCandidatesUntilTheCatalogMoves: the read Play
+// again deals from, the whole of a press's wait, is kept: a second press
+// deals from the same list; a new catalog published, or the list grown
+// older than DealCandidatesLife, reads it again; and opening the Daily
+// reads it in the background, so the first press need not wait.
+func TestPlayAgainKeepsItsCandidatesUntilTheCatalogMoves(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	dailyFixture(t, s)
+	publish := func() {
+		t.Helper()
+		if _, err := s.pool.Exec(ctx, `
+			INSERT INTO meta.generation (id, files, row_counts, imported_at) VALUES (1, '{}', '{}', clock_timestamp())
+			ON CONFLICT (id) DO UPDATE SET imported_at = clock_timestamp()`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish()
+	t.Cleanup(func() { _, _ = s.pool.Exec(context.Background(), `DELETE FROM meta.generation`) })
+	read := func() []daily.Candidate {
+		t.Helper()
+		cands, err := s.dealCandidates(ctx)
+		if err != nil || len(cands) == 0 {
+			t.Fatalf("candidates: %d, %v", len(cands), err)
+		}
+		return cands
+	}
+	same := func(a, b []daily.Candidate) bool { return &a[0] == &b[0] }
+
+	first := read()
+	if again := read(); !same(first, again) {
+		t.Error("a second press read the candidates again")
+	}
+	publish()
+	fresh := read()
+	if same(first, fresh) {
+		t.Error("a new catalog kept the old candidates")
+	}
+	s.deals.mu.Lock()
+	s.deals.read = time.Now().Add(-DealCandidatesLife)
+	s.deals.mu.Unlock()
+	if later := read(); same(fresh, later) {
+		t.Errorf("candidates older than %v were kept", DealCandidatesLife)
+	}
+
+	s.deals.mu.Lock()
+	s.deals.cands = nil
+	s.deals.mu.Unlock()
+	s.WarmDailyDeals()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		s.deals.mu.Lock()
+		warm := s.deals.cands != nil && s.deals.busy == nil
+		s.deals.mu.Unlock()
+		if warm {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the candidates were never read in the background")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

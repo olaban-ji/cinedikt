@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strconv"
+	"sync"
+	"time"
 
 	"cinedikt/internal/daily"
 )
@@ -48,7 +50,7 @@ func (s *Store) DealDailyPuzzle(ctx context.Context, player int64, no int) error
 	if err != nil {
 		return err
 	}
-	cands, err := s.dailyCandidates(ctx)
+	cands, err := s.dealCandidates(ctx)
 	if err != nil {
 		return err
 	}
@@ -76,6 +78,93 @@ func (s *Store) DealDailyPuzzle(ctx context.Context, player int64, no int) error
 		return err
 	}
 	return s.putDailyDeal(ctx, player, p)
+}
+
+// DealCandidatesLife is how long the candidates Play again deals from
+// are kept, besides until the next catalog is published. They move only
+// with the catalog, and with the posters and their colours, which the
+// jobs fill in through the day; a candidate a few hours late to join is
+// no matter on a server someone is testing on.
+const DealCandidatesLife = 6 * time.Hour
+
+// keptCandidates are the daily candidates one store last read for Play
+// again, the catalog they were read from, and when. The read is the
+// whole of the time a press takes, about twenty seconds on a full
+// catalog and nearer a minute on a cold one, since it checks every cast
+// member's crowd for every movie with daily.MinVotes votes; the rest of
+// a deal is a fraction of a second. busy is a read under way, which a
+// press arriving meanwhile waits for rather than starting its own.
+type keptCandidates struct {
+	mu    sync.Mutex
+	from  time.Time
+	read  time.Time
+	cands []daily.Candidate
+	busy  chan struct{}
+}
+
+// dealCandidates are the daily candidates, as dailyCandidates reads them,
+// kept from the last read while the live catalog is the one they were
+// read from and for DealCandidatesLife. Only Play again reads them this
+// way: the daily job reads them afresh for each pass that picks, as it
+// always has.
+func (s *Store) dealCandidates(ctx context.Context) ([]daily.Candidate, error) {
+	_, from, err := s.Published(ctx)
+	if err != nil {
+		return nil, err
+	}
+	k := &s.deals
+	for {
+		k.mu.Lock()
+		if k.cands != nil && k.from.Equal(from) && time.Since(k.read) < DealCandidatesLife {
+			cands := k.cands
+			k.mu.Unlock()
+			return cands, nil
+		}
+		busy := k.busy
+		if busy == nil {
+			break
+		}
+		k.mu.Unlock()
+		select {
+		case <-busy:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	done := make(chan struct{})
+	k.busy = done
+	k.mu.Unlock()
+	cands, err := s.dailyCandidates(ctx)
+	k.mu.Lock()
+	if err == nil {
+		k.from, k.read, k.cands = from, time.Now(), cands
+	}
+	k.busy = nil
+	close(done)
+	k.mu.Unlock()
+	return cands, err
+}
+
+// WarmDailyDeals reads the candidates Play again deals from, in the
+// background, unless a read is on its way already, so the first press,
+// and the first after a new catalog, is as quick as the rest: with them
+// kept and current it costs only the read of which catalog is live. The
+// API asks when a reader opens the Daily on a server with its
+// development tools on. A read that fails is let go: the press reads
+// again, and says so.
+func (s *Store) WarmDailyDeals() {
+	k := &s.deals
+	k.mu.Lock()
+	idle := k.busy == nil
+	k.mu.Unlock()
+	if !idle {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		_, _ = s.dealCandidates(ctx)
+	}()
 }
 
 // putDailyDeal keeps p as player's own deal of its number, in place of

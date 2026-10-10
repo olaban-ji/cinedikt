@@ -1158,6 +1158,16 @@ describe('Play again, in development', () => {
     expect(drawn(null, true)).not.toContain('cd-nd-again');
   });
 
+  it('says it is starting again, and takes no second press, while the new movie is dealt', () => {
+    for (const game of [gameOf(), SOLVED]) {
+      const html = renderToStaticMarkup(
+        createElement(DailyGameView, { ...viewProps(game, true, () => {}), againBusy: true }),
+      );
+      expect(html).toContain('<button type="button" class="cd-nd-again" disabled="" aria-busy="true">Starting again…</button>');
+      expect(html).not.toContain('Play again (development only)');
+    }
+  });
+
   it('asks the page to start again when pressed, from either place', () => {
     for (const game of [gameOf(), SOLVED]) {
       const again = vi.fn();

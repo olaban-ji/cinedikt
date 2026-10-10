@@ -94,6 +94,9 @@ type DailyStore interface {
 	// a deal ever read (WithDailyDev).
 	DealDailyPuzzle(ctx context.Context, player int64, no int) error
 	DailyDeal(ctx context.Context, player int64, no int) (*daily.Puzzle, error)
+	// WarmDailyDeals gets what DealDailyPuzzle deals from ready in the
+	// background, so a press of Play again need not wait for it.
+	WarmDailyDeals()
 }
 
 // WithDaily serves Cinedikt Daily from store. Without it every Daily
@@ -537,6 +540,12 @@ type dailyToday struct {
 func (d *dailyRoutes) read(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := d.now()
+	// Whoever opens the Daily with the development tools on may press
+	// Play again next, which waits on its candidates unless they are read
+	// already: they are read now, behind this answer.
+	if d.dev {
+		d.store.WarmDailyDeals()
+	}
 	zone := zoneOf(r)
 	player, token, ok, err := d.player(r)
 	if err != nil {

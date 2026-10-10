@@ -363,8 +363,16 @@ puzzle's columns. A picked day itself is never dealt again, so nobody
 else's game or movie changes. The API offers it only with the Daily's
 development tools on (`WithDailyDev`), and only then reads a deal
 (`DailyDeal`); nothing here knows whether they are, so nothing else may
-call it. It reads the puzzle, the candidates, afresh on every press and
-so in about two seconds, and `dailyRecent` for its day, adds the day's
+call it. It reads the puzzle, the candidates, and `dailyRecent` for its
+day. The candidates are the whole of a press's wait, about twenty
+seconds on a full catalog and nearer a minute cold, since the query
+checks every cast member's crowd for every movie with
+`daily.MinVotes` votes, so `dealCandidates` keeps them on the store
+until a new catalog is published (`Published`'s stamp) or
+`DealCandidatesLife` has passed, one read at a time, a press arriving
+meanwhile waiting on it; `WarmDailyDeals` reads them in the background
+when the API is asked for the Daily with the tools on. The daily job
+still reads its own afresh for each pass that picks. It adds the day's
 own answer and any deal the player had to the answers left out, and
 orders the candidates with `daily.OrderBy` from a generator seeded at
 random rather than from the day: in the day's order each press would

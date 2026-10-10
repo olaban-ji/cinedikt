@@ -104,6 +104,7 @@ type fakeDaily struct {
 	deals     map[[2]int64]*daily.Puzzle
 	dealt     []string
 	dealReads int
+	warms     int
 	noOther   bool
 }
 

@@ -76,6 +76,9 @@ type Store struct {
 	wantsDone chan struct{}
 	stop      chan struct{}
 	stopOnce  sync.Once
+	// deals is what development's Play again deals from, kept between
+	// presses (dealCandidates).
+	deals keptCandidates
 }
 
 // Open connects and makes sure meta exists. meta is created on every

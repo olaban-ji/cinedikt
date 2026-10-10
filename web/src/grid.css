@@ -6733,9 +6733,14 @@ button.cd-nd-tried-chip::before {
     background-color 0.15s ease;
 }
 
+/* While the new movie is dealt it says so, and takes no second press. */
+.cd-nd-again:disabled {
+  cursor: progress;
+}
+
 @media (hover: hover) {
   .cd-nd-giveup:hover:not(:disabled),
-  .cd-nd-again:hover {
+  .cd-nd-again:hover:not(:disabled) {
     color: var(--t);
     background: var(--ln);
   }

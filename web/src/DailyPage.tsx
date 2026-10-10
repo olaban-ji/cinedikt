@@ -239,11 +239,14 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false, onOpenMovie }: 
     setAsked((n) => n + 1);
   }, [hide]);
   const resetting = useRef(false);
+  const [againBusy, setAgainBusy] = useState(false);
   const again = useCallback(() => {
     if (resetting.current) return;
     resetting.current = true;
+    setAgainBusy(true);
     void playAgain(resetDaily, restart, say).finally(() => {
       resetting.current = false;
+      setAgainBusy(false);
     });
   }, [restart, say]);
 
@@ -259,6 +262,7 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false, onOpenMovie }: 
           say={say}
           reload={reload}
           again={again}
+          againBusy={againBusy}
           rulesSignal={rulesSignal}
           onOpenMovie={onOpenMovie}
         />
@@ -296,6 +300,8 @@ interface GameProps {
   /** Play again, offered only when today's puzzle says `dev`: a server in
    *  production never does. */
   again: () => void;
+  /** Play again pressed, and the server dealing the new movie. */
+  againBusy?: boolean;
   rulesSignal: number;
   onOpenMovie?: (id: string, title: string) => void;
 }
@@ -305,7 +311,16 @@ const NO_DELAYS: ReadonlyMap<number, number> = new Map();
 
 /** The game for one loaded puzzle. Exported for its tests, which draw it
  *  from a fixture; the page draws it once today's puzzle has arrived. */
-export function DailyGameView({ today, offset, say, reload, again, rulesSignal, onOpenMovie }: GameProps) {
+export function DailyGameView({
+  today,
+  offset,
+  say,
+  reload,
+  again,
+  againBusy = false,
+  rulesSignal,
+  onOpenMovie,
+}: GameProps) {
   const screen = useScreen();
   const live = useLiveScreen();
   const theme = useResolvedTheme();
@@ -783,6 +798,7 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
         onChip={setMsgId}
         onReveal={reveal}
         onAgain={today.dev ? again : undefined}
+        againBusy={againBusy}
       />
     ),
     cast: (
@@ -811,6 +827,7 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
         onShare={share}
         onOpenMovie={onOpenMovie}
         onAgain={today.dev ? again : undefined}
+        againBusy={againBusy}
       />
     ),
     board: (
@@ -891,6 +908,7 @@ function TopBlock({
   onChip,
   onReveal,
   onAgain,
+  againBusy = false,
 }: {
   today: DailyToday;
   game: DailyGame;
@@ -903,6 +921,7 @@ function TopBlock({
   onChip: (id: string) => void;
   onReveal: () => void;
   onAgain?: () => void;
+  againBusy?: boolean;
 }) {
   const playing = game.phase === 'play';
   const chips = triedChips(game);
@@ -945,7 +964,7 @@ function TopBlock({
             </button>
             {/* Beside the way out, so starting again never takes giving
                 the answer away first. */}
-            {onAgain && <AgainButton onAgain={onAgain} />}
+            {onAgain && <AgainButton onAgain={onAgain} busy={againBusy} />}
           </div>
         )}
       </div>

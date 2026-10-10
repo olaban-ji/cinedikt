@@ -5,6 +5,7 @@ import {
   CHART_LABELS,
   NEXT_MOVIE_IN,
   PLAY_AGAIN,
+  PLAY_AGAIN_BUSY,
   SCORE_COUNT_AFTER_MS,
   SCORE_COUNT_MS,
   betterLine,
@@ -83,11 +84,12 @@ function Countdown({ to, offset }: { to: string; offset: number }) {
 
 /** Play again, in development only, at the foot of the result and beside
  *  Show the answer while the game is on: quieter than anything near it,
- *  and saying what it is. */
-export function AgainButton({ onAgain }: { onAgain: () => void }) {
+ *  and saying what it is. While the server deals the new movie it says
+ *  so, and cannot be pressed again. */
+export function AgainButton({ onAgain, busy = false }: { onAgain: () => void; busy?: boolean }) {
   return (
-    <button type="button" className="cd-nd-again" onClick={onAgain}>
-      {PLAY_AGAIN}
+    <button type="button" className="cd-nd-again" onClick={onAgain} disabled={busy} aria-busy={busy || undefined}>
+      {busy ? PLAY_AGAIN_BUSY : PLAY_AGAIN}
     </button>
   );
 }
@@ -115,13 +117,27 @@ interface ResultProps {
   onOpenMovie?: (id: string, title: string) => void;
   /** Play again, offered only by a server in development. */
   onAgain?: () => void;
+  /** Play again pressed, and the new movie on its way. */
+  againBusy?: boolean;
 }
 
 /** The result: how it ended and the score; the streak; the names it took,
  *  as six faces; what was paid for; how today's players did, with the
  *  scores chart; and Share result, Map this movie and the countdown to the
  *  next movie. */
-export function DailyResult({ today, game, board, fresh, offset, codes, theme, onShare, onOpenMovie, onAgain }: ResultProps) {
+export function DailyResult({
+  today,
+  game,
+  board,
+  fresh,
+  offset,
+  codes,
+  theme,
+  onShare,
+  onOpenMovie,
+  onAgain,
+  againBusy = false,
+}: ResultProps) {
   const score = game.won ? game.pts : 0;
   const shown = useCountUp(score, fresh);
   const pill = streakPill(today.streak, game);
@@ -241,7 +257,7 @@ export function DailyResult({ today, game, board, fresh, offset, codes, theme, o
         </span>
       </div>
       {/* Last in the result, where the prototype has its own. */}
-      {onAgain && <AgainButton onAgain={onAgain} />}
+      {onAgain && <AgainButton onAgain={onAgain} busy={againBusy} />}
     </section>
   );
 }

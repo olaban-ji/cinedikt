@@ -72,6 +72,13 @@ func (f *fakeDaily) DealDailyPuzzle(_ context.Context, player int64, no int) err
 	return nil
 }
 
+// WarmDailyDeals counts the times it was asked.
+func (f *fakeDaily) WarmDailyDeals() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.warms++
+}
+
 // DailyDeal is the movie player was dealt for No. no, or
 // catalog.ErrNotFound.
 func (f *fakeDaily) DailyDeal(_ context.Context, player int64, no int) (*daily.Puzzle, error) {
@@ -134,16 +141,23 @@ func TestPlayAgainIsARouteOnlyInDevelopment(t *testing.T) {
 		t.Errorf("today in production: %s", today.raw)
 	}
 	f.mu.Lock()
-	if len(f.dealt) != 0 || f.dealReads != 0 {
-		t.Errorf("production dealt %v and read %d deals", f.dealt, f.dealReads)
+	if len(f.dealt) != 0 || f.dealReads != 0 || f.warms != 0 {
+		t.Errorf("production dealt %v, read %d deals and warmed %d times", f.dealt, f.dealReads, f.warms)
 	}
 	f.mu.Unlock()
 
-	dev, _ := devServer(t, newFakeDaily(matrixPuzzle()), todayAt, nil)
+	devStore := newFakeDaily(matrixPuzzle())
+	dev, _ := devServer(t, devStore, todayAt, nil)
 	d := newBrowser(t, dev)
 	if r := d.get("/daily"); r.status != http.StatusOK || r.body["dev"] != true {
 		t.Errorf("today in development: %d %s", r.status, r.raw)
 	}
+	// Opening the Daily gets Play again's candidates ready behind it.
+	devStore.mu.Lock()
+	if devStore.warms != 1 {
+		t.Errorf("today in development warmed %d times, want once", devStore.warms)
+	}
+	devStore.mu.Unlock()
 	if r := d.reset(""); r.status != http.StatusNoContent || r.raw != "" {
 		t.Errorf("reset in development: %d %q", r.status, r.raw)
 	}
