@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -714,6 +715,96 @@ func TestEveryFactIsKeptAsAMove(t *testing.T) {
 	}
 }
 
+// TestOneSheetIsOpenedAGameUnderItsRow: six requests at once, from the
+// same point, each opening another of the six's sheets, take turns on
+// the game's row, so one is recorded and the other five are stale. It
+// is kept with whose sheet it is and no cost, read back cold as the
+// game's sheet; a retry of it naming someone else is the game as it is;
+// and a second, from the game as it stands, is known.
+func TestOneSheetIsOpenedAGameUnderItsRow(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := todaysPuzzle(t, s)
+	player, err := s.CreateDailyPlayer(ctx, daily.TokenHash(daily.NewToken()), "Trinity Kimble", 205)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartDailyGame(ctx, player.ID, p.No, oct8, time.UTC); err != nil {
+		t.Fatal(err)
+	}
+	for _, who := range []string{p.Cast[1].ID, p.Directors[0].ID} {
+		if _, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: "too-soon-" + who, Kind: daily.KindSheet, Arg: who}, oct8); !errors.Is(err, daily.ErrBad) {
+			t.Errorf("a sheet for %s, not showing: %v, want bad", who, err)
+		}
+	}
+	seq := 0
+	for ; seq < daily.Slots-1; seq++ {
+		if _, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: fmt.Sprintf("next-%d", seq), Seq: seq, Kind: daily.KindNext}, oct8); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	errs := make([]error, len(p.Cast))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, c := range p.Cast {
+		wg.Go(func() {
+			<-start
+			_, errs[i] = s.DailyAct(ctx, player.ID, p, daily.Request{Key: fmt.Sprintf("other-tab-%d", i), Seq: seq, Kind: daily.KindSheet, Arg: c.ID}, oct8.Add(time.Minute))
+		})
+	}
+	close(start)
+	wg.Wait()
+	opened := -1
+	for i, err := range errs {
+		switch {
+		case err == nil && opened < 0:
+			opened = i
+		case errors.Is(err, daily.ErrStale):
+		default:
+			t.Errorf("the tab opening slot %d's sheet: %v", i, err)
+		}
+	}
+	if opened < 0 {
+		t.Fatal("no tab opened a sheet")
+	}
+	who := p.Cast[opened].ID
+	seq++
+
+	cold, err := s.DailyGame(ctx, player.ID, p.No)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cold.Moves) != seq {
+		t.Fatalf("%d moves kept, want %d", len(cold.Moves), seq)
+	}
+	if m := cold.Moves[seq-1]; m.Kind != daily.KindSheet || m.Arg != who || m.Cost != 0 || m.Guess != nil || m.Key != fmt.Sprintf("other-tab-%d", opened) {
+		t.Errorf("the sheet was kept as %+v", m)
+	}
+	if g := daily.Render(p, cold, daily.Live{}); g.Sheet == nil || *g.Sheet != who || g.Pts != daily.Start-(daily.Slots-1)*daily.NameCost {
+		t.Errorf("read back, the game says sheet %v with %d points", g.Sheet, g.Pts)
+	}
+	var pts, moves int
+	if err := s.pool.QueryRow(ctx, `SELECT pts, moves FROM meta.daily_games WHERE player = $1`, player.ID).Scan(&pts, &moves); err != nil ||
+		pts != daily.Start-(daily.Slots-1)*daily.NameCost || moves != seq {
+		t.Errorf("the row says %d points and %d moves, %v", pts, moves, err)
+	}
+
+	other := p.Cast[(opened+1)%daily.Slots].ID
+	rec, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: fmt.Sprintf("other-tab-%d", opened), Seq: seq - 1, Kind: daily.KindSheet, Arg: other}, oct8.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("a retry naming someone else: %v", err)
+	}
+	if len(rec.Moves) != seq || daily.Replay(p, rec.Moves).Sheet != who {
+		t.Errorf("a retry naming someone else is answered with %d moves and the sheet %q", len(rec.Moves), daily.Replay(p, rec.Moves).Sheet)
+	}
+	for _, again := range []string{who, other} {
+		if _, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: "again-" + again, Seq: seq, Kind: daily.KindSheet, Arg: again}, oct8.Add(time.Hour)); !errors.Is(err, daily.ErrKnown) {
+			t.Errorf("a second sheet, for %s: %v, want known", again, err)
+		}
+	}
+}
+
 // The tables Point Blank made, as its meta.sql left them: the shape a
 // database that ran it has, which meta.sql must bring to Name Drop's.
 const pointBlankSQL = `
@@ -794,7 +885,7 @@ func TestMetaBringsPointBlanksTablesToNameDrop(t *testing.T) {
 	exec(drop, metaSQL, metaSQL)
 	fresh := dailyShape(t, s)
 	for _, want := range []string{"daily_puzzles.billed jsonb", "daily_puzzles.movies jsonb", "daily_puzzles.colour character",
-		"daily_puzzles.length integer", "daily_puzzles.directors jsonb", "'next'", "'years'", "'guess'", "(no, pts DESC)"} {
+		"daily_puzzles.length integer", "daily_puzzles.directors jsonb", "'next'", "'years'", "'sheet'", "'guess'", "(no, pts DESC)"} {
 		if !strings.Contains(fresh, want) {
 			t.Errorf("a fresh database lacks %s: %s", want, fresh)
 		}
@@ -859,9 +950,10 @@ const overlapMovesSQL = `
 // TestMetaTakesTheOverlapOutOfTheKindCheck: meta.sql applied twice to a
 // database whose kind check still takes the overlap, with a game that
 // bought one, leaves the shape a fresh database has: a check that
-// refuses the overlap and takes every other move. The game that bought
-// one goes, its moves with it, since it cannot be replayed without it;
-// the other game, its moves and both players stay as they were.
+// refuses the overlap and takes every other move, the sheet among them.
+// The game that bought one goes, its moves with it, since it cannot be
+// replayed without it; the other game, its moves and both players stay
+// as they were.
 func TestMetaTakesTheOverlapOutOfTheKindCheck(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -942,10 +1034,130 @@ func TestMetaTakesTheOverlapOutOfTheKindCheck(t *testing.T) {
 		t.Errorf("an overlap: %v, want the check to refuse it", err)
 	}
 	for i, kind := range []string{daily.KindNext, daily.KindLength, daily.KindRating, daily.KindGenre, daily.KindYears,
-		daily.KindDirector, daily.KindGuess, daily.KindReveal} {
+		daily.KindDirector, daily.KindSheet, daily.KindGuess, daily.KindReveal} {
 		if _, err := s.pool.Exec(ctx, move, games[1], 3+i, "move-"+kind, kind, "", 0); err != nil {
 			t.Errorf("%s: %v", kind, err)
 		}
+	}
+}
+
+// The moves table as Name Drop's second meta.sql made it, its kind check
+// taking neither the overlap nor the sheet: the shape a database that ran
+// it has, which meta.sql must bring to the one that takes the sheet.
+const sheetlessMovesSQL = `
+	CREATE TABLE meta.daily_moves (
+	    game   bigint NOT NULL REFERENCES meta.daily_games (id) ON DELETE CASCADE,
+	    seq    int NOT NULL,
+	    key    text NOT NULL,
+	    kind   text NOT NULL CHECK (kind IN ('next', 'length', 'rating', 'genre', 'decade', 'years',
+	                                         'director', 'guess', 'reveal')),
+	    arg    text, cost int NOT NULL, detail jsonb, at timestamptz NOT NULL,
+	    PRIMARY KEY (game, seq), UNIQUE (game, key))`
+
+// TestMetaAddsTheSheetToTheKindCheck: meta.sql applied twice to a
+// database whose kind check takes neither the overlap nor the sheet,
+// with games of every other kind of move, finished and not, leaves the
+// shape a fresh database has: a check that takes the sheet and refuses
+// the overlap. Nothing that database holds is a move the new check
+// refuses, so every game, move and player stays as it was, and the game
+// still in play can open its sheet.
+func TestMetaAddsTheSheetToTheKindCheck(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	exec := func(stmts ...string) {
+		t.Helper()
+		for _, stmt := range stmts {
+			if _, err := s.pool.Exec(ctx, stmt); err != nil {
+				t.Fatalf("%v\n%s", err, stmt)
+			}
+		}
+	}
+	// held is every game and its moves, in order, and the players.
+	held := func() string {
+		t.Helper()
+		var got string
+		if err := s.pool.QueryRow(ctx, `
+			SELECT coalesce((SELECT string_agg(g.id || ':' || g.pts || ':' || g.moves || ':' || (g.finished_at IS NOT NULL) || ' ' ||
+			                   coalesce((SELECT string_agg(m.seq || m.kind || coalesce(m.arg, '') || m.cost, ',' ORDER BY m.seq)
+			                             FROM meta.daily_moves m WHERE m.game = g.id), ''), ' | ' ORDER BY g.id)
+			                 FROM meta.daily_games g), '')
+			    || ' / ' || (SELECT count(*) FROM meta.daily_players)`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	t.Cleanup(func() { resetDaily(t, s) })
+	drop := `DROP TABLE meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
+
+	exec(drop, metaSQL, metaSQL)
+	fresh := dailyShape(t, s)
+	exec(`DROP TABLE meta.daily_moves`, sheetlessMovesSQL)
+	if old := dailyShape(t, s); strings.Contains(old, "'sheet'") || strings.Contains(old, "'overlap'") || old == fresh {
+		t.Fatalf("the set-up did not make the moves table that takes no sheet: %s", old)
+	}
+	if kept, err := s.putDailyPuzzle(ctx, boardPuzzle(1, oct8)); err != nil || !kept {
+		t.Fatalf("a puzzle: %v, %v", kept, err)
+	}
+	var games [2]int64
+	for i, name := range []string{"Trinity Kimble", "Morpheus Vane"} {
+		player, err := s.CreateDailyPlayer(ctx, daily.TokenHash(daily.NewToken()), name, 205)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.pool.QueryRow(ctx, `
+			INSERT INTO meta.daily_games (player, no, pts, moves, started_at, finished_at) VALUES ($1, 1, $2, $3, now(), $4)
+			RETURNING id`, player.ID, []int{750, 0}[i], []int{3, 4}[i], []*time.Time{nil, &oct8}[i]).Scan(&games[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move := `INSERT INTO meta.daily_moves (game, seq, key, kind, arg, cost, at) VALUES ($1, $2, $3, $4, nullif($5, ''), $6, now())`
+	for _, m := range []struct {
+		game      int64
+		seq       int
+		kind, arg string
+		cost      int
+	}{
+		{games[0], 1, daily.KindNext, "", 100}, {games[0], 2, daily.KindDecade, "", 100}, {games[0], 3, daily.KindLength, "", 50},
+		{games[1], 1, daily.KindRating, "", 50}, {games[1], 2, daily.KindGenre, "", 100}, {games[1], 3, daily.KindGuess, "tt9900099", 100},
+		{games[1], 4, daily.KindReveal, "", 0},
+	} {
+		if _, err := s.pool.Exec(ctx, move, m.game, m.seq, fmt.Sprintf("key-%d-%d", m.game, m.seq), m.kind, m.arg, m.cost); err != nil {
+			t.Fatalf("%s: %v", m.kind, err)
+		}
+	}
+	var pgErr *pgconn.PgError
+	if _, err := s.pool.Exec(ctx, move, games[0], 4, "a-sheet", daily.KindSheet, "nm9900002", 0); !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("a sheet before meta.sql: %v, want the old check to refuse it", err)
+	}
+	before := held()
+
+	exec(metaSQL, metaSQL)
+	if got := dailyShape(t, s); got != fresh {
+		t.Errorf("over the check that takes no sheet:\n%s\nwant\n%s", got, fresh)
+	}
+	if got := held(); got != before {
+		t.Errorf("meta.sql changed what was held:\n%s\nwant\n%s", got, before)
+	}
+	if _, err := s.pool.Exec(ctx, move, games[0], 4, "a-sheet", daily.KindSheet, "nm9900002", 0); err != nil {
+		t.Errorf("a sheet: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx, move, games[0], 5, "an-overlap", "overlap", "nm9900003", 250); !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Errorf("an overlap: %v, want the check to refuse it", err)
+	}
+	// And once more, now holding a sheet: nothing changes, the check
+	// itself not even made again.
+	check := func() (oid uint32) {
+		t.Helper()
+		if err := s.pool.QueryRow(ctx, `SELECT oid FROM pg_constraint
+			WHERE conrelid = 'meta.daily_moves'::regclass AND conname = 'daily_moves_kind_check'`).Scan(&oid); err != nil {
+			t.Fatal(err)
+		}
+		return oid
+	}
+	before, made := held(), check()
+	exec(metaSQL)
+	if got := dailyShape(t, s); got != fresh || held() != before || check() != made {
+		t.Errorf("meta.sql over its own shape, holding a sheet, changed it: %s\n%s", got, held())
 	}
 }
 

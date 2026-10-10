@@ -6,7 +6,6 @@ import {
   NEXT_ROW_LABEL,
   PEEK_REST_MS,
   hueColour,
-  moviesLabel,
   peekOpensUp,
   toneStyle,
   type CastRow,
@@ -51,7 +50,8 @@ function MoviesIcon() {
 
 interface CastProps {
   rows: readonly CastRow[];
-  /** The game is on and its names are out: shown rows offer Movies. */
+  /** The game is on and its names are out: shown rows offer Movies, each
+   *  as its row says (moviesButton): to choose, to open, or shut. */
   playing: boolean;
   /** At the end, when each name the reader didn't see appears, by slot
    *  (revealDelays). Empty for a game opened already over, or with
@@ -60,6 +60,9 @@ interface CastProps {
   codes: ReadonlyMap<string, string>;
   theme: Theme;
   onNext: () => void;
+  /** A Movies button pressed, to choose or to open: the page works out
+   *  which from the game as it stands when it is pressed. A shut one
+   *  cannot be pressed. */
   onMovies: (person: DailyPerson) => void;
 }
 
@@ -155,11 +158,15 @@ export function DailyCast({ rows, playing, delays, codes, theme, onNext, onMovie
               </span>
             </span>
             {shown && playing && (
+              // A shut one stays where it is, faded, and says whose map
+              // is open, as its tooltip too: the one the reader chose.
               <button
                 type="button"
                 className="cd-nd-movies"
-                aria-label={moviesLabel(r.person.name)}
-                onClick={() => onMovies(r.person)}
+                aria-label={r.movies.label}
+                title={r.movies.state === 'locked' ? r.movies.label : undefined}
+                disabled={r.movies.state === 'locked'}
+                onClick={r.movies.state === 'locked' ? undefined : () => onMovies(r.person)}
               >
                 <MoviesIcon />
                 Movies

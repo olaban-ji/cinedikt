@@ -35,6 +35,7 @@ function gameOf(over: Partial<DailyGame>): DailyGame {
     slots: Array.from({ length: 6 }, (_, slot) => ({ slot, shown: false as const })),
     facts: {},
     log: [],
+    sheet: null,
     end: null,
     ...over,
   };

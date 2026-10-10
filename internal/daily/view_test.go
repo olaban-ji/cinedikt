@@ -151,13 +151,13 @@ func secretsKept(t *testing.T, p *Puzzle, s *State, game Game, when string) {
 // rendered as names the answer or says its year, rating, length, poster
 // or genres, names a director before they are bought, or anyone in the
 // cast still hidden, and every fact not bought is absent. Three games
-// between them make every kind of move: one buys every fact, one asks
-// for names, and one guesses movies from the answer's decade and genre,
-// which say their own years.
+// between them make every kind of move: one opens a sheet and buys
+// every fact, one asks for names, and one guesses movies from the
+// answer's decade and genre, which say their own years.
 func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 	p := matrix()
 	for _, moves := range [][]struct{ kind, arg string }{
-		{{KindLength, ""}, {KindRating, ""}, {KindGenre, ""}, {KindDecade, ""}, {KindYears, ""}, {KindDirector, ""}},
+		{{KindSheet, "nm0001592"}, {KindLength, ""}, {KindRating, ""}, {KindGenre, ""}, {KindDecade, ""}, {KindYears, ""}, {KindDirector, ""}},
 		{{KindNext, ""}, {KindNext, ""}, {KindNext, ""}, {KindNext, ""}, {KindNext, ""}},
 		{{KindGuess, "tt0120601"}, {KindGuess, "tt0115736"}, {KindGuess, "tt9000002"}, {KindGuess, "tt0209144"}},
 	} {
@@ -327,7 +327,7 @@ func TestTheEndShowsEverything(t *testing.T) {
 
 	playing := Render(p, play(t, p).record(), live)
 	body := rendered(t, playing)
-	for _, want := range []string{`"end":null`, `"finishedAt":null`, `"log":[]`, `"facts":{}`, `"nextCost":100`, `"phase":"play"`} {
+	for _, want := range []string{`"end":null`, `"finishedAt":null`, `"log":[]`, `"facts":{}`, `"sheet":null`, `"nextCost":100`, `"phase":"play"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("a game in play lacks %s: %s", want, body)
 		}
@@ -402,36 +402,57 @@ func readableIDs(cards []SheetCard) []string {
 	return out
 }
 
-// everyone is a game in play with all six showing, every sheet open.
-func everyone(t *testing.T, p *Puzzle) *player {
+// opened is a game in play with all six showing and slot's sheet
+// opened: the one sheet it may read until the end.
+func opened(t *testing.T, p *Puzzle, slot int) *player {
 	t.Helper()
 	g := play(t, p)
 	for range Slots - 1 {
 		g.do(KindNext, "")
 	}
+	g.do(KindSheet, p.Cast[slot].ID)
 	return g
 }
 
-// TestASheetIsOnlyForSomeoneShowing: only a slot showing has one, and
-// once it is over anyone in the cast does.
-func TestASheetIsOnlyForSomeoneShowing(t *testing.T) {
+// TestOnlyTheSheetOpenedIsRead: before a sheet is opened nobody's is
+// read, not even the sixth-billed's, showing from Play; once
+// Pantoliano's is, only his, though Foster comes to show beside him; a
+// slot that is none never has one; and once it is over anyone in the
+// cast does, every card readable.
+func TestOnlyTheSheetOpenedIsRead(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
-	for _, slot := range []int{1, 5, -1, 6} {
-		if _, ok := p.SheetOf(g.state(), slot, live); ok {
-			t.Errorf("slot %d, not showing, has a sheet", slot)
-		}
-		if got := p.SheetWants(g.state(), slot); got != nil {
-			t.Errorf("slot %d, not showing, wants %v", slot, got)
+	closed := func(when string, slots ...int) {
+		t.Helper()
+		s := g.state()
+		for _, slot := range slots {
+			if _, ok := p.SheetOf(s, slot, live); ok || p.Opens(s, slot) {
+				t.Errorf("%s, slot %d has a sheet", when, slot)
+			}
+			if got := p.SheetWants(s, slot); got != nil {
+				t.Errorf("%s, slot %d wants %v", when, slot, got)
+			}
 		}
 	}
-	if joe, ok := p.SheetOf(g.state(), 0, live); !ok || len(joe) != 4 {
-		t.Errorf("the sixth-billed's sheet: %d cards, %v", len(joe), ok)
+	closed("before one is opened", -1, 0, 1, 5, 6)
+	g.do(KindSheet, "nm0001592")
+	g.do(KindNext, "")
+	g.do(KindDecade, "")
+	if joe, ok := p.SheetOf(g.state(), 0, live); !ok || len(joe) != 4 || len(readableIDs(joe)) != 3 {
+		t.Errorf("the sheet opened, with the 1990s bought: %+v, %v", joe, ok)
 	}
+	if got := p.SheetWants(g.state(), 0); len(got) != 3 {
+		t.Errorf("the sheet opened wants %v", got)
+	}
+	closed("with Pantoliano's opened and Foster showing", -1, 1, 2, 5, 6)
 	g.do(KindReveal, "")
-	if keanu, ok := p.SheetOf(g.state(), 5, live); !ok || len(keanu) != 4 {
-		t.Errorf("Keanu's sheet once it is over: %d cards, %v", len(keanu), ok)
+	for slot := range Slots {
+		cards, ok := p.SheetOf(g.state(), slot, live)
+		if !ok || len(cards) != len(p.sheet(slot)) || len(readableIDs(cards)) != len(cards) {
+			t.Errorf("slot %d's sheet once it is over: %+v, %v", slot, cards, ok)
+		}
 	}
+	closed("once it is over", -1, 6)
 }
 
 // TestBeforeAnyRangeEveryCardIsBlank: with no decade, years, rating or
@@ -442,6 +463,7 @@ func TestASheetIsOnlyForSomeoneShowing(t *testing.T) {
 func TestBeforeAnyRangeEveryCardIsBlank(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
+	g.do(KindSheet, "nm0001592")
 	want := `[{"year":1993,"at":8},{"year":1996,"at":7.5},{"year":1999,"at":8.5},{"year":2000,"at":8.5}]`
 	for _, move := range []struct{ kind, arg string }{{"", ""}, {KindLength, ""}, {KindDirector, ""}, {KindGuess, "tt0209144"}} {
 		if move.kind != "" {
@@ -465,8 +487,12 @@ func TestBeforeAnyRangeEveryCardIsBlank(t *testing.T) {
 			t.Errorf("after %s, Pantoliano's sheet wants posters for %v", move.kind, got)
 		}
 	}
-	// Moss, filled in by Memento, has a sheet of blanks too.
-	if moss, ok := p.SheetOf(g.state(), 3, live); !ok || len(readableIDs(moss)) != 0 || len(moss) != 4 {
+	// Moss, filled in by Memento, has a sheet of blanks too, opened in a
+	// game of its own.
+	other := play(t, p)
+	other.do(KindGuess, "tt0209144")
+	other.do(KindSheet, "nm0005251")
+	if moss, ok := p.SheetOf(other.state(), 3, live); !ok || len(readableIDs(moss)) != 0 || len(moss) != 4 {
 		t.Errorf("Moss's sheet = %+v, %v", moss, ok)
 	}
 }
@@ -474,7 +500,8 @@ func TestBeforeAnyRangeEveryCardIsBlank(t *testing.T) {
 // TestACardIsReadableOnlyInsideEveryRangeBought: the decade, the five
 // years, the rating band and the genre each narrow what the sheets
 // read, together as much as the tightest; the length and the director
-// never do. Across all six sheets, with everyone showing.
+// never do. Across all six sheets, each opened in a game of its own
+// with everyone showing.
 func TestACardIsReadableOnlyInsideEveryRangeBought(t *testing.T) {
 	p := matrix()
 	for _, c := range []struct {
@@ -496,13 +523,13 @@ func TestACardIsReadableOnlyInsideEveryRangeBought(t *testing.T) {
 		{[]string{KindRating, KindGenre}, []string{"tt0133093"}},
 		{[]string{KindLength, KindGenre, KindDirector}, []string{"tt0133093", "tt0234215"}},
 	} {
-		g := everyone(t, p)
-		for _, kind := range c.facts {
-			g.do(kind, "")
-		}
-		s := g.state()
 		var got []string
 		for slot := range Slots {
+			g := opened(t, p, slot)
+			for _, kind := range c.facts {
+				g.do(kind, "")
+			}
+			s := g.state()
 			cards, ok := p.SheetOf(s, slot, live)
 			if !ok {
 				t.Fatalf("%v: slot %d has no sheet", c.facts, slot)
@@ -607,12 +634,15 @@ func TestTheAnswersCardIsLikeEveryOther(t *testing.T) {
 	p := matrix()
 	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), " ") }
 	for _, facts := range [][]string{nil, {KindLength}, {KindDecade}, {KindRating}, {KindGenre}, {KindDecade, KindYears, KindRating, KindGenre}} {
-		g := everyone(t, p)
-		for _, kind := range facts {
-			g.do(kind, "")
-		}
 		for slot := range Slots {
-			cards, _ := p.SheetOf(g.state(), slot, live)
+			g := opened(t, p, slot)
+			for _, kind := range facts {
+				g.do(kind, "")
+			}
+			cards, ok := p.SheetOf(g.state(), slot, live)
+			if !ok || len(cards) == 0 {
+				t.Fatalf("%v: slot %d's sheet, opened, = %+v, %v", facts, slot, cards, ok)
+			}
 			readable := ""
 			for i, c := range sheetJSON(t, cards) {
 				_, id := c["id"]
@@ -646,7 +676,7 @@ func TestTheAnswersCardIsLikeEveryOther(t *testing.T) {
 // giving every movie a new id changes nothing a blank sheet says.
 func TestACardsPlaceSaysNothingItsFaceDoesNot(t *testing.T) {
 	p := matrix()
-	g := everyone(t, p)
+	g := opened(t, p, 3)
 	moss, _ := p.SheetOf(g.state(), 3, live)
 	before := rendered(t, moss)
 	if want := `[{"year":1999,"at":8.5},{"year":2000,"at":7},{"year":2000,"at":8.5},{"year":2003,"at":7}]`; before != want {
@@ -658,9 +688,10 @@ func TestACardsPlaceSaysNothingItsFaceDoesNot(t *testing.T) {
 	}
 	renamed.Answer.ID = renamed.Movies[slices.IndexFunc(p.Movies, func(m Movie) bool { return m.ID == p.Answer.ID })].ID
 	for slot := range Slots {
-		was, _ := p.SheetOf(g.state(), slot, live)
-		now, _ := renamed.SheetOf(Replay(renamed, g.moves), slot, Live{})
-		if rendered(t, was) != rendered(t, now) {
+		o := opened(t, p, slot)
+		was, _ := p.SheetOf(o.state(), slot, live)
+		now, ok := renamed.SheetOf(Replay(renamed, o.moves), slot, Live{})
+		if !ok || len(now) == 0 || rendered(t, was) != rendered(t, now) {
 			t.Errorf("slot %d's blank sheet changed with the ids: %s, then %s", slot, rendered(t, was), rendered(t, now))
 		}
 	}
@@ -687,7 +718,7 @@ func TestACardsPlaceSaysNothingItsFaceDoesNot(t *testing.T) {
 // it.
 func TestASheetHasEveryReadablePosterOrNone(t *testing.T) {
 	p := matrix()
-	g := everyone(t, p)
+	g := opened(t, p, 0)
 	g.do(KindDecade, "")
 	s := g.state()
 	if got := p.SheetWants(s, 0); !slices.Equal(got, []string{"tt0106977", "tt0115736", "tt0133093"}) {
@@ -706,7 +737,7 @@ func TestASheetHasEveryReadablePosterOrNone(t *testing.T) {
 		t.Errorf("Pantoliano's sheet with the 1990s = %s", body)
 	}
 
-	genre := everyone(t, p)
+	genre := opened(t, p, 5)
 	genre.do(KindGenre, "")
 	keanu, _ := p.SheetOf(genre.state(), 5, live)
 	if ids := readableIDs(keanu); !slices.Equal(ids, []string{"tt0133093", "tt0234215"}) {

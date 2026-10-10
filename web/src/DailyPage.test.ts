@@ -18,7 +18,8 @@ import { DailyCast } from './DailyCast';
 import { DailyFace } from './DailyFace';
 import { DailyGameView, DailyHeaderTail, DailyPage, playAgain } from './DailyPage';
 import { DailyLeaderboard, DailyResult } from './DailyResult';
-import { DailyRules, nextStop } from './DailyRules';
+import { DailyRules, keepTabIn, nextStop } from './DailyRules';
+import { DailySheetAsk } from './DailySheetAsk';
 import {
   HIT_INSETS,
   RISE_STEP_MS,
@@ -116,6 +117,7 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
     slots: slotsOf({ 0: 'start' }),
     facts: {},
     log: [],
+    sheet: null,
     end: null,
     ...over,
   };
@@ -147,6 +149,14 @@ function ended(log: DailyEntry[], over: Partial<DailyGame> = {}): DailyGame {
     ...over,
   });
 }
+
+/** The game in progress with its one Movies map chosen: Joe Pantoliano's. */
+const CHOSEN = gameOf({
+  ...PLAYING,
+  seq: PLAYING.seq + 1,
+  log: [...PLAYING.log, { type: 'sheet', person: JOE.id }],
+  sheet: JOE.id,
+});
 
 /** The screenshots' solve, at 600 points. */
 const SOLVED = ended([...PLAYING.log, { type: 'win' }], { pts: 600, won: true, facts: { decade: 1990 } });
@@ -370,6 +380,27 @@ describe('the game page while the game is on', () => {
       expect(html).toContain(`<button type="button" class="cd-nd-movies" aria-label="See ${p.name}’s movies on a Cinedikt map">`);
     }
     expect(html.match(/class="cd-nd-movies"/g)).toHaveLength(4);
+  });
+
+  it('keeps every name’s Movies in place once a map is chosen, the chosen one open and the rest shut, saying whose is open', () => {
+    const html = drawn(CHOSEN);
+    expect(html.match(/class="cd-nd-movies"/g)).toHaveLength(4);
+    expect(html).toContain(
+      '<button type="button" class="cd-nd-movies" aria-label="See Joe Pantoliano’s movies on a Cinedikt map">',
+    );
+    const shut =
+      '<button type="button" class="cd-nd-movies" aria-label="One Movies map a game. You opened Joe Pantoliano’s." title="One Movies map a game. You opened Joe Pantoliano’s." disabled="">';
+    expect(html.split(shut)).toHaveLength(4);
+    // Nothing more about anyone else: no other name's map is on the page.
+    expect(html).not.toContain('cd-msheet');
+  });
+
+  it('draws neither the Movies sheet nor the question as it opens', () => {
+    for (const game of [PLAYING, CHOSEN]) {
+      const html = drawn(game);
+      expect(html).not.toContain('cd-msheet');
+      expect(html).not.toContain('cd-nd-choose');
+    }
   });
 
   it('draws each face in the person’s colour, with their photo or their initials', () => {
@@ -671,6 +702,23 @@ describe('the cast list', () => {
     pressesIn(el, 'cd-nd-movies')[1]();
     expect(asked).toEqual(['next', GLORIA.id]);
   });
+
+  it('asks about the chosen name’s Movies alone once a map is chosen: the shut ones cannot be pressed', () => {
+    const asked: string[] = [];
+    const el = createElement(DailyCast, {
+      rows: castRows(CHOSEN),
+      playing: true,
+      delays: new Map(),
+      codes,
+      theme: 'dark',
+      onNext: () => {},
+      onMovies: (p: DailyPerson) => asked.push(p.id),
+    });
+    const presses = pressesIn(el, 'cd-nd-movies');
+    expect(presses).toHaveLength(1);
+    presses[0]();
+    expect(asked).toEqual([JOE.id]);
+  });
 });
 
 describe('the page once the game is over', () => {
@@ -934,6 +982,9 @@ describe('How it works', () => {
       'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
     );
     expect(html).toContain(
+      '<span>Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the ranges you’ve bought.</span>',
+    );
+    expect(html).toContain(
       '<p class="cd-nd-rules-then">You start with 1,000 points. Each extra name costs 100. Wrong guesses cost 100, then 150, 200 and so on. Facts cost 50 to 250. There’s no clock.</p>',
     );
     expect(html).toContain('<button type="button" class="cd-nd-rules-close">Got it</button>');
@@ -954,6 +1005,70 @@ describe('How it works', () => {
     expect(nextStop(0, 3, true)).toBe(2);
     expect(nextStop(2, 3, false)).toBe(0);
     expect(nextStop(-1, 0, false)).toBe(-1);
+  });
+});
+
+describe('the question before the one Movies map', () => {
+  const ask = (onYes = () => {}, onNo = () => {}) =>
+    createElement(DailySheetAsk, { name: 'Joe Pantoliano', onYes, onNo });
+
+  it('is a small modal dialog that asks by name, says the rule, and offers Not now and Open the map', () => {
+    expect(renderToStaticMarkup(ask())).toBe(
+      '<div class="cd-nd-choose-scrim">' +
+        '<div class="cd-nd-choose" role="alertdialog" aria-modal="true" aria-labelledby="cd-nd-choose-title" aria-describedby="cd-nd-choose-body" tabindex="-1">' +
+        '<h2 id="cd-nd-choose-title" class="cd-nd-choose-title">Open Joe Pantoliano’s movies?</h2>' +
+        '<p id="cd-nd-choose-body" class="cd-nd-choose-body">You get one Movies map a game. The other names’ maps stay closed.</p>' +
+        '<div class="cd-nd-choose-row">' +
+        '<button type="button" class="cd-nd-choose-no">Not now</button>' +
+        '<button type="button" class="cd-nd-choose-yes">Open the map</button>' +
+        '</div></div></div>',
+    );
+  });
+
+  it('opens the map from Open the map alone, and leaves it closed from Not now and the scrim', () => {
+    const said: string[] = [];
+    const el = ask(
+      () => said.push('yes'),
+      () => said.push('no'),
+    );
+    pressesIn(el, 'cd-nd-choose-no')[0]();
+    pressesIn(el, 'cd-nd-choose-scrim')[0]();
+    expect(said).toEqual(['no', 'no']);
+    pressesIn(el, 'cd-nd-choose-yes')[0]();
+    expect(said).toEqual(['no', 'no', 'yes']);
+  });
+
+  it('keeps Tab inside it, round from the last answer to the first and back, as How it works does', () => {
+    const stops = [{ focus: vi.fn() }, { focus: vi.fn() }];
+    const box = { querySelectorAll: () => stops } as unknown as HTMLElement;
+    const tab = (shiftKey: boolean, key = 'Tab') => {
+      const e = { key, shiftKey, preventDefault: vi.fn() };
+      keepTabIn(box, e as unknown as Parameters<typeof keepTabIn>[1]);
+      return e;
+    };
+    // From Open the map, the last, round to Not now.
+    vi.stubGlobal('document', { activeElement: stops[1] });
+    expect(tab(false).preventDefault).toHaveBeenCalled();
+    expect(stops[0].focus).toHaveBeenCalledTimes(1);
+    // From Not now, back round to Open the map.
+    vi.stubGlobal('document', { activeElement: stops[0] });
+    tab(true);
+    expect(stops[1].focus).toHaveBeenCalledTimes(1);
+    // From the dialog itself, as it opens, to the first.
+    vi.stubGlobal('document', { activeElement: box });
+    tab(false);
+    expect(stops[0].focus).toHaveBeenCalledTimes(2);
+    // Any other key is the dialog's own business, and so is a Tab with no
+    // dialog to keep it in.
+    expect(tab(false, 'Enter').preventDefault).not.toHaveBeenCalled();
+    const lost = { key: 'Tab', shiftKey: false, preventDefault: () => {} };
+    keepTabIn(null, lost as unknown as Parameters<typeof keepTabIn>[1]);
+    expect(stops[0].focus).toHaveBeenCalledTimes(2);
+  });
+
+  it('says "movie", never "film"', () => {
+    expect(words(renderToStaticMarkup(ask()))).not.toMatch(/\bfilms?\b/i);
+    expect(words(drawn(CHOSEN))).not.toMatch(/\bfilms?\b/i);
   });
 });
 
@@ -1329,9 +1444,52 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-tabs').get('margin-left')).toBe('auto');
   });
 
+  it('fades a shut Movies button to 0.45, and lights only one that can be pressed under the pointer', () => {
+    expect(decls('.cd-nd-movies:disabled').get('opacity')).toBe('0.45');
+    expect(mediaDecls('(hover: hover)', '.cd-nd-movies:hover:not(:disabled)').get('box-shadow')).toBe(
+      'inset 0 0 0 1px var(--acc)',
+    );
+    expect(mediaDecls('(hover: hover)', '.cd-nd-movies:hover').size).toBe(0);
+  });
+
+  it('draws the question as How it works is drawn, smaller: over its scrim, a 20px card on the surface, its answers the page’s buttons', () => {
+    expect(decls('.cd-nd-choose-scrim')).toEqual(decls('.cd-nd-rules-scrim'));
+    expect(decls('.cd-nd-choose-scrim').get('z-index')).toBe('70');
+    expect(decls('.cd-nd-choose-scrim').get('background')).toBe('var(--scrim)');
+    const card = decls('.cd-nd-choose');
+    expect(card.get('max-width')).toBe('360px');
+    expect(card.get('border-radius')).toBe('20px');
+    expect(card.get('background')).toBe('var(--s)');
+    expect(card.get('box-shadow')).toBe('var(--pop)');
+    expect(decls('.cd-nd-choose-title').get('font-family')).toBe("'Young Serif', serif");
+    for (const b of ['.cd-nd-choose-no', '.cd-nd-choose-yes']) {
+      expect(decls(b).get('height'), b).toBe('46px');
+      expect(decls(b).get('border-radius'), b).toBe('13px');
+    }
+    // Open the map is the accent's, as Share result is; Not now the
+    // surface with an edge, as Map this movie is.
+    expect(decls('.cd-nd-choose-yes').get('background')).toBe(decls('.cd-nd-share').get('background'));
+    expect(decls('.cd-nd-choose-yes').get('color')).toBe('var(--accInk)');
+    expect(decls('.cd-nd-choose-no').get('box-shadow')).toBe(decls('.cd-nd-mapit').get('box-shadow'));
+    // Side by side, stacking with Open the map on top where they cannot.
+    expect(decls('.cd-nd-choose-row').get('flex-wrap')).toBe('wrap-reverse');
+    expect(css).toMatch(/\.cd-nd-choose :is\(button, a\):focus-visible \{\s*outline: 2px solid var\(--acc\)/);
+  });
+
   it('moves nothing with stillness asked for', () => {
     const still = stillRules();
-    for (const c of ['.cd-nd-card-in', '.cd-nd-row', '.cd-nd-ph', '.cd-nd-who', '.cd-nd-facewrap', '.cd-nd-peek', '.cd-nd-facts', '.cd-nd-play']) {
+    for (const c of [
+      '.cd-nd-card-in',
+      '.cd-nd-row',
+      '.cd-nd-ph',
+      '.cd-nd-who',
+      '.cd-nd-facewrap',
+      '.cd-nd-peek',
+      '.cd-nd-facts',
+      '.cd-nd-play',
+      '.cd-nd-choose-no',
+      '.cd-nd-choose-yes',
+    ]) {
       expect(still, c).toMatch(new RegExp(`${c.replace(/[.-]/g, (x) => `\\${x}`)}[,\\s][^}]*transition: none`));
     }
   });

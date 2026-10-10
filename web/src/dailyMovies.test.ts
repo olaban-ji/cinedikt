@@ -61,7 +61,7 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
   return {
     phase: 'play',
     pts: 600,
-    seq: 4,
+    seq: 5,
     startedAt: '2026-10-09T09:00:00Z',
     finishedAt: null,
     won: false,
@@ -73,7 +73,10 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
       { type: 'next', cost: 100, slot: 1 },
       { type: 'fact', kind: 'decade', cost: 100 },
       { type: 'guess', cost: 100, guess: BOUND },
+      // The game's one Movies map: Joe Pantoliano's, the sheet these draw.
+      { type: 'sheet', person: JOE.id },
     ],
+    sheet: JOE.id,
     end: null,
     ...over,
   };

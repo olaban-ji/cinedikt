@@ -98,24 +98,51 @@ describe('the Daily’s requests', () => {
     ]);
   });
 
+  it('choose the game’s one Movies map as a move like any other: JSON, in the reader’s zone, with its key, the moves seen and whose', async () => {
+    const fetch = stubFetch([{ status: 200, body: { game: { sheet: 'nm0001592' } } }]);
+    const { openSheet } = await load();
+    await expect(openSheet(143, 'nm0001592', 'k-5', 5)).resolves.toEqual({ game: { sheet: 'nm0001592' } });
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe(`/api/daily/143/sheet?${NY}`);
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(String(init?.body))).toEqual({ key: 'k-5', seq: 5, person: 'nm0001592' });
+  });
+
+  it('carry a second Movies map refused, and a map not chosen, as refusals with their reasons', async () => {
+    stubFetch([
+      { status: 409, body: { error: 'a map is chosen already', reason: 'known' } },
+      { status: 409, body: { error: 'only the Movies map you opened', reason: 'sheet' } },
+    ]);
+    const { ApiError, fetchDailyMovies, openSheet } = await load();
+    const second = await openSheet(143, 'nm0287825', 'k-6', 6).catch((e: unknown) => e);
+    expect(second).toBeInstanceOf(ApiError);
+    expect(second).toMatchObject({ status: 409, reason: 'known' });
+    const other = await fetchDailyMovies(143, 'nm0287825').catch((e: unknown) => e);
+    expect(other).toBeInstanceOf(ApiError);
+    expect(other).toMatchObject({ status: 409, reason: 'sheet' });
+  });
+
   it('have no way to combine two names on the Movies sheet: overlaps are gone', async () => {
     const api = (await load()) as Record<string, unknown>;
     expect(api.buyOverlap).toBeUndefined();
   });
 
   it('send a move held as a value through its own call, the same request either way', async () => {
-    const fetch = stubFetch(Array.from({ length: 4 }, () => ({ status: 200, body: { game: {} } })));
+    const fetch = stubFetch(Array.from({ length: 5 }, () => ({ status: 200, body: { game: {} } })));
     const { sendDailyMove } = await load();
     await sendDailyMove(143, { kind: 'next' }, 'k-1', 1);
     await sendDailyMove(143, { kind: 'buy', fact: 'years' }, 'k-2', 2);
     await sendDailyMove(143, { kind: 'guess', film: 'tt0111257' }, 'k-3', 3);
-    await sendDailyMove(143, { kind: 'reveal' }, 'k-4', 4);
+    await sendDailyMove(143, { kind: 'sheet', person: 'nm0001592' }, 'k-4', 4);
+    await sendDailyMove(143, { kind: 'reveal' }, 'k-5', 5);
     const sent = fetch.mock.calls.map(([url, init]) => [url, JSON.parse(String(init?.body))]);
     expect(sent).toEqual([
       [`/api/daily/143/next?${NY}`, { key: 'k-1', seq: 1 }],
       [`/api/daily/143/buy?${NY}`, { key: 'k-2', seq: 2, kind: 'years' }],
       [`/api/daily/143/guess?${NY}`, { key: 'k-3', seq: 3, film: 'tt0111257' }],
-      [`/api/daily/143/reveal?${NY}`, { key: 'k-4', seq: 4 }],
+      [`/api/daily/143/sheet?${NY}`, { key: 'k-4', seq: 4, person: 'nm0001592' }],
+      [`/api/daily/143/reveal?${NY}`, { key: 'k-5', seq: 5 }],
     ]);
   });
 
@@ -194,7 +221,7 @@ describe('the reader’s time zone', () => {
 
   /** Every Daily request there is, once each, and the addresses asked. */
   async function everyRequest(): Promise<string[]> {
-    const fetch = stubFetch([...Array.from({ length: 10 }, () => ({ status: 200, body: {} })), { status: 204 }]);
+    const fetch = stubFetch([...Array.from({ length: 11 }, () => ({ status: 200, body: {} })), { status: 204 }]);
     const api = await load();
     await api.fetchDaily();
     await api.fetchDailyMe();
@@ -204,6 +231,7 @@ describe('the reader’s time zone', () => {
     await api.buyFact(142, 'genre', 'k-2', 2);
     await api.guessMovie(142, 'tt0133093', 'k-3', 3);
     await api.revealAnswer(142, 'k-4', 4);
+    await api.openSheet(142, 'nm0000401', 'k-5', 5);
     await api.fetchDailyMovies(142, 'nm0000401');
     await api.fetchDailyBoard(142, 'today');
     await api.resetDaily();
@@ -213,14 +241,14 @@ describe('the reader’s time zone', () => {
   it('goes with every Daily request, reads and writes alike, so the server knows the reader’s date', async () => {
     stubZone('Asia/Tokyo');
     const urls = await everyRequest();
-    expect(urls).toHaveLength(11);
+    expect(urls).toHaveLength(12);
     for (const url of urls) {
       expect(new URL(url, 'https://cinedikt.test').searchParams.get('tz')).toBe('Asia/Tokyo');
     }
     // The movies keep their person, and the board its tab: the zone is
     // added to what is there.
-    expect(urls[8]).toBe('/api/daily/142/movies?person=nm0000401&tz=Asia%2FTokyo');
-    expect(urls[9]).toBe('/api/daily/142/board?tab=today&tz=Asia%2FTokyo');
+    expect(urls[9]).toBe('/api/daily/142/movies?person=nm0000401&tz=Asia%2FTokyo');
+    expect(urls[10]).toBe('/api/daily/142/board?tab=today&tz=Asia%2FTokyo');
   });
 
   it('is written so the address carries it whole', async () => {
@@ -248,6 +276,7 @@ describe('the reader’s time zone', () => {
         '/api/daily/142/buy',
         '/api/daily/142/guess',
         '/api/daily/142/reveal',
+        '/api/daily/142/sheet',
         '/api/daily/142/movies?person=nm0000401',
         '/api/daily/142/board?tab=today',
         '/api/daily/dev/reset',

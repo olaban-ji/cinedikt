@@ -64,6 +64,12 @@ export interface MoviesSheetProps {
   onGuess(id: string): void;
   /** The scrim, Escape, the close button, or a drag down on a phone. */
   onClose(): void;
+  /** The server would not show this person's map ("sheet"): while the
+   *  game is on it answers only for the one map the reader chose, and the
+   *  page had that wrong. The page catches up and opens the right one, or
+   *  closes the sheet; until then it says the movies are on their way.
+   *  Without it, the refusal is said in the map's place, as any other. */
+  onNotChosen?(): void;
 }
 
 /** The person's movies: on their way, here, or not to be had, with what
@@ -79,7 +85,7 @@ type Load =
 const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
-  const { no, person, game, theme, onGuess, onClose } = props;
+  const { no, person, game, theme, onGuess, onClose, onNotChosen } = props;
   const { phone, viewH } = useLiveScreen();
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
@@ -96,8 +102,12 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
   // range is bought (rangesKey), which is what turns blank cards into
   // titles. A second ask for the same person keeps the map it has until
   // the answer comes; a card picked that the answer leaves blank is let
-  // go by sheetView, which only offers a readable one.
+  // go by sheetView, which only offers a readable one. A refusal of the
+  // person, as not the map chosen, is the page's to put right
+  // (onNotChosen), read when it comes rather than asked again for.
   const key = rangesKey(game.facts);
+  const notChosen = useRef(onNotChosen);
+  notChosen.current = onNotChosen;
   useEffect(() => {
     const ctl = new AbortController();
     setLoad((was) => (was.state === 'ok' && was.person === person ? was : { state: 'wait' }));
@@ -105,7 +115,12 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
       (body) => setLoad({ state: 'ok', person, movies: body.movies ?? [] }),
       (err: unknown) => {
         if (ctl.signal.aborted) return;
-        setLoad({ state: 'failed', text: moviesFailed(err instanceof ApiError ? err.reason : null) });
+        const reason = err instanceof ApiError ? err.reason : null;
+        if (reason === 'sheet' && notChosen.current) {
+          notChosen.current();
+          return;
+        }
+        setLoad({ state: 'failed', text: moviesFailed(reason) });
       },
     );
     return () => ctl.abort();

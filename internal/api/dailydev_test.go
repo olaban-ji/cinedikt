@@ -137,13 +137,17 @@ func TestPlayAgainIsARouteOnlyInDevelopment(t *testing.T) {
 // is expired as it was set, every game of the puzzle goes, anybody's,
 // and the next read, at once, is the new movie with a new name offered
 // and no game, though the old players are kept. The standings this
-// process kept go too.
+// process kept go too, and so does the Movies sheet the old game had
+// opened: the new game opens one of its own.
 func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, _ := devServer(t, f, todayAt, nil)
 	b := newBrowser(t, srv)
 	b.post("/daily/142/play", map[string]any{})
 	b.move("next", 0, nil)
+	if r := b.move("sheet", 1, map[string]any{"person": "nm0001592"}); r.status != http.StatusOK {
+		t.Fatalf("opening a sheet before Play again: %d %s", r.status, r.raw)
+	}
 	other := newBrowser(t, srv)
 	other.ip = "216.160.83.56"
 	other.post("/daily/142/play", map[string]any{})
@@ -204,6 +208,24 @@ func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
 	other.get("/daily/me")
 	if _, _, again := f.devAsked(); len(again) != len(standings)+1 {
 		t.Errorf("standings asked for %v before Play again and %v after, want once more", standings, again)
+	}
+
+	// The new game has no sheet, so none is read, the old one's person's
+	// or the new sixth-billed's, until it opens its own.
+	played := b.post("/daily/142/play", map[string]any{})
+	if g := gameOf(t, played); g["sheet"] != nil || g["seq"] != 0.0 {
+		t.Errorf("the new game: %s", played.raw)
+	}
+	for _, who := range []string{"nm0001592", "nm0001827"} {
+		if r := b.sheet(who); r.status != http.StatusConflict || r.body["reason"] != "sheet" {
+			t.Errorf("%s's sheet in the new game, none opened: %d %s", who, r.status, r.raw)
+		}
+	}
+	if r := b.move("sheet", 0, map[string]any{"person": "nm0001827"}); r.status != http.StatusOK || gameOf(t, r)["sheet"] != "nm0001827" {
+		t.Errorf("opening Venora's sheet in the new game: %d %s", r.status, r.raw)
+	}
+	if r := b.sheet("nm0001827"); r.status != http.StatusOK || heatSaid(r.raw) {
+		t.Errorf("Venora's sheet, opened: %d %s", r.status, r.raw)
 	}
 }
 

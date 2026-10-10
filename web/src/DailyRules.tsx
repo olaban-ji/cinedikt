@@ -20,6 +20,18 @@ export function nextStop(at: number, count: number, back: boolean): number {
   return at < 0 || at >= count - 1 ? 0 : at + 1;
 }
 
+/** A modal dialog's keys: Tab and Shift-Tab go round its own stops
+ *  (nextStop), never out of `box`. The Daily's two dialogs, How it works
+ *  and the question before the Movies map is chosen, both keep to it. */
+export function keepTabIn(box: HTMLElement | null, e: KeyboardEvent<HTMLElement>): void {
+  if (e.key !== 'Tab' || !box) return;
+  const stops = tabbable(box);
+  const next = nextStop(stops.indexOf(document.activeElement as HTMLElement), stops.length, e.shiftKey);
+  if (next < 0) return;
+  e.preventDefault();
+  stops[next].focus();
+}
+
 /** How it works, from the header's button: six numbered items, the prices,
  *  and Got it. A modal dialog over a scrim: the focus starts on it and
  *  stays in it, Escape, the scrim and Got it close it, and the focus goes
@@ -29,14 +41,6 @@ export function DailyRules({ onClose }: { onClose: () => void }) {
   const box = useRef<HTMLDivElement>(null);
   useFocusTrapped(box);
   useEscape(onClose);
-  const keepFocus = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Tab' || !box.current) return;
-    const stops = tabbable(box.current);
-    const next = nextStop(stops.indexOf(document.activeElement as HTMLElement), stops.length, e.shiftKey);
-    if (next < 0) return;
-    e.preventDefault();
-    stops[next].focus();
-  };
   return (
     <div className="cd-nd-rules-scrim" onClick={onClose}>
       <div
@@ -47,7 +51,7 @@ export function DailyRules({ onClose }: { onClose: () => void }) {
         aria-labelledby="cd-nd-rules-title"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={keepFocus}
+        onKeyDown={(e) => keepTabIn(box.current, e)}
       >
         <h2 id="cd-nd-rules-title" className="cd-nd-rules-title">
           {HOW_IT_WORKS.heading}

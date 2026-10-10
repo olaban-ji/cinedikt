@@ -14,8 +14,9 @@ import (
 // genres, poster or directors, nothing names a cast member the player
 // has not been shown, and a fact not bought is not there at all. The
 // poster's colour is one exception, sent from the start, since it fills
-// the hidden card. The Movies sheets are the other: they carry the
-// answer as one card among the rest, rationed in their own way (below).
+// the hidden card. The Movies sheet is the other: it carries the answer
+// as one card among the rest, rationed in its own way (below), and a
+// game reads only the one it opened.
 // The tests in view_test.go hold every response to that.
 
 // Record is a game as it is kept: when it started, when it ended, the
@@ -116,6 +117,7 @@ type GuessView struct {
 const (
 	EntryNext   = "next"
 	EntryFact   = "fact"
+	EntrySheet  = "sheet"
 	EntryGuess  = "guess"
 	EntryWin    = "win"
 	EntryGaveUp = "gaveup"
@@ -127,11 +129,12 @@ const (
 type Entry struct {
 	Type string
 	Cost int
-	// Slot is the slot a Next name showed; Kind the fact bought; Guess
-	// what a wrong guess said.
-	Slot  int
-	Kind  string
-	Guess *GuessView
+	// Slot is the slot a Next name showed; Kind the fact bought; Person
+	// whose sheet was opened, by id; Guess what a wrong guess said.
+	Slot   int
+	Kind   string
+	Person string
+	Guess  *GuessView
 }
 
 // MarshalJSON writes an entry in its type's shape.
@@ -149,6 +152,13 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 			Kind string `json:"kind"`
 			Cost int    `json:"cost"`
 		}{e.Type, e.Kind, e.Cost})
+	case EntrySheet:
+		// No cost: opening the sheet is free, so it is never among what
+		// the player paid for.
+		return json.Marshal(struct {
+			Type   string `json:"type"`
+			Person string `json:"person"`
+		}{e.Type, e.Person})
 	case EntryGuess:
 		return json.Marshal(struct {
 			Type  string     `json:"type"`
@@ -187,8 +197,11 @@ type Game struct {
 	NextCost int        `json:"nextCost"`
 	Slots    []SlotView `json:"slots"`
 	Facts    Facts      `json:"facts"`
-	Log      []Entry    `json:"log"`
-	End      *End       `json:"end"`
+	// Sheet is whose Movies sheet the player opened, by id, null until
+	// they open one. It names someone they were shown when they did.
+	Sheet *string `json:"sheet"`
+	Log   []Entry `json:"log"`
+	End   *End    `json:"end"`
 }
 
 // End is everything kept back until the game is over: the answer, with
@@ -232,6 +245,10 @@ func Render(p *Puzzle, rec *Record, live Live) Game {
 		Slots:     make([]SlotView, len(p.Cast)),
 		Facts:     p.facts(s, live),
 		Log:       []Entry{},
+	}
+	if s.Sheet != "" {
+		sheet := s.Sheet
+		g.Sheet = &sheet
 	}
 	if s.Done {
 		g.Phase = PhaseDone
@@ -324,6 +341,8 @@ func (p *Puzzle) entries(s *State, st step, last bool) []Entry {
 		return []Entry{{Type: EntryNext, Cost: m.Cost, Slot: st.slot}}
 	case IsFact(m.Kind):
 		return []Entry{{Type: EntryFact, Kind: m.Kind, Cost: m.Cost}}
+	case m.Kind == KindSheet:
+		return []Entry{{Type: EntrySheet, Person: m.Arg}}
 	case m.Kind == KindGuess:
 		if m.Arg == p.Answer.ID {
 			return []Entry{{Type: EntryWin}}
@@ -390,6 +409,20 @@ func (p *Puzzle) Wants(rec *Record) (films, people []string) {
 // page drew. Now a card is readable only inside the ranges the player
 // has bought, and every other card is blank, only where it sits on the
 // map, its rating no finer than the half point the map places it by.
+// And a game in play reads one sheet, the one it opened: inside a range
+// or two, two sheets' readable titles almost never share more than
+// today's.
+
+// Opens is whether the player may read the Movies sheet of the cast
+// member in slot as the game stands: until the end, only the one they
+// opened, who was showing when they did (Apply); once it is over,
+// anyone's in the cast. Before they open one, no one's.
+func (p *Puzzle) Opens(s *State, slot int) bool {
+	if !s.Shown(slot) {
+		return false
+	}
+	return s.Done || (s.Sheet != "" && p.Cast[slot].ID == s.Sheet)
+}
 
 // readable is whether a movie on the sheets may be read as the game
 // stands. Once a range is bought (the decade or the five years, the
@@ -490,8 +523,9 @@ func (c SheetCard) MarshalJSON() ([]byte, error) {
 // says nothing its face does not: in the puzzle's order, by id within a
 // year, a blank card's place among its neighbours would say which ids it
 // fell between, and two sheets' blank cards could be lined up by it.
-// ok is false when the slot is not showing, or is no slot at all; once
-// the game is over everyone is.
+// ok is false when the sheet is not one the player may read (Opens):
+// while the game is on, anyone's but the one they opened, and a slot
+// that is none.
 //
 // Every readable card gets its poster, or none does: the answer always
 // has one, since a movie without one is never an answer, so a sheet where
@@ -499,7 +533,7 @@ func (c SheetCard) MarshalJSON() ([]byte, error) {
 // A blank card never has one. SheetWants is what to read live's posters
 // for.
 func (p *Puzzle) SheetOf(s *State, slot int, live Live) ([]SheetCard, bool) {
-	if !s.Shown(slot) {
+	if !p.Opens(s, slot) {
 		return nil, false
 	}
 	theirs := p.sheet(slot)
@@ -533,10 +567,10 @@ func (p *Puzzle) SheetOf(s *State, slot int, live Live) ([]SheetCard, bool) {
 
 // SheetWants are the movies on slot's sheet that are readable as the game
 // stands, whose posters it reads: none before a range is bought, and
-// none for a slot not showing. Once the game is over it is the whole
-// sheet.
+// none for a sheet the player may not read (Opens). Once the game is
+// over it is the whole sheet.
 func (p *Puzzle) SheetWants(s *State, slot int) []string {
-	if !s.Shown(slot) {
+	if !p.Opens(s, slot) {
 		return nil
 	}
 	var out []string

@@ -58,6 +58,13 @@ const (
 // shared, and the answer is the one movie all six share: two or three
 // names in, it was most of the way to the answer for 250 points. A sheet
 // now reads only inside the ranges bought (view.go).
+//
+// Nor may two sheets be read side by side while the game is on, which
+// is the overlap again by hand: inside a range or two the readable
+// titles on two people's sheets almost never have more than today's
+// movie in common. So a game opens one Movies sheet, chosen once, for
+// nothing, from the names showing (KindSheet), and until the end it is
+// the only one the server will send.
 
 // The first wrong guess costs WrongCost, and each one after it
 // WrongStep more, so guessing never beats asking for the next name.
@@ -265,4 +272,8 @@ var (
 	// ErrDay is a move on a puzzle whose day is not the player's: for a
 	// game, its day in the zone it was started in, which has ended.
 	ErrDay = refuse(409, "day", "that puzzle is not today's")
+	// ErrSheet is a Movies sheet asked for while the game is on that is
+	// not the one the player opened: anyone's before they open one, and
+	// anyone else's after.
+	ErrSheet = refuse(409, "sheet", "only the Movies map you opened")
 )

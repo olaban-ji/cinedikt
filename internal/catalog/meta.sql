@@ -443,17 +443,19 @@ CREATE INDEX IF NOT EXISTS daily_games_no ON meta.daily_games (no);
 
 -- A game's moves, in order. key is the page's own name for the request
 -- that made the move, so a retry is answered with the game rather than
--- charged twice. arg is the movie guessed, cost what the move cost, and
--- detail, for a wrong guess, what it learned when it was made: the
--- movie's title and year, the slots of the six it credits, and whether
--- it shares the answer's decade and a genre, so a replay never needs the
--- live catalog.
+-- charged twice. kind is internal/daily's: a next name, one of the six
+-- facts, the game's one Movies sheet, a guess, or showing the answer.
+-- arg is the movie guessed or the person whose sheet was opened, cost
+-- what the move cost, and detail, for a wrong guess, what it learned
+-- when it was made: the movie's title and year, the slots of the six it
+-- credits, and whether it shares the answer's decade and a genre, so a
+-- replay never needs the live catalog.
 CREATE TABLE IF NOT EXISTS meta.daily_moves (
     game   bigint NOT NULL REFERENCES meta.daily_games (id) ON DELETE CASCADE,
     seq    int NOT NULL,
     key    text NOT NULL,
     kind   text NOT NULL CHECK (kind IN ('next', 'length', 'rating', 'genre', 'decade', 'years',
-                                         'director', 'guess', 'reveal')),
+                                         'director', 'sheet', 'guess', 'reveal')),
     arg    text,
     cost   int NOT NULL,
     detail jsonb,
@@ -462,31 +464,38 @@ CREATE TABLE IF NOT EXISTS meta.daily_moves (
     UNIQUE (game, key)
 );
 
--- Name Drop first sold an overlap, which put a second person on a Movies
--- sheet and lit only the movies the two shared: the answer is on every
--- sheet, so two or three names were most of the way to it, and it went.
--- CREATE TABLE IF NOT EXISTS leaves a moves table made before then with
--- a kind check that still takes 'overlap', so the check is made again
--- here without it. Nothing was released, so only test games ever bought
--- one, and each such game is deleted, its moves with it, before the
--- check is made: the check would refuse the move, and the game cannot
--- be kept without it, since its points, its end and the seq of every
--- move after it were worked out with it, and its next move would be
--- recorded under a seq already taken. The players are kept, and every
--- other game. The test reads the catalog, so on a fresh database and on
--- one already without the overlap this does nothing, every time this
--- file runs.
+-- CREATE TABLE IF NOT EXISTS leaves a moves table made by an earlier
+-- meta.sql with that file's kind check, so here the check is brought to
+-- exactly the kinds above, the list in kinds, whenever it names any
+-- others. Two checks were made before this one. Name Drop's first took
+-- an overlap, which put a second person on a Movies sheet and lit only
+-- the movies the two shared: the answer is on every sheet, so two or
+-- three names were most of the way to it, and it went. The next took
+-- neither the overlap nor the sheet, the one Movies sheet a game opens,
+-- which came after it. Nothing was released, so only test games ever
+-- recorded an overlap, and each game holding a move the new check would
+-- refuse (on either shape, an overlap and nothing else) is deleted, its
+-- moves with it, before the check is made: the check would refuse the
+-- move, and the game cannot be kept without it, since its points, its
+-- end and the seq of every move after it were worked out with it, and
+-- its next move would be recorded under a seq already taken. The players
+-- are kept, and every other game, which on the shape without the sheet
+-- is all of them. The test reads the catalog, setting the kinds the
+-- check names, in any order, beside the list, so on a fresh database and
+-- on one already in this shape it does nothing, every time this file
+-- runs; a check that is missing is made.
 DO $$
+DECLARE
+    kinds text[] := ARRAY['next', 'length', 'rating', 'genre', 'decade', 'years', 'director', 'sheet', 'guess', 'reveal'];
 BEGIN
-    IF EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'meta.daily_moves'::regclass AND conname = 'daily_moves_kind_check'
-          AND pg_get_constraintdef(oid) LIKE '%''overlap''%'
-    ) THEN
+    IF (SELECT array_agg(k[1] ORDER BY k[1])
+        FROM pg_constraint c, regexp_matches(pg_get_constraintdef(c.oid), '''([a-z]+)''', 'g') AS k
+        WHERE c.conrelid = 'meta.daily_moves'::regclass AND c.conname = 'daily_moves_kind_check')
+       IS DISTINCT FROM (SELECT array_agg(k ORDER BY k) FROM unnest(kinds) AS k) THEN
         DELETE FROM meta.daily_games g
-        WHERE EXISTS (SELECT 1 FROM meta.daily_moves m WHERE m.game = g.id AND m.kind = 'overlap');
-        ALTER TABLE meta.daily_moves DROP CONSTRAINT daily_moves_kind_check;
-        ALTER TABLE meta.daily_moves ADD CONSTRAINT daily_moves_kind_check
-            CHECK (kind IN ('next', 'length', 'rating', 'genre', 'decade', 'years', 'director', 'guess', 'reveal'));
+        WHERE EXISTS (SELECT 1 FROM meta.daily_moves m WHERE m.game = g.id AND m.kind <> ALL (kinds));
+        ALTER TABLE meta.daily_moves DROP CONSTRAINT IF EXISTS daily_moves_kind_check;
+        EXECUTE format('ALTER TABLE meta.daily_moves ADD CONSTRAINT daily_moves_kind_check CHECK (kind IN (%s))',
+                       (SELECT string_agg(quote_literal(k), ', ' ORDER BY n) FROM unnest(kinds) WITH ORDINALITY AS u (k, n)));
     END IF;
 END $$;

@@ -631,8 +631,10 @@ func TestChangesNeedJSONAndTheCookie(t *testing.T) {
 			t.Errorf("not JSON: %d %s", r.status, r.raw)
 		}
 	}
-	if r := stranger.move("next", 0, nil); r.status != http.StatusForbidden || r.body["reason"] != "cookie" {
-		t.Errorf("no cookie: %d %s", r.status, r.raw)
+	for _, verb := range []string{"next", "sheet"} {
+		if r := stranger.move(verb, 0, map[string]any{"person": "nm0001592"}); r.status != http.StatusForbidden || r.body["reason"] != "cookie" {
+			t.Errorf("%s with no cookie: %d %s", verb, r.status, r.raw)
+		}
 	}
 	stranger.client.Jar.SetCookies(mustURL(t, srv.URL), []*http.Cookie{{Name: "cd_daily", Value: daily.NewToken(), Secure: true}})
 	if r := stranger.move("next", 0, nil); r.status != http.StatusForbidden || r.body["reason"] != "cookie" {
@@ -658,6 +660,12 @@ func TestChangesNeedJSONAndTheCookie(t *testing.T) {
 		"a buy of the old genres": {"buy", map[string]any{"key": "abcdefgh-c", "seq": 0, "kind": "genres"}},
 		"a buy of a next name":    {"buy", map[string]any{"key": "abcdefgh-d", "seq": 0, "kind": "next"}},
 		"a buy of an overlap":     {"buy", map[string]any{"key": "abcdefgh-e", "seq": 0, "kind": "overlap"}},
+		"a buy of a sheet":        {"buy", map[string]any{"key": "abcdefgh-h", "seq": 0, "kind": "sheet", "person": "nm0001592"}},
+		"a sheet for nobody":      {"sheet", map[string]any{"key": "abcdefgh-i", "seq": 0}},
+		"a sheet for a movie":     {"sheet", map[string]any{"key": "abcdefgh-j", "seq": 0, "person": "tt0133093"}},
+		"a sheet for a name":      {"sheet", map[string]any{"key": "abcdefgh-k", "seq": 0, "person": "Joe Pantoliano"}},
+		"a sheet with no key":     {"sheet", map[string]any{"seq": 0, "person": "nm0001592"}},
+		"a sheet with no seq":     {"sheet", map[string]any{"key": "abcdefgh-l", "person": "nm0001592"}},
 	} {
 		if r := b.post("/daily/142/"+c.verb, c.body); r.status != http.StatusBadRequest || r.body["reason"] != "bad" {
 			t.Errorf("%s: %d %s", name, r.status, r.raw)
@@ -717,9 +725,10 @@ func TestAMoveIsMadeOnceAndOnlyFromTheGameAsItStands(t *testing.T) {
 	}
 }
 
-// TestEveryMoveAnswersWithTheGame, each at its own address: Next name, a
-// fact, a wrong guess that fills in the cast it shares, and showing the
-// answer, which ends it with everything. No game says overlaps.
+// TestEveryMoveAnswersWithTheGame, each at its own address: Next name,
+// opening a sheet, which costs nothing, a fact, a wrong guess that fills
+// in the cast it shares, and showing the answer, which ends it with
+// everything. No game says overlaps.
 func TestEveryMoveAnswersWithTheGame(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, _ := dailyServer(t, f)
@@ -732,6 +741,7 @@ func TestEveryMoveAnswersWithTheGame(t *testing.T) {
 		want string
 	}{
 		{"next", nil, 900, `"slots":[{"slot":0,"shown":true,`},
+		{"sheet", map[string]any{"person": "nm0287825"}, 900, `"sheet":"nm0287825","log":[{"type":"next","cost":100,"slot":1},{"type":"sheet","person":"nm0287825"}]`},
 		{"buy", map[string]any{"kind": "decade"}, 800, `"facts":{"decade":1990}`},
 		{"guess", map[string]any{"film": "tt0209144"}, 700, `"from":{"id":"tt0209144","title":"Memento"}`},
 		{"reveal", nil, 0, `"end":{"answer":{"id":"tt0133093"`},
@@ -764,6 +774,11 @@ func TestEachRefusalSaysWhy(t *testing.T) {
 	expect(b.move("guess", 0, map[string]any{"film": "tt9999999"}), http.StatusNotFound, "unknown")
 	expect(b.move("buy", 0, map[string]any{"kind": "years"}), http.StatusBadRequest, "bad")
 	expect(b.move("buy", 0, map[string]any{"kind": "overlap", "person": "nm0001592"}), http.StatusBadRequest, "bad")
+	// A sheet only for someone showing: the star is hidden, a director is
+	// no one of the six, and nor is anyone else.
+	for _, who := range []string{"nm0000206", "nm0905154", "nm9999999"} {
+		expect(b.move("sheet", 0, map[string]any{"person": who}), http.StatusBadRequest, "bad")
+	}
 	seq := 0
 	for _, body := range []map[string]any{
 		{"kind": "director"}, {"kind": "decade"}, {"kind": "years"}, {"kind": "genre"}, {"kind": "length"}, {"kind": "rating"},
@@ -779,12 +794,18 @@ func TestEachRefusalSaysWhy(t *testing.T) {
 		}
 		seq++
 	}
-	// Fifty points left, which no purchase may spend.
+	// Fifty points left, which no purchase may spend; a sheet costs
+	// nothing, and is one a game.
 	expect(b.move("buy", seq, map[string]any{"kind": "decade"}), http.StatusConflict, "known")
 	expect(b.move("next", seq, nil), http.StatusPaymentRequired, "points")
+	expect(b.move("sheet", seq, map[string]any{"person": "nm0915989"}), http.StatusOK, "")
+	seq++
+	expect(b.move("sheet", seq, map[string]any{"person": "nm0915989"}), http.StatusConflict, "known")
+	expect(b.move("sheet", seq, map[string]any{"person": "nm0001592"}), http.StatusConflict, "known")
 	expect(b.move("guess", seq, map[string]any{"film": "tt0111257"}), http.StatusOK, "")
 	seq++
 	expect(b.move("reveal", seq, nil), http.StatusConflict, "done")
+	expect(b.move("sheet", seq, map[string]any{"person": "nm0001592"}), http.StatusConflict, "done")
 	expect(b.post("/daily/141/reveal", map[string]any{"key": "yesterday", "seq": 0}), http.StatusConflict, "day")
 
 	// Past midnight the page still has yesterday's number, and today's
@@ -861,15 +882,29 @@ func said(raw string, value any, ownYear bool) []string {
 // is sent; after each range, the movies inside every one bought are
 // readable and only those, the answer among them like every other
 // readable card, a poster for every readable card or none, and nothing
-// saying who else is on a card or that a director is. The end names
+// saying who else is on a card or that a director is. A game reads one
+// sheet, the one it opened: before that, every sheet is refused, and
+// after it every other, saying nothing but why. The end names
 // everything.
+//
+// The game is played five times, each opening the sheet of another of
+// the five the moves show before the end, as soon as they are showing.
 func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 	p := matrixPuzzle()
+	for _, opens := range []int{0, 1, 3, 2, 4} {
+		t.Run(p.Cast[opens].Name, func(t *testing.T) { nothingSaysWhatIsHidden(t, p, opens) })
+	}
+}
+
+// nothingSaysWhatIsHidden plays TestNothingBeforeTheEndSaysWhatIsHidden's
+// game, opening the sheet of the cast member in slot opens.
+func nothingSaysWhatIsHidden(t *testing.T, p *daily.Puzzle, opens int) {
 	f := newFakeDaily(p)
 	srv, _ := dailyServer(t, f)
 	b := newBrowser(t, srv)
 	shown := map[string]bool{"nm0001592": true}
 	bought := map[string]bool{}
+	opened := ""
 	check := func(r reply, when string) {
 		t.Helper()
 		if r.status != http.StatusOK {
@@ -910,6 +945,13 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 			if !slices.Equal(facts, want) || g["end"] != nil {
 				t.Errorf("%s: the facts say %v, want %v; end %v", when, facts, want, g["end"])
 			}
+			var sheet any
+			if opened != "" {
+				sheet = opened
+			}
+			if g["sheet"] != sheet {
+				t.Errorf("%s: the game says its sheet is %v, want %v", when, g["sheet"], sheet)
+			}
 		}
 	}
 	// inside is whether a movie is readable as the contract puts it: some
@@ -936,18 +978,24 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 		}
 		return ranged && in
 	}
-	// sheets checks every showing person's Movies sheet: what any
-	// response must keep, that only the movies inside every range bought
-	// are readable, that every other card is exactly its year and its
-	// rating to the half point, and that the answer's card is like the
-	// rest of its kind.
+	// sheets asks for everyone's Movies sheet, and a director's and
+	// someone's not in the cast. Every one but the sheet opened is
+	// refused, saying nothing but why. The one opened must keep what any
+	// response must, read only the movies inside every range bought,
+	// have every other card exactly its year and its rating to the half
+	// point, and have the answer's card like the rest of its kind.
 	sheets := func(when string) {
 		t.Helper()
+		for _, who := range []string{p.Directors[0].ID, "nm9999999"} {
+			if r := b.sheet(who); r.status != http.StatusConflict || r.raw != sheetRefused {
+				t.Errorf("%s: %s's sheet: %d %s", when, who, r.status, r.raw)
+			}
+		}
 		for slot, c := range p.Cast {
 			r := b.sheet(c.ID)
-			if !shown[c.ID] {
-				if r.status != http.StatusBadRequest || r.body["reason"] != "bad" {
-					t.Errorf("%s: hidden %s's sheet: %d %s", when, c.Name, r.status, r.raw)
+			if c.ID != opened {
+				if r.status != http.StatusConflict || r.raw != sheetRefused {
+					t.Errorf("%s: %s's sheet, not the one opened: %d %s", when, c.Name, r.status, r.raw)
 				}
 				continue
 			}
@@ -1042,11 +1090,25 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 			}
 		}
 	}
+	seq := 0
+	// open opens the sheet of slot opens once they are showing, and checks
+	// every sheet after it.
+	open := func() {
+		t.Helper()
+		who := p.Cast[opens]
+		if opened != "" || !shown[who.ID] {
+			return
+		}
+		opened = who.ID
+		check(b.move("sheet", seq, map[string]any{"person": who.ID}), "opening "+who.Name+"'s sheet")
+		seq++
+		sheets("after opening " + who.Name + "'s sheet")
+	}
 	check(b.get("/daily"), "at load")
 	check(b.post("/daily/142/play", map[string]any{}), "Play")
 	check(b.get("/daily"), "reading the game")
 	sheets("after Play")
-	seq := 0
+	open()
 	for _, m := range []struct {
 		verb  string
 		body  map[string]any
@@ -1075,6 +1137,10 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 		check(r, fmt.Sprintf("%s %v", m.verb, m.body))
 		sheets(fmt.Sprintf("after %s %v", m.verb, m.body))
 		seq++
+		open()
+	}
+	if opened == "" {
+		t.Fatalf("%s was never shown, so their sheet was never opened", p.Cast[opens].Name)
 	}
 	check(b.get("/daily"), "reading the game again")
 	stale := b.move("buy", 0, map[string]any{"kind": "length"})
@@ -1112,8 +1178,15 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 	if want := []any{"start", "next", "guess", "guess", "guess", "end"}; !slices.Equal(via, want) {
 		t.Errorf("at the end the slots show by %v, want %v", via, want)
 	}
-	if r := b.sheet("nm0000206"); r.status != http.StatusOK {
-		t.Errorf("the star's sheet once it is over: %d %s", r.status, r.raw)
+	// Once it is over, everyone's sheet is there, the star's whom the
+	// player never saw among them, whichever was opened.
+	for _, c := range p.Cast {
+		if r := b.sheet(c.ID); r.status != http.StatusOK || !strings.Contains(r.raw, `"title":"The Matrix"`) {
+			t.Errorf("%s's sheet once it is over: %d %s", c.Name, r.status, r.raw)
+		}
+	}
+	if g := gameOf(t, end); g["sheet"] != opened {
+		t.Errorf("at the end the game says its sheet is %v, want %s", g["sheet"], opened)
 	}
 }
 
@@ -1273,13 +1346,16 @@ func TestTheBoardIsReadForTheReader(t *testing.T) {
 	}
 }
 
-// TestTheMoviesSheetIsOnlyForSomeoneShowing in the reader's own game:
-// refused without a player, before Play, for anyone hidden, a director
-// or someone not in the cast at all, and for a puzzle that is no longer
-// anybody's or a game past its own midnight; read only inside the ranges
-// bought, and once the game is over, there for anyone in the cast with
-// every card readable. It never writes.
-func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
+// TestTheMoviesSheetIsOnlyTheOneOpened in the reader's own game: refused
+// without a player, before Play, and for a puzzle that is no longer
+// anybody's or a game past its own midnight; while the game is on,
+// refused for everyone before a sheet is opened, the sixth-billed
+// showing from Play included, and after it for everyone else, shown
+// since, hidden, a director or no one in the cast alike; the one opened
+// read only inside the ranges bought; and once the game is over, there
+// for anyone in the cast with every card readable. Reading it never
+// writes.
+func TestTheMoviesSheetIsOnlyTheOneOpened(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, clk := dailyAt(t, f, todayAt)
 	b := newBrowser(t, srv)
@@ -1301,14 +1377,20 @@ func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
 	f.mu.Unlock()
 	expect(b.sheet("nm0001592"), http.StatusNotFound, "no-game")
 	b.post("/daily/142/play", map[string]any{})
-	for _, who := range []string{"nm0287825", "nm0000206", "nm0905154", "nm9999999", "Joe", ""} {
+	for _, who := range []string{"Joe", "", "tt0133093"} {
 		expect(b.sheet(who), http.StatusBadRequest, "bad")
 	}
 	expect(b.get("/daily/x/movies?person=nm0001592"), http.StatusBadRequest, "bad")
 	expect(b.get("/daily/9/movies?person=nm0001592"), http.StatusConflict, "day")
+	for _, who := range []string{"nm0001592", "nm0287825", "nm0000206", "nm0905154", "nm9999999"} {
+		expect(b.sheet(who), http.StatusConflict, "sheet")
+	}
 
-	// Before any range, every card is blank: where it sits, and nothing
-	// that says which movie it is.
+	// Opened, before any range, every card is blank: where it sits, and
+	// nothing that says which movie it is.
+	if r := b.move("sheet", 0, map[string]any{"person": "nm0001592"}); r.status != http.StatusOK || gameOf(t, r)["sheet"] != "nm0001592" {
+		t.Fatalf("opening Pantoliano's sheet: %d %s", r.status, r.raw)
+	}
 	r := b.sheet("nm0001592")
 	if r.status != http.StatusOK || r.body["person"] != "nm0001592" || r.header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("Pantoliano's sheet: %d %s", r.status, r.raw)
@@ -1319,7 +1401,7 @@ func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
 	}
 	// With the 1990s bought, the three of his inside them are readable,
 	// each with its poster, since all three have one; Memento is not.
-	b.move("buy", 0, map[string]any{"kind": "decade"})
+	b.move("buy", 1, map[string]any{"kind": "decade"})
 	nineties := `{"person":"nm0001592","total":4,"movies":[` +
 		`{"id":"tt0106977","title":"The Fugitive","year":1993,"rating":7.8,"genres":["Action","Crime"],"poster":"https://img.example/fugitive.jpg"},` +
 		`{"id":"tt0115736","title":"Bound","year":1996,"rating":7.3,"genres":["Crime","Thriller"],"poster":"https://img.example/bound.jpg"},` +
@@ -1328,16 +1410,13 @@ func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
 	if joe := b.sheet("nm0001592"); joe.raw != nineties {
 		t.Errorf("Pantoliano's sheet with the 1990s =\n%s\nwant\n%s", joe.raw, nineties)
 	}
-	b.move("guess", 1, map[string]any{"film": "tt0111257"})
-	keanu := `{"person":"nm0000206","total":4,"movies":[` +
-		`{"id":"tt0111257","title":"Speed","year":1994,"rating":7.3,"genres":["Action","Thriller"],"poster":"https://img.example/speed.jpg"},` +
-		`{"id":"tt0133093","title":"The Matrix","year":1999,"rating":8.7,"genres":["Action","Sci-Fi"],"poster":"https://img.example/matrix.jpg"},` +
-		`{"year":2003,"at":7},{"year":2014,"at":7.5}]}` + "\n"
-	if r := b.sheet("nm0000206"); r.raw != keanu {
-		t.Errorf("Keanu's sheet with the 1990s =\n%s\nwant\n%s", r.raw, keanu)
+	// Speed shows Keanu, whose sheet stays shut: one a game.
+	b.move("guess", 2, map[string]any{"film": "tt0111257"})
+	for _, who := range []string{"nm0000206", "nm0287825", "nm0905154", "nm9999999"} {
+		expect(b.sheet(who), http.StatusConflict, "sheet")
 	}
 	// The director is no range, and no card says a director is on it.
-	b.move("buy", 2, map[string]any{"kind": "director"})
+	b.move("buy", 3, map[string]any{"kind": "director"})
 	if joe := b.sheet("nm0001592"); joe.raw != nineties {
 		t.Errorf("Pantoliano's sheet after Director =\n%s\nwant\n%s", joe.raw, nineties)
 	}
@@ -1348,7 +1427,7 @@ func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
 	clk.set(time.Date(2026, 10, 9, 0, 30, 0, 0, time.UTC))
 	expect(b.sheet("nm0001592"), http.StatusConflict, "day")
 	clk.set(todayAt)
-	b.move("reveal", 3, nil)
+	b.move("reveal", 4, nil)
 	clk.set(time.Date(2026, 10, 9, 0, 30, 0, 0, time.UTC))
 	fishburne := `{"person":"nm0000401","total":3,"movies":[` +
 		`{"id":"tt0078788","title":"Apocalypse Now","year":1979,"rating":8.4,"genres":["Drama","War"]},` +
@@ -1357,10 +1436,166 @@ func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
 	if r := b.sheet("nm0000401"); r.status != http.StatusOK || r.raw != fishburne {
 		t.Errorf("Fishburne's sheet once it is over: %d\n%s\nwant\n%s", r.status, r.raw, fishburne)
 	}
+	for _, who := range []string{"nm0905154", "nm9999999"} {
+		expect(b.sheet(who), http.StatusBadRequest, "bad")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if rec := f.games[[2]int64{1, 142}]; rec == nil || len(rec.Moves) != 4 {
+	if rec := f.games[[2]int64{1, 142}]; rec == nil || len(rec.Moves) != 5 {
 		t.Errorf("the sheets moved the game: %+v", rec)
+	}
+}
+
+// sheetRefused is the whole of the answer to a Movies sheet the game may
+// not read: why, and nothing else.
+const sheetRefused = `{"error":"only the Movies map you opened","reason":"sheet"}` + "\n"
+
+// TestASecondSheetIsNeverReadWhileTheGameIsOn, by any route. Six tabs of
+// one player, each opening another of the six's sheets at once from the
+// same point, open one between them, and the other five are stale; a
+// retry of the one taken, naming anyone under its key, is only the game
+// as it is; a sheet from an old point is stale, and from the game as it
+// stands is known, whoever it names; and another tab, reading the game
+// afresh, is told which sheet it has. The answer, readable on the sheet
+// opened once Genre is bought, is in nothing any other asks for, and
+// the game keeps one sheet move. Once it is over every sheet is there.
+func TestASecondSheetIsNeverReadWhileTheGameIsOn(t *testing.T) {
+	p := matrixPuzzle()
+	f := newFakeDaily(p)
+	srv, _ := dailyServer(t, f)
+	b := newBrowser(t, srv)
+	b.post("/daily/142/play", map[string]any{})
+	seq := 0
+	for range daily.Slots - 1 {
+		if r := b.move("next", seq, nil); r.status != http.StatusOK {
+			t.Fatalf("a next name: %d %s", r.status, r.raw)
+		}
+		seq++
+	}
+	if r := b.move("buy", seq, map[string]any{"kind": "genre"}); r.status != http.StatusOK {
+		t.Fatalf("Genre: %d %s", r.status, r.raw)
+	}
+	seq++
+	closed := func(r reply, when string) {
+		t.Helper()
+		if r.status != http.StatusConflict || r.raw != sheetRefused {
+			t.Errorf("%s: %d %s", when, r.status, r.raw)
+		}
+	}
+	for _, c := range p.Cast {
+		closed(b.sheet(c.ID), c.Name+"'s sheet before one is opened")
+	}
+
+	type answer struct {
+		who    string
+		status int
+		raw    string
+		body   map[string]any
+	}
+	answers := make([]answer, len(p.Cast))
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, c := range p.Cast {
+		wg.Go(func() {
+			<-start
+			a := answer{who: c.ID}
+			defer func() { answers[i] = a }()
+			raw, _ := json.Marshal(map[string]any{"key": fmt.Sprintf("other-tab-%d", i), "seq": seq, "person": c.ID})
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/daily/142/sheet", bytes.NewReader(raw))
+			if err != nil {
+				a.raw = err.Error()
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := b.client.Do(req)
+			if err != nil {
+				a.raw = err.Error()
+				return
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			a.status, a.raw = resp.StatusCode, string(body)
+			_ = json.Unmarshal(body, &a.body)
+		})
+	}
+	close(start)
+	wg.Wait()
+	opened := ""
+	for _, a := range answers {
+		switch {
+		case a.status == http.StatusOK && opened == "":
+			opened = a.who
+		case a.status == http.StatusConflict && a.body["reason"] == "stale":
+		default:
+			t.Errorf("a tab opening %s's sheet: %d %s", a.who, a.status, a.raw)
+		}
+	}
+	if opened == "" {
+		t.Fatal("no tab opened a sheet")
+	}
+	seq++
+	for _, a := range answers {
+		if g, _ := a.body["game"].(map[string]any); g == nil || g["sheet"] != opened || g["seq"] != float64(seq) {
+			t.Errorf("the tab opening %s's sheet was answered %s, want the game with %s's", a.who, a.raw, opened)
+		}
+	}
+	// others asks for every sheet but the one opened, a director's and
+	// someone's not in the cast among them, from browser tab.
+	others := func(tab *browser, when string) {
+		t.Helper()
+		for _, who := range append(p.CastIDs(), p.Directors[0].ID, "nm9999999") {
+			if who != opened {
+				closed(tab.sheet(who), fmt.Sprintf("%s, %s's sheet", when, who))
+			}
+		}
+	}
+	if r := b.sheet(opened); r.status != http.StatusOK || !strings.Contains(r.raw, `"title":"The Matrix"`) {
+		t.Errorf("the sheet opened, with Genre bought: %d %s", r.status, r.raw)
+	}
+	others(b, "after six tabs")
+
+	winner := fmt.Sprintf("other-tab-%d", p.SlotOf(opened))
+	for _, c := range p.Cast {
+		for _, at := range []int{seq - 1, seq} {
+			r := b.post("/daily/142/sheet", map[string]any{"key": winner, "seq": at, "person": c.ID})
+			if r.status != http.StatusOK || gameOf(t, r)["sheet"] != opened || seqOf(t, r) != seq {
+				t.Errorf("a retry naming %s at seq %d: %d %s", c.Name, at, r.status, r.raw)
+			}
+		}
+		for _, at := range []int{0, seq - 1} {
+			r := b.move("sheet", at, map[string]any{"person": c.ID})
+			if r.status != http.StatusConflict || r.body["reason"] != "stale" || gameOf(t, r)["sheet"] != opened {
+				t.Errorf("a sheet for %s from seq %d: %d %s", c.Name, at, r.status, r.raw)
+			}
+		}
+		if r := b.move("sheet", seq, map[string]any{"person": c.ID}); r.status != http.StatusConflict || r.body["reason"] != "known" {
+			t.Errorf("a second sheet, for %s: %d %s", c.Name, r.status, r.raw)
+		}
+	}
+	others(b, "after the retries")
+
+	tab := newBrowser(t, srv)
+	tab.client.Jar.SetCookies(mustURL(t, srv.URL), b.client.Jar.Cookies(mustURL(t, srv.URL)))
+	if r := tab.get("/daily"); gameOf(t, r)["sheet"] != opened {
+		t.Errorf("another tab reads the game as %s", r.raw)
+	}
+	others(tab, "another tab")
+
+	f.mu.Lock()
+	var kinds []string
+	for _, m := range f.games[[2]int64{1, 142}].Moves {
+		kinds = append(kinds, m.Kind)
+	}
+	f.mu.Unlock()
+	if want := append(slices.Repeat([]string{daily.KindNext}, daily.Slots-1), daily.KindGenre, daily.KindSheet); !slices.Equal(kinds, want) {
+		t.Errorf("the game kept the moves %v, want %v", kinds, want)
+	}
+
+	b.move("reveal", seq, nil)
+	for _, c := range p.Cast {
+		if r := b.sheet(c.ID); r.status != http.StatusOK || !strings.Contains(r.raw, `"title":"The Matrix"`) {
+			t.Errorf("%s's sheet once it is over: %d %s", c.Name, r.status, r.raw)
+		}
 	}
 }
 

@@ -187,6 +187,64 @@ func TestAnOverlapIsNoMoveAtAll(t *testing.T) {
 	}
 }
 
+// TestOneSheetIsOpenedAGameForNothing: the Movies sheet a game reads is
+// chosen once, from the names showing, and costs nothing, so it is
+// opened even with fifty points left. Anyone hidden, a director, someone
+// not in the cast and no one at all are bad alike; once one is opened,
+// a second is known whoever it names, the same person again, someone
+// shown since and someone still hidden alike. It is logged as whose it
+// is, with no cost, and counts in seq like any move. After the end it is
+// done.
+func TestOneSheetIsOpenedAGameForNothing(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	for _, who := range []string{"nm0287825", "nm0000206", "nm0905154", "nm9999999", "tt0133093", ""} {
+		if err := g.try(KindSheet, who); !errors.Is(err, ErrBad) {
+			t.Errorf("a sheet for %q: %v, want bad", who, err)
+		}
+	}
+	if s := g.state(); s.Sheet != "" || len(g.moves) != 0 {
+		t.Fatalf("a refused sheet was taken: %q, %d moves", s.Sheet, len(g.moves))
+	}
+	for _, kind := range factKinds {
+		g.do(kind, "")
+	}
+	for range 3 {
+		g.do(KindNext, "")
+	}
+	if s := g.state(); s.Pts != 50 || s.Sheet != "" {
+		t.Fatalf("set-up spent to %d with sheet %q, want 50 and none", s.Pts, s.Sheet)
+	}
+	s := g.do(KindSheet, "nm0005251")
+	if s.Pts != 50 || s.Sheet != "nm0005251" || s.Done || len(shownSlots(s)) != 4 {
+		t.Errorf("after opening Moss's sheet: %d points, sheet %q, showing %v", s.Pts, s.Sheet, shownSlots(s))
+	}
+	if m := g.moves[len(g.moves)-1]; m.Kind != KindSheet || m.Arg != "nm0005251" || m.Cost != 0 || m.Guess != nil {
+		t.Errorf("the sheet was recorded as %+v", m)
+	}
+	for _, who := range []string{"nm0005251", "nm0001592", "nm0000206", "nm9999999"} {
+		if err := g.try(KindSheet, who); !errors.Is(err, ErrKnown) {
+			t.Errorf("a second sheet, for %s: %v, want known", who, err)
+		}
+	}
+	game := Render(p, g.record(), live)
+	if game.Sheet == nil || *game.Sheet != "nm0005251" || game.Seq != 10 || game.Pts != 50 {
+		t.Errorf("the game says sheet %v, seq %d, %d points", game.Sheet, game.Seq, game.Pts)
+	}
+	if last := rendered(t, game.Log[len(game.Log)-1]); last != `{"type":"sheet","person":"nm0005251"}` {
+		t.Errorf("the sheet is logged as %s", last)
+	}
+	if body := rendered(t, Render(p, play(t, p).record(), live)); !strings.Contains(body, `"sheet":null`) {
+		t.Errorf("a new game does not say it has no sheet: %s", body)
+	}
+
+	over := play(t, p)
+	over.do(KindReveal, "")
+	if err := over.try(KindSheet, "nm0001592"); !errors.Is(err, ErrDone) {
+		t.Errorf("a sheet after the end: %v, want done", err)
+	}
+}
+
 // TestAWrongGuessFillsInTheCastItSharesThenShowsTheNextName: Memento
 // credits Pantoliano, already showing, and Moss, slot 3, who is filled
 // in through it; then the first name still hidden, Foster, shows. It

@@ -498,11 +498,14 @@ export interface DailyGuess {
 }
 
 /** One line of the game's record. A last wrong guess that runs the points
- *  out logs "guess" and then "out"; a right guess logs "win". */
+ *  out logs "guess" and then "out"; a right guess logs "win". "sheet" is
+ *  the one Movies map the game allows, chosen by the person's IMDb name
+ *  id: it costs nothing, so it is never among what was paid for. */
 export type DailyEntry =
   | { type: 'next'; cost: number; slot: number }
   | { type: 'fact'; kind: DailyFactKind; cost: number }
   | { type: 'guess'; cost: number; guess: DailyGuess }
+  | { type: 'sheet'; person: string }
   | { type: 'win' }
   | { type: 'gaveup' }
   | { type: 'out' };
@@ -543,6 +546,12 @@ export interface DailyGame {
   facts: DailyFacts;
   /** One entry per move, in order. */
   log: DailyEntry[];
+  /** Whose Movies map the reader opened, by IMDb name id, or null before
+   *  they have chosen. One a game: while it is on, the server shows that
+   *  person's sheet and refuses every other (GET /movies, "sheet"), so
+   *  two people's readable titles can never be laid side by side to
+   *  leave only today's movie. Chosen once and never changed. */
+  sheet: string | null;
   /** Everything the game kept back, sent once it is over. */
   end: null | { answer: DailyAnswer; directors: DailyPerson[] };
 }
@@ -584,11 +593,14 @@ export interface DailyToday {
   dev?: boolean;
 }
 
-/** What the reader can do to a game in progress, one request each. */
+/** What the reader can do to a game in progress, one request each.
+ *  "sheet" chooses the game's one Movies map, a showing person's, by
+ *  IMDb name id. */
 export type DailyMove =
   | { kind: 'next' }
   | { kind: 'buy'; fact: DailyFactKind }
   | { kind: 'guess'; film: string }
+  | { kind: 'sheet'; person: string }
   | { kind: 'reveal' };
 
 /** One of a showing person's movies on the Movies sheet, readable: it is
@@ -806,6 +818,21 @@ export function guessMovie(
   return dailyPost(`/daily/${no}/guess`, { key, seq, film }, signal);
 }
 
+/** Chooses whose Movies map the reader opens, by IMDb name id: one of
+ *  the names showing, once a game and for nothing. Every other sheet
+ *  stays closed until the end. A second choice, of anyone, the same
+ *  person included, is refused ("known"), as is anyone not showing
+ *  ("bad"). */
+export function openSheet(
+  no: number,
+  person: string,
+  key: string,
+  seq: number,
+  signal?: AbortSignal,
+): Promise<{ game: DailyGame }> {
+  return dailyPost(`/daily/${no}/sheet`, { key, seq, person }, signal);
+}
+
 /** Shows the answer, which ends the game at nought. */
 export function revealAnswer(no: number, key: string, seq: number, signal?: AbortSignal): Promise<{ game: DailyGame }> {
   return dailyPost(`/daily/${no}/reveal`, { key, seq }, signal);
@@ -828,6 +855,8 @@ export function sendDailyMove(
       return buyFact(no, move.fact, key, seq, signal);
     case 'guess':
       return guessMovie(no, move.film, key, seq, signal);
+    case 'sheet':
+      return openSheet(no, move.person, key, seq, signal);
     case 'reveal':
       return revealAnswer(no, key, seq, signal);
   }
@@ -836,9 +865,13 @@ export function sendDailyMove(
 /** One showing person's movies, for the Movies sheet, from today's
  *  snapshot: readable inside every range the reader has bought, and
  *  blank, a year and a place on the rating axis, everywhere else (see
- *  DailyMovie). Asked again once a range is bought. Refused for someone
- *  who is not a showing slot in the reader's game (400 "bad"); once the
- *  game is over it answers for anyone in the cast, every movie readable. */
+ *  DailyMovie). Asked again once a range is bought. While the game is on
+ *  it answers only for the person whose map the reader chose (openSheet,
+ *  DailyGame's `sheet`): anyone else, shown, hidden, outside the cast or
+ *  anyone at all before a map is chosen, is refused alike (409 "sheet"),
+ *  so the refusal never says who is in the cast. 400 "bad" is for an id
+ *  that is no IMDb name id, or, once the game is over, someone not in the
+ *  cast, when it answers for anyone in it, every movie readable. */
 export function fetchDailyMovies(no: number, person: string, signal?: AbortSignal): Promise<DailyMovies> {
   return dailyGet<DailyMovies>(`/daily/${no}/movies?person=${encodeURIComponent(person)}`, signal);
 }

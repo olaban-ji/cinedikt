@@ -6139,7 +6139,8 @@ button {
 /* Every control here takes the accent's ring under the keyboard. */
 .cd-nd :is(button, a):focus-visible,
 .cd-nd-title :is(button, a):focus-visible,
-.cd-nd-rules :is(button, a):focus-visible {
+.cd-nd-rules :is(button, a):focus-visible,
+.cd-nd-choose :is(button, a):focus-visible {
   outline: 2px solid var(--acc);
   outline-offset: 2px;
 }
@@ -7017,6 +7018,13 @@ button.cd-nd-tried-chip::before {
   inset: -5px -2px;
 }
 
+/* One Movies map a game: once it is chosen, every other name's button
+   stays where it is, so the rows keep their shape, but faded and shut.
+   Its tooltip says whose map is open. */
+.cd-nd-movies:disabled {
+  opacity: 0.45;
+}
+
 /* The next row's button, laid over the whole row. */
 .cd-nd-row-go {
   position: absolute;
@@ -7450,7 +7458,7 @@ button.cd-nd-tried-chip::before {
     box-shadow: inset 0 0 0 1px var(--acc);
   }
 
-  .cd-nd-movies:hover {
+  .cd-nd-movies:hover:not(:disabled) {
     color: var(--t);
     box-shadow: inset 0 0 0 1px var(--acc);
   }
@@ -7999,7 +8007,8 @@ button.cd-nd-tried-chip::before {
 
 /* ---- How it works ---- */
 
-.cd-nd-rules-scrim {
+.cd-nd-rules-scrim,
+.cd-nd-choose-scrim {
   position: fixed;
   inset: 0;
   z-index: 70;
@@ -8069,6 +8078,87 @@ button.cd-nd-tried-chip::before {
   font-weight: 700;
 }
 
+/* ---- the question before the one Movies map ---- */
+
+/* How it works' card, smaller, over the same scrim: the question, the
+   rule, and the two answers side by side, Not now first and Open the map
+   last in the accent, drawn as Map this movie and Share result are. On a
+   screen too narrow for both on one line they stack, Open the map on
+   top. */
+.cd-nd-choose {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: var(--s);
+  box-shadow: var(--pop);
+  color: var(--t);
+  outline: none;
+}
+
+.cd-nd-choose-title {
+  margin: 0;
+  font-family: 'Young Serif', serif;
+  font-weight: 400;
+  font-size: 21px;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.cd-nd-choose-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--t2);
+  text-wrap: pretty;
+}
+
+.cd-nd-choose-row {
+  display: flex;
+  flex-wrap: wrap-reverse;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.cd-nd-choose-no,
+.cd-nd-choose-yes {
+  flex: 1 1 120px;
+  height: 46px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 13px;
+  font-size: 15px;
+  font-weight: 700;
+  transition:
+    filter 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.cd-nd-choose-no {
+  background: var(--s);
+  box-shadow: inset 0 0 0 1px var(--ln3);
+  color: var(--t);
+}
+
+.cd-nd-choose-yes {
+  background: var(--acc);
+  color: var(--accInk);
+}
+
+@media (hover: hover) {
+  .cd-nd-choose-no:hover {
+    box-shadow: inset 0 0 0 1px var(--acc);
+  }
+
+  .cd-nd-choose-yes:hover {
+    filter: brightness(1.06);
+  }
+}
+
 /* Forced colours drop box-shadow, which is the edge of most of these. */
 @media (forced-colors: active) {
   .cd-nd-step,
@@ -8084,7 +8174,9 @@ button.cd-nd-tried-chip::before {
   .cd-nd-board,
   .cd-nd-tab-on,
   .cd-nd-peek,
-  .cd-nd-rules {
+  .cd-nd-rules,
+  .cd-nd-choose,
+  .cd-nd-choose-no {
     outline: 1px solid CanvasText;
     outline-offset: -1px;
   }
@@ -8114,7 +8206,9 @@ button.cd-nd-tried-chip::before {
   .cd-nd-guess,
   .cd-nd-play,
   .cd-nd-share,
-  .cd-nd-mapit {
+  .cd-nd-mapit,
+  .cd-nd-choose-no,
+  .cd-nd-choose-yes {
     transition: none;
   }
 

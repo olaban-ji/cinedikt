@@ -6,7 +6,10 @@ import (
 )
 
 // The kinds of move a game records. The six facts share their names
-// with the API's "kind" field.
+// with the API's "kind" field. A sheet is the one Movies sheet a game
+// opens (daily.go): it costs nothing, and is a move so that it is
+// recorded, once, holding the game's row like any other, and two tabs
+// cannot each open one.
 const (
 	KindNext     = "next"
 	KindLength   = "length"
@@ -15,6 +18,7 @@ const (
 	KindDecade   = "decade"
 	KindYears    = "years"
 	KindDirector = "director"
+	KindSheet    = "sheet"
 	KindGuess    = "guess"
 	KindReveal   = "reveal"
 )
@@ -58,7 +62,8 @@ type Move struct {
 	Seq  int
 	Key  string
 	Kind string
-	// Arg is the movie guessed.
+	// Arg is the movie guessed, or the cast member whose sheet was
+	// opened, by id.
 	Arg  string
 	Cost int
 	// Guess is what a wrong guess learned, worked out when it was made,
@@ -134,6 +139,10 @@ type State struct {
 	// Done is a game that has ended, Won by naming the answer, GaveUp by
 	// asking for it, and Out by a wrong guess the points could not cover.
 	Done, Won, GaveUp, Out bool
+	// Sheet is the cast member whose Movies sheet the player opened, by
+	// id, "" until they open one: the only sheet the game may read
+	// before the end (Puzzle.Opens).
+	Sheet string
 
 	// via is how each slot came to be showing, "" while it is hidden,
 	// and from the wrong guess that filled it in, when one did.
@@ -174,6 +183,8 @@ func (s *State) Step(p *Puzzle, m Move) {
 	case IsFact(m.Kind):
 		s.Pts -= m.Cost
 		s.Facts[m.Kind] = true
+	case m.Kind == KindSheet:
+		s.Sheet = m.Arg
 	case m.Kind == KindGuess:
 		s.guessed[m.Arg] = true
 		if m.Arg == p.Answer.ID {
@@ -284,6 +295,20 @@ func Apply(p *Puzzle, s *State, r Request, looked *Looked) (Move, error) {
 			return Move{}, ErrBad
 		}
 		m.Cost = factCost[r.Kind]
+	case r.Kind == KindSheet:
+		// One a game: a second is known whoever it names, the first one's
+		// person again included, before any question of who that is. The
+		// first must name someone showing, and anyone else, hidden or no
+		// one of the six, is bad alike, so the refusal never says which
+		// ids are the hidden cast's. It costs nothing, so it is never
+		// refused for points.
+		if s.Sheet != "" {
+			return Move{}, ErrKnown
+		}
+		if !s.Shown(p.SlotOf(r.Arg)) {
+			return Move{}, ErrBad
+		}
+		return m, nil
 	case r.Kind == KindGuess:
 		if s.guessed[r.Arg] {
 			return Move{}, ErrKnown

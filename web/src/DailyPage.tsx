@@ -27,6 +27,7 @@ import { DailyCast } from './DailyCast';
 import { DailyMoviesSheet } from './DailyMoviesSheet';
 import { AgainButton, DailyLeaderboard, DailyResult, useBoards } from './DailyResult';
 import { DailyRules } from './DailyRules';
+import { DailySheetAsk } from './DailySheetAsk';
 import { DailyTitle } from './DailyTitle';
 import {
   AGAIN_FAILED,
@@ -48,6 +49,7 @@ import {
   cardGlow,
   cardRipple,
   castRows,
+  choiceOvertaken,
   clockOffset,
   codesOf,
   dailyDateText,
@@ -61,6 +63,7 @@ import {
   hueColour,
   midnightText,
   moveSig,
+  moviesPress,
   newKey,
   newWrongGuess,
   newestGuess,
@@ -75,6 +78,9 @@ import {
   revealDelays,
   rippleSlot,
   shareText,
+  sheetAfter,
+  shownAsk,
+  shownSheet,
   staleGame,
   todaysPeople,
   toneStyle,
@@ -314,10 +320,16 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
   const [rules, setRules] = useState(false);
   const rulesRef = useRef(rules);
   rulesRef.current = rules;
-  // The Movies sheet, open on this person, by IMDb id.
+  // The Movies sheet, open on this person, by IMDb id: only ever the one
+  // whose map the reader chose, the game's `sheet`.
   const [sheet, setSheet] = useState<string | null>(null);
   const sheetRef = useRef(sheet);
   sheetRef.current = sheet;
+  // The name whose Movies button asked to choose the game's one map,
+  // while the question is up (DailySheetAsk).
+  const [asking, setAsking] = useState<DailyPerson | null>(null);
+  const askingRef = useRef(asking);
+  askingRef.current = asking;
   const [starting, setStarting] = useState(false);
   const busyRef = useRef(false);
   const [topAsk, setTopAsk] = useState(0);
@@ -390,12 +402,16 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
         if (!quiet) capture('daily_finish', { won: next.won, pts: next.pts });
         setEnded(true);
         setSheet(null);
+        setAsking(null);
         setMsgId(null);
         setSure(false);
         inputRef.current?.blur();
         setTopAsk((n) => n + 1);
         later(toResult, RESULT_AFTER_MS);
       }
+      // A map chosen, here or in another tab, answers any question still
+      // up about choosing one (shownAsk).
+      if (next.sheet) setAsking(null);
     },
     [later, keepNextInView, toResult],
   );
@@ -440,7 +456,7 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
       const g = gameRef.current;
-      if (!g || g.phase !== 'play' || rulesRef.current || sheetRef.current) return;
+      if (!g || g.phase !== 'play' || rulesRef.current || sheetRef.current || shownAsk(g, askingRef.current)) return;
       if (isTyping(document.activeElement)) return;
       e.preventDefault();
       inputRef.current?.focus();
@@ -494,6 +510,29 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
   // same point uses the same key and is never charged twice.
   const unanswered = useRef<{ sig: string; key: string } | null>(null);
 
+  /** Catches up with the game as the server has it, for a refusal that
+   *  says the page is behind without saying where: the game the refusal
+   *  handed back, if it did, and otherwise today's, asked for afresh and
+   *  drawn quietly. Null when it cannot be had, or when today's puzzle is
+   *  no longer this one, which the reader's midnight is already on its
+   *  way to sort out. */
+  const catchUp = useCallback(
+    async (body: unknown): Promise<DailyGame | null> => {
+      let now = staleGame(body);
+      if (!now) {
+        try {
+          const fresh = await fetchDaily();
+          if (fresh.no === today.no) now = fresh.game;
+        } catch {
+          // Nothing to catch up with: the caller says so.
+        }
+      }
+      if (now) adopt(now, true);
+      return now;
+    },
+    [today.no, adopt],
+  );
+
   const act = useCallback(
     async (move: DailyMove): Promise<boolean> => {
       const g = gameRef.current;
@@ -529,6 +568,15 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
           if (now) adopt(now, true);
           return false;
         }
+        // A Movies map chosen already: in another tab, or by a press that
+        // crossed this one. The page catches up, still holding the game
+        // so nothing else is sent from where it was, and the map chosen
+        // then opens (chooseSheet); the words are for when there is none
+        // to open (sheetAfter).
+        if (move.kind === 'sheet' && e.reason === 'known') {
+          if (sheetAfter(await catchUp(e.body)).say) say(refusalText(e.reason, move.kind));
+          return false;
+        }
         const text = refusalText(e.reason, move.kind);
         if (text) say(text);
         if (e.reason === 'day' || e.reason === 'done' || e.reason === 'cookie' || e.reason === 'no-game') reload();
@@ -537,12 +585,79 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
         busyRef.current = false;
       }
     },
-    [today.no, adopt, say, reload],
+    [today.no, adopt, catchUp, say, reload],
   );
 
   const next = useCallback(() => void act({ kind: 'next' }), [act]);
   const buy = useCallback((fact: DailyFactKind) => void act({ kind: 'buy', fact }), [act]);
   const guess = useCallback((film: string) => act({ kind: 'guess', film }), [act]);
+
+  // ---- the one Movies map ----
+
+  /** A Movies button pressed, read against the game as it stands now
+   *  rather than as the row was drawn (moviesPress): the map chosen
+   *  opens straight away; before one is chosen the page asks first
+   *  (DailySheetAsk), though never while a move is on its way, the choice
+   *  among them, whose map would land under the question; a shut one does
+   *  nothing, and cannot be pressed. */
+  const movies = useCallback((p: DailyPerson) => {
+    const g = gameRef.current;
+    if (!g) return;
+    const press = moviesPress(g, p, busyRef.current);
+    if (press === 'open') setSheet(p.id);
+    else if (press === 'ask') setAsking(p);
+  }, []);
+
+  /** Open the map, answered: the question goes, the choice is sent as a
+   *  move like any other, under its key from where the game stands, so a
+   *  second press, or a retry after an answer that never came, is the
+   *  same request and never a second map. Then the map chosen opens,
+   *  whoever's it is: usually `p`'s, but a choice made first in another
+   *  tab, which a refusal or a game handed back brings, is the one that
+   *  holds. Nothing opens when nothing was chosen, and the refusal has
+   *  said why.
+   *
+   *  With a move still on its way, which act would drop unsent, the
+   *  question stays up, to be answered again once it has landed, rather
+   *  than go as though the map were chosen. A choice refused as stale,
+   *  the game having moved on in another tab without a map being chosen
+   *  there, still stands: the reader has answered, so it is sent once
+   *  more from where the game now is; overtaken again, the question goes
+   *  back up, since a stale refusal says nothing (choiceOvertaken). */
+  const chooseSheet = useCallback(
+    async (p: DailyPerson) => {
+      if (busyRef.current) return;
+      setAsking(null);
+      const from = gameRef.current;
+      if (from && !from.sheet && !(await act({ kind: 'sheet', person: p.id }))) {
+        const now = gameRef.current;
+        if (now && choiceOvertaken(from, now) && !(await act({ kind: 'sheet', person: p.id }))) {
+          if (choiceOvertaken(now, gameRef.current)) {
+            setAsking(p);
+            return;
+          }
+        }
+      }
+      const { open } = sheetAfter(gameRef.current);
+      if (open) setSheet(open);
+    },
+    [act],
+  );
+
+  /** The server would not show the map that is open ("sheet"): the page
+   *  had it wrong, as it can after a game was played on elsewhere. It
+   *  catches up and opens the map that was chosen, unless it is this one
+   *  again or there is none, when the sheet goes and the reader is told
+   *  the rule (sheetAfter). Nothing happens if the sheet was closed
+   *  meanwhile. */
+  const sheetRefused = useCallback(async () => {
+    const refused = sheetRef.current;
+    const now = await catchUp(null);
+    if (sheetRef.current !== refused) return;
+    const after = sheetAfter(now, refused);
+    setSheet(after.open);
+    if (after.say) say(refusalText('sheet', 'movies'));
+  }, [catchUp, say]);
 
   /** Show the answer takes two presses: the first asks "Sure? Show it"
    *  for REVEAL_CONFIRM_MS, and a second within that gives the game up. */
@@ -583,6 +698,8 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
   const rows = opening ? openingRows() : castRows(game);
   const delays = ended && !still ? revealDelays(rows) : NO_DELAYS;
   const shownGuess = playing ? guessById(game, msgId) : null;
+  const sheetOn = shownSheet(game, sheet);
+  const askOn = shownAsk(game, asking);
   const message = shownGuess ? guessMessage(shownGuess, game) : null;
   const guessed = guessedIds(game);
 
@@ -608,7 +725,7 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
         codes={codes}
         theme={theme}
         onNext={next}
-        onMovies={(p: DailyPerson) => setSheet(p.id)}
+        onMovies={movies}
       />
     ),
     facts: <DailyFacts game={game} opening={opening} onBuy={buy} />,
@@ -664,10 +781,10 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
           />
         )}
       </div>
-      {sheet && playing && (
+      {sheetOn && (
         <DailyMoviesSheet
           no={today.no}
-          person={sheet}
+          person={sheetOn}
           game={game}
           theme={theme}
           onGuess={(id) => {
@@ -680,8 +797,10 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
             void guess(id);
           }}
           onClose={() => setSheet(null)}
+          onNotChosen={() => void sheetRefused()}
         />
       )}
+      {askOn && <DailySheetAsk name={askOn.name} onYes={() => void chooseSheet(askOn)} onNo={() => setAsking(null)} />}
       {rules && <DailyRules onClose={() => setRules(false)} />}
     </>
   );

@@ -199,6 +199,7 @@ func (d *dailyRoutes) register(mux *http.ServeMux) {
 	route("POST /daily/{no}/play", d.play)
 	route("POST /daily/{no}/next", d.next)
 	route("POST /daily/{no}/buy", d.buy)
+	route("POST /daily/{no}/sheet", d.sheet)
 	route("POST /daily/{no}/guess", d.guess)
 	route("POST /daily/{no}/reveal", d.reveal)
 	route("GET /daily/{no}/movies", d.movies)
@@ -790,12 +791,14 @@ func (d *dailyRoutes) addr(r *http.Request) string {
 var dailyKey = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
 // dailyMove is a move's body: the key and seq every move has, and the
-// fact a buy is for or the movie a guess names.
+// fact a buy is for, the movie a guess names, or the person whose
+// Movies sheet is opened.
 type dailyMove struct {
-	Key  string `json:"key"`
-	Seq  *int   `json:"seq"`
-	Kind string `json:"kind"`
-	Film string `json:"film"`
+	Key    string `json:"key"`
+	Seq    *int   `json:"seq"`
+	Kind   string `json:"kind"`
+	Film   string `json:"film"`
+	Person string `json:"person"`
 }
 
 func (d *dailyRoutes) next(w http.ResponseWriter, r *http.Request) {
@@ -803,10 +806,20 @@ func (d *dailyRoutes) next(w http.ResponseWriter, r *http.Request) {
 }
 
 // buy sells the facts daily.IsFact names. The old game's clues, the
-// overlap Name Drop first sold at an address of its own, and any kind
-// that never was, are refused as bad.
+// overlap Name Drop first sold at an address of its own, the sheet,
+// which has its own, and any kind that never was, are refused as bad.
 func (d *dailyRoutes) buy(w http.ResponseWriter, r *http.Request) {
 	d.act(w, r, func(m dailyMove) (string, string, bool) { return m.Kind, "", daily.IsFact(m.Kind) })
+}
+
+// sheet is POST /daily/{no}/sheet {key, seq, person}: the game's one
+// Movies sheet, opened for nothing. It is a move like any other, made
+// once under the game's row, so a retry is the game as it is, a second
+// tab's is stale, and a second sheet, whoever it names, is "known"
+// (daily.Apply). Someone not showing is "bad", as is a person that is no
+// IMDb name id, refused before the store is asked.
+func (d *dailyRoutes) sheet(w http.ResponseWriter, r *http.Request) {
+	d.act(w, r, func(m dailyMove) (string, string, bool) { return daily.KindSheet, m.Person, imdbid.Name(m.Person) })
 }
 
 func (d *dailyRoutes) guess(w http.ResponseWriter, r *http.Request) {
@@ -883,14 +896,14 @@ type dailySheet struct {
 	Movies []daily.SheetCard `json:"movies"`
 }
 
-// movies is GET /daily/{no}/movies?person=nm…: the Movies sheet of one of
-// the six showing in the reader's game, from the puzzle as it was picked
-// (daily.Puzzle.SheetOf), with today's movie among the cards and nothing
-// marking it out. A card is readable only inside the ranges the reader
-// has bought, and every other is blank, its year and its rating to the
-// half point; once the game is over every card is readable. Posters are
-// read only for the readable cards (SheetWants), so a sheet before any
-// range reads none. In order, it is refused:
+// movies is GET /daily/{no}/movies?person=nm…: the Movies sheet the
+// reader opened in their game (POST /sheet), from the puzzle as it was
+// picked (daily.Puzzle.SheetOf), with today's movie among the cards and
+// nothing marking it out. A card is readable only inside the ranges the
+// reader has bought, and every other is blank, its year and its rating
+// to the half point; once the game is over every card is readable.
+// Posters are read only for the readable cards (SheetWants), so a sheet
+// before any range reads none. In order, it is refused:
 //
 //   - "bad" for a person that is no IMDb name id;
 //   - "cookie" without a player;
@@ -898,10 +911,16 @@ type dailySheet struct {
 //     unfinished and past its own zone's midnight, as a move on it
 //     would be;
 //   - "no-game" before Play;
-//   - "bad" for anyone not showing in their game, a director included.
+//   - while the game is on, "sheet" for anyone but the person whose
+//     sheet the reader opened: everyone before they open one, and after
+//     it the rest of the six, shown or hidden, a director and anyone at
+//     all alike, so the refusal never says who the hidden cast are, and
+//     no two sheets are ever read side by side (daily.go);
+//   - once it is over, "bad" for anyone not in the cast, a director
+//     included.
 //
-// Once the game is over it answers for anyone in the cast. It writes
-// nothing.
+// Once the game is over it answers for anyone in the cast, whichever
+// sheet was opened or none. It writes nothing.
 func (d *dailyRoutes) movies(w http.ResponseWriter, r *http.Request) {
 	person := r.URL.Query().Get("person")
 	if _, ok := puzzleNumber(w, r); !ok {
@@ -945,8 +964,12 @@ func (d *dailyRoutes) movies(w http.ResponseWriter, r *http.Request) {
 	}
 	s := daily.Replay(p, rec.Moves)
 	slot := p.SlotOf(person)
-	if !s.Shown(slot) {
-		dailyRefuse(w, http.StatusBadRequest, "bad", "that person is not showing in this game")
+	if !p.Opens(s, slot) {
+		if !s.Done {
+			d.fail(w, r, daily.ErrSheet)
+			return
+		}
+		dailyRefuse(w, http.StatusBadRequest, "bad", "that person is not in this game's cast")
 		return
 	}
 	live, err := d.store.DailyLive(ctx, p.SheetWants(s, slot), nil)

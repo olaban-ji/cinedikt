@@ -90,6 +90,7 @@ import {
   SEARCH_WAIT_MS,
   SHEET_CLOSE_PX,
   SHEET_METRICS,
+  SHEET_ONE,
   SHEET_PHONE_SHARE,
   SHEET_SPRING_EASE,
   SHEET_SPRING_MS,
@@ -124,6 +125,7 @@ import {
   castLine,
   castRows,
   chartBars,
+  choiceOvertaken,
   clockOffset,
   codesOf,
   countUp,
@@ -156,7 +158,9 @@ import {
   liveScreen,
   midnightText,
   moveSig,
+  moviesButton,
   moviesLabel,
+  moviesPress,
   namesLine,
   newKey,
   newWrongGuess,
@@ -191,11 +195,17 @@ import {
   shareMarks,
   shareText,
   sharedPeople,
+  sheetAsk,
   sheetCardLabel,
   sheetHint,
   sheetLegend,
+  sheetAfter,
+  sheetLockedLabel,
+  sheetPerson,
   sheetSub,
   sheetTitle,
+  shownAsk,
+  shownSheet,
   shownSlots,
   staleGame,
   standingText,
@@ -308,6 +318,7 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
     slots: slotsOf({ 0: { via: 'start' } }),
     facts: {},
     log: [],
+    sheet: null,
     end: null,
     ...over,
   };
@@ -660,6 +671,60 @@ describe('the cast list', () => {
     expect(CAST_HEADING).toBe('The cast');
   });
 
+  it('offers every shown name’s Movies to choose from, before any map is chosen', () => {
+    const rows = castRows(PLAYING);
+    expect(rows.map((r) => (r.state === 'shown' ? r.movies : null))).toEqual([
+      { state: 'choose', label: 'See Joe Pantoliano’s movies on a Cinedikt map' },
+      { state: 'choose', label: 'See Gloria Foster’s movies on a Cinedikt map' },
+      { state: 'choose', label: 'See Hugo Weaving’s movies on a Cinedikt map' },
+      { state: 'choose', label: 'See Carrie-Anne Moss’s movies on a Cinedikt map' },
+      null,
+      null,
+    ]);
+  });
+
+  it('opens the chosen name’s map straight away, and shuts every other, saying whose is open', () => {
+    const chose = { ...PLAYING, sheet: JOE.id, log: [...PLAYING.log, { type: 'sheet' as const, person: JOE.id }] };
+    const locked = { state: 'locked', label: 'One Movies map a game. You opened Joe Pantoliano’s.' };
+    expect(castRows(chose).map((r) => (r.state === 'shown' ? r.movies : null))).toEqual([
+      { state: 'open', label: 'See Joe Pantoliano’s movies on a Cinedikt map' },
+      locked,
+      locked,
+      locked,
+      null,
+      null,
+    ]);
+    // A name shown after the choice is shut as well: the choice holds
+    // for the whole game.
+    const later = {
+      ...chose,
+      slots: slotsOf({ 0: { via: 'start' }, 1: { via: 'next' }, 2: { via: 'next' }, 3: { via: 'guess' }, 4: { via: 'next' } }),
+    };
+    expect(moviesButton(later, LAURENCE)).toEqual(locked);
+    expect(moviesButton(later, JOE).state).toBe('open');
+  });
+
+  it('works the button out from the game, by id, whoever is named', () => {
+    const chose = { ...PLAYING, sheet: GLORIA.id };
+    expect(moviesButton(chose, { id: GLORIA.id, name: 'Anyone' }).state).toBe('open');
+    expect(moviesButton(chose, { id: JOE.id, name: 'Gloria Foster' })).toEqual({
+      state: 'locked',
+      label: 'One Movies map a game. You opened Gloria Foster’s.',
+    });
+    expect(moviesButton(PLAYING, JOE).state).toBe('choose');
+  });
+
+  it('finds the person whose map was chosen among the names showing, and nobody before', () => {
+    expect(sheetPerson(PLAYING)).toBeNull();
+    expect(sheetPerson({ ...PLAYING, sheet: HUGO.id })).toEqual(HUGO);
+    // Never a hidden name: the page has none to give.
+    expect(sheetPerson({ ...PLAYING, sheet: KEANU.id })).toBeNull();
+    expect(moviesButton({ ...PLAYING, sheet: KEANU.id }, JOE)).toEqual({
+      state: 'locked',
+      label: 'One Movies map a game. You’ve opened yours.',
+    });
+  });
+
   it('opens the lower three rows’ photo upwards', () => {
     expect([0, 1, 2, 3, 4, 5].map(peekOpensUp)).toEqual([false, false, false, true, true, true]);
   });
@@ -1001,7 +1066,7 @@ describe('the words', () => {
       'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
       'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
       'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade and then a five-year range, or the director.',
-      'Tap Movies on any name to see their movies on a Cinedikt map. Titles only show inside the ranges you’ve bought.',
+      'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the ranges you’ve bought.',
       'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
     ]);
     expect(HOW_IT_WORKS.then).toBe(
@@ -1140,6 +1205,110 @@ describe('the Movies sheet', () => {
   });
 });
 
+describe('the one Movies map', () => {
+  it('is asked for by name, with the rule and the two answers', () => {
+    expect(sheetAsk('Joe Pantoliano')).toEqual({
+      title: 'Open Joe Pantoliano’s movies?',
+      body: 'You get one Movies map a game. The other names’ maps stay closed.',
+      yes: 'Open the map',
+      no: 'Not now',
+    });
+    expect(SHEET_ONE).toBe('You get one Movies map a game.');
+  });
+
+  it('shuts the other names’ buttons with whose map is open, said and shown alike', () => {
+    expect(sheetLockedLabel('Joe Pantoliano')).toBe('One Movies map a game. You opened Joe Pantoliano’s.');
+    expect(sheetLockedLabel(null)).toBe('One Movies map a game. You’ve opened yours.');
+  });
+
+  it('is the only sheet the page draws, and only while the game is on, whatever it was left holding', () => {
+    const chose = { ...PLAYING, sheet: JOE.id };
+    expect(shownSheet(chose, JOE.id)).toBe(JOE.id);
+    // Anyone else's is never drawn, so never asked for: not before a map
+    // is chosen, and not after.
+    expect(shownSheet(chose, GLORIA.id)).toBeNull();
+    expect(shownSheet(PLAYING, JOE.id)).toBeNull();
+    expect(shownSheet(chose, null)).toBeNull();
+    // Nor once the game is over, when the sheet goes with the rest.
+    expect(shownSheet({ ...chose, phase: 'done' }, JOE.id)).toBeNull();
+  });
+
+  it('opens the map the server says was chosen once the page has caught up, whoever’s it is', () => {
+    // A choice refused because another tab made one first: that one opens.
+    expect(sheetAfter({ phase: 'play', sheet: GLORIA.id })).toEqual({ open: GLORIA.id, say: false });
+    // A sheet refused while another was the one chosen: the chosen opens.
+    expect(sheetAfter({ phase: 'play', sheet: GLORIA.id }, JOE.id)).toEqual({ open: GLORIA.id, say: false });
+  });
+
+  it('says the rule when there is no map to open, and never opens the one just refused again', () => {
+    expect(sheetAfter({ phase: 'play', sheet: null })).toEqual({ open: null, say: true });
+    expect(sheetAfter({ phase: 'play', sheet: JOE.id }, JOE.id)).toEqual({ open: null, say: true });
+    // The game could not be had at all.
+    expect(sheetAfter(null)).toEqual({ open: null, say: true });
+    expect(sheetAfter(null, JOE.id)).toEqual({ open: null, say: true });
+  });
+
+  it('leaves a game that has ended to its end, with nothing opened and nothing said', () => {
+    expect(sheetAfter({ phase: 'done', sheet: JOE.id })).toEqual({ open: null, say: false });
+    expect(sheetAfter({ phase: 'done', sheet: null }, JOE.id)).toEqual({ open: null, say: false });
+  });
+
+  it('never asks again while a move, the choice among them, is on its way', () => {
+    // Until the choice lands every row still offers to choose: a press
+    // then would put a question up for the map that lands to open under.
+    expect(moviesPress(PLAYING, GLORIA, true)).toBe('none');
+    expect(moviesPress(PLAYING, JOE, true)).toBe('none');
+    expect(moviesPress(PLAYING, GLORIA, false)).toBe('ask');
+    // The map chosen opens all the same, since opening it sends nothing;
+    // a shut one never does, busy or not.
+    const chose = { ...PLAYING, sheet: JOE.id };
+    expect(moviesPress(chose, JOE, true)).toBe('open');
+    expect(moviesPress(chose, JOE, false)).toBe('open');
+    expect(moviesPress(chose, GLORIA, false)).toBe('none');
+    expect(moviesPress(chose, GLORIA, true)).toBe('none');
+    // Nor anything once the game is over: the end takes over.
+    expect(moviesPress({ ...chose, phase: 'done' }, JOE, false)).toBe('none');
+    expect(moviesPress({ ...PLAYING, phase: 'done' }, JOE, false)).toBe('none');
+  });
+
+  it('takes the question down once a map is chosen, here or in another tab', () => {
+    expect(shownAsk(PLAYING, GLORIA)).toBe(GLORIA);
+    expect(shownAsk(PLAYING, null)).toBeNull();
+    // Joe's map landed while the page was asking about Gloria's: the
+    // question goes, so Joe's never opens beneath it.
+    expect(shownAsk({ ...PLAYING, sheet: JOE.id }, GLORIA)).toBeNull();
+    expect(shownAsk({ ...PLAYING, sheet: GLORIA.id }, GLORIA)).toBeNull();
+    // And with the game over.
+    expect(shownAsk({ ...PLAYING, phase: 'done' }, GLORIA)).toBeNull();
+  });
+
+  it('sends a choice the game moved on under once more, and never takes one refused for a reason as overtaken', () => {
+    const was = { seq: PLAYING.seq };
+    // Refused as stale, the game handed back further on with no map
+    // chosen: the choice still stands.
+    expect(choiceOvertaken(was, { ...PLAYING, seq: PLAYING.seq + 1 })).toBe(true);
+    // Another tab chose a map meanwhile: that one holds, and opens.
+    expect(choiceOvertaken(was, { ...PLAYING, seq: PLAYING.seq + 1, sheet: GLORIA.id })).toBe(false);
+    // The game where it was: refused for a reason, which was said, or
+    // never answered, which was said too.
+    expect(choiceOvertaken(was, PLAYING)).toBe(false);
+    // Over meanwhile, or not to be had.
+    expect(choiceOvertaken(was, { ...PLAYING, seq: PLAYING.seq + 1, phase: 'done' })).toBe(false);
+    expect(choiceOvertaken(was, null)).toBe(false);
+  });
+
+  it('is free: never among what was paid for, the names seen or what a solve used', () => {
+    const sheet: DailyEntry = { type: 'sheet', person: JOE.id };
+    const first = ended([sheet, { type: 'win' }], { won: true, pts: 1000, sheet: JOE.id });
+    expect(paidFor(first.log)).toEqual([]);
+    expect(resultKicker(first)).toBe('Got it on the first name');
+    expect([...seenSlots(first)]).toEqual([0]);
+    expect(usedText(first)).toBe('one name');
+    expect(shareMarks(first)).toBe('■□□□□□');
+    expect(paidFor([...PLAYING.log, sheet])).toEqual(paidFor(PLAYING.log));
+  });
+});
+
 describe('time', () => {
   it('counts down to the next movie in hours, minutes and seconds', () => {
     expect(countdown(42_423_000)).toBe('11:47:03');
@@ -1264,6 +1433,10 @@ describe('a move', () => {
     expect(moveSig({ kind: 'buy', fact: 'decade' }, 3)).not.toBe(moveSig({ kind: 'buy', fact: 'years' }, 3));
     expect(moveSig({ kind: 'guess', film: 'tt1' }, 3)).toBe('3:guess:tt1');
     expect(moveSig({ kind: 'reveal' }, 5)).toBe('5:reveal:');
+    // A map chosen is the same request from the same point for the same
+    // person, so a second press, or a retry, is never a second map.
+    expect(moveSig({ kind: 'sheet', person: JOE.id }, 4)).toBe('4:sheet:nm0001592');
+    expect(moveSig({ kind: 'sheet', person: JOE.id }, 4)).not.toBe(moveSig({ kind: 'sheet', person: GLORIA.id }, 4));
   });
 });
 
@@ -1276,6 +1449,13 @@ describe('a refused move', () => {
     expect(refusalText('bad', 'buy')).toBe('Buy the decade first.');
     expect(refusalText('bad', 'movies')).toBe('That name isn’t showing yet.');
     expect(refusalText('day', 'guess')).toBe(DAY_OVER);
+  });
+
+  it('says there is one Movies map a game, for a second choice and for a map not chosen', () => {
+    expect(refusalText('known', 'sheet')).toBe('You’ve already opened your Movies map.');
+    expect(refusalText('bad', 'sheet')).toBe('That name isn’t showing yet.');
+    expect(refusalText('sheet', 'movies')).toBe('You get one Movies map a game.');
+    expect(refusalText('sheet')).toBe(SHEET_ONE);
   });
 
   it('says nothing when it hands back the game as it stands', () => {
@@ -1513,6 +1693,9 @@ describe('the Daily’s words', () => {
       ...castRows(PLAYING).map((r) => (r.state === 'shown' ? r.line : '')),
       NEXT_ROW_LABEL,
       moviesLabel('Joe Pantoliano'),
+      ...Object.values(sheetAsk('Joe Pantoliano')),
+      sheetLockedLabel('Joe Pantoliano'),
+      sheetLockedLabel(null),
       ...guessMessage(THIRTEENTH.guess, PLAYING).chips,
       guessPlaceholder(PLAYING),
       guessPlaceholder({ pts: 100, nextCost: 150 }),
@@ -1541,6 +1724,7 @@ describe('the Daily’s words', () => {
       ...['points', 'known', 'bad', 'unknown', 'day', 'done', 'cookie', 'busy', 'not-ready', null].map((r) =>
         refusalText(r, 'guess'),
       ),
+      ...['known', 'bad', 'sheet'].map((r) => refusalText(r, 'sheet')),
       ...Object.values(TOASTS),
       NEXT_MOVIE_IN,
       NOT_READY,
@@ -1628,6 +1812,14 @@ describe('a move the server would refuse', () => {
     expect(earlyRefusal(gameOf(), { kind: 'buy', fact: 'years' })).toBe('Buy the decade first.');
     expect(earlyRefusal(gameOf({ pts: 250 }), { kind: 'buy', fact: 'director' })).toBe('Not enough points for that.');
     expect(earlyRefusal(PLAYING, { kind: 'guess', film: THIRTEENTH.guess.id })).toBe('You’ve already tried that one');
+    // One Movies map a game, and only a showing name's.
+    expect(earlyRefusal({ ...PLAYING, sheet: JOE.id }, { kind: 'sheet', person: GLORIA.id })).toBe(
+      'You’ve already opened your Movies map.',
+    );
+    expect(earlyRefusal({ ...PLAYING, sheet: JOE.id }, { kind: 'sheet', person: JOE.id })).toBe(
+      'You’ve already opened your Movies map.',
+    );
+    expect(earlyRefusal(PLAYING, { kind: 'sheet', person: KEANU.id })).toBe('That name isn’t showing yet.');
   });
 
   it('is nothing for a move worth sending', () => {
@@ -1639,6 +1831,9 @@ describe('a move the server would refuse', () => {
     // cover ends the game instead. Nor is giving up.
     expect(earlyRefusal(gameOf({ pts: 50, nextCost: 150 }), { kind: 'guess', film: MATRIX.id })).toBe('');
     expect(earlyRefusal(gameOf({ pts: 1 }), { kind: 'reveal' })).toBe('');
+    // A map chosen costs nothing, so no score is too low for it.
+    expect(earlyRefusal(PLAYING, { kind: 'sheet', person: CARRIE.id })).toBe('');
+    expect(earlyRefusal(gameOf({ pts: 1 }), { kind: 'sheet', person: JOE.id })).toBe('');
   });
 });
 

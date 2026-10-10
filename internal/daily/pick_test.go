@@ -418,16 +418,21 @@ func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
 		}
 	}
 
-	// Played, with Foster showing, her sheet is her fifteen, the ten
-	// among them, and his stays at MaxSheet without them.
+	// Played, Foster's sheet, opened once she is showing, is her
+	// fifteen, the ten among them; his, opened in a game of its own,
+	// stays at MaxSheet without them.
 	g := play(t, p)
 	g.do(KindNext, "")
+	g.do(KindSheet, "nm0287825")
 	hers, ok := p.SheetOf(g.state(), 1, Live{})
 	if !ok || len(hers) != 15 {
-		t.Fatalf("Foster's sheet with her showing: %d movies, %v", len(hers), ok)
+		t.Fatalf("Foster's sheet, opened with her showing: %d movies, %v", len(hers), ok)
 	}
-	if his, _ := p.SheetOf(g.state(), 0, Live{}); len(his) != MaxSheet {
-		t.Errorf("Pantoliano's sheet with Foster showing has %d movies, want %d", len(his), MaxSheet)
+	him := play(t, p)
+	him.do(KindNext, "")
+	him.do(KindSheet, "nm0001592")
+	if his, _ := p.SheetOf(him.state(), 0, Live{}); len(his) != MaxSheet {
+		t.Errorf("Pantoliano's sheet, opened with Foster showing, has %d movies, want %d", len(his), MaxSheet)
 	}
 	if also := p.Cast[0].Also; also == nil || also.ID != "tt0106977" {
 		t.Errorf("Pantoliano is also in %+v, want The Fugitive", also)

@@ -471,6 +471,8 @@ export type CastRow =
       /** Seen during the game. At the end the rest appear one after
        *  another (endRevealDelay), at once with stillness asked for. */
       seen: boolean;
+      /** Its Movies button, while the game is on (moviesButton). */
+      movies: MoviesButton;
     }
   /** The next to show: the whole row is a button (NEXT_ROW_LABEL). */
   | { slot: number; state: 'next'; bar: number }
@@ -480,11 +482,14 @@ export type CastRow =
  *  the "next" one, the only way to ask for it, only while it can be
  *  pressed; otherwise every hidden row is just hidden. A hidden row
  *  carries no name at all: the page is never told one. */
-export function castRows(game: Pick<DailyGame, 'phase' | 'pts' | 'slots' | 'log'>): CastRow[] {
+export function castRows(game: Pick<DailyGame, 'phase' | 'pts' | 'slots' | 'log' | 'sheet'>): CastRow[] {
   const next = nextSlot(game);
   const seen = seenSlots(game);
   return game.slots.map((s): CastRow => {
-    if (s.shown) return { slot: s.slot, state: 'shown', person: s.person, line: castLine(s), seen: seen.has(s.slot) };
+    if (s.shown) {
+      const movies = moviesButton(game, s.person);
+      return { slot: s.slot, state: 'shown', person: s.person, line: castLine(s), seen: seen.has(s.slot), movies };
+    }
     return { slot: s.slot, state: s.slot === next ? 'next' : 'hidden', bar: BAR_WIDTHS[s.slot] ?? 50 };
   });
 }
@@ -495,6 +500,39 @@ export const NEXT_ROW_LABEL = `Show the next name. It costs ${NEXT_COST} points.
 /** A shown row's Movies button, for a screen reader. */
 export function moviesLabel(name: string): string {
   return `See ${name}’s movies on a Cinedikt map`;
+}
+
+/** The person whose Movies map the reader chose, among the names
+ *  showing, or null before they have chosen. The server lets only a
+ *  showing person be chosen, and a name once shown stays shown, so the
+ *  one chosen is always found. */
+export function sheetPerson(game: Pick<DailyGame, 'sheet' | 'slots'>): DailyPerson | null {
+  if (!game.sheet) return null;
+  return shownSlots(game).find((s) => s.person.id === game.sheet)?.person ?? null;
+}
+
+/** A shown row's Movies button while the game is on. One Movies map a
+ *  game (DailyGame's `sheet`), so it is one of three:
+ *  - "choose" before any map is chosen: pressing it asks first
+ *    (sheetAsk), since the choice holds for the whole game;
+ *  - "open" on the person chosen, whose map opens straight away, as
+ *    often as the reader likes;
+ *  - "locked" on everyone else: left in its place, so the rows keep
+ *    their shape and the reader sees why, but it cannot be pressed, and
+ *    its label, said and shown as its tooltip, names whose map is open. */
+export interface MoviesButton {
+  state: 'choose' | 'open' | 'locked';
+  /** Its name for a screen reader; a locked one's tooltip as well. */
+  label: string;
+}
+
+export function moviesButton(
+  game: Pick<DailyGame, 'sheet' | 'slots'>,
+  person: Pick<DailyPerson, 'id' | 'name'>,
+): MoviesButton {
+  if (!game.sheet) return { state: 'choose', label: moviesLabel(person.name) };
+  if (game.sheet === person.id) return { state: 'open', label: moviesLabel(person.name) };
+  return { state: 'locked', label: sheetLockedLabel(sheetPerson(game)?.name ?? null) };
 }
 
 /** The slot whose colour runs out of the hidden card as a ripple, now
@@ -946,7 +984,7 @@ export const HOW_IT_WORKS = {
     'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
     'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
     'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade and then a five-year range, or the director.',
-    'Tap Movies on any name to see their movies on a Cinedikt map. Titles only show inside the ranges you’ve bought.',
+    'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the ranges you’ve bought.',
     'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
   ],
   then: `You start with ${fmtN(DAILY_START)} points. Each extra name costs ${NEXT_COST}. Wrong guesses cost ${wrongCost(0)}, then ${wrongCost(1)}, ${wrongCost(2)} and so on. Facts cost ${Math.min(...Object.values(FACT_COST))} to ${Math.max(...Object.values(FACT_COST))}. There’s no clock.`,
@@ -1029,6 +1067,114 @@ export function bannerLabel(no: number, game: Pick<DailyGame, 'phase'> | null): 
 // side by side to find the one movie both are on. Today's movie is among
 // the cards by the same rule as any other, unmarked. Length is not a
 // range here, since other movies' runtimes are not on a map.
+//
+// And there is one map a game. With titles readable inside the ranges
+// bought, two people's readable titles side by side almost always leave
+// only today's movie: the overlap the game took away, back for the price
+// of a range. So the reader chooses whose map to open, once, and the
+// server holds them to it, answering for no one else until the end. The
+// page asks before the choice is made (sheetAsk), and after it every
+// other name's button stays put, shut (moviesButton).
+
+/** The rule, said wherever the choice comes up. */
+export const SHEET_ONE = 'You get one Movies map a game.';
+
+/** What the page asks before the game's one map is chosen. */
+export interface SheetAsk {
+  /** "Open Joe Pantoliano’s movies?" */
+  title: string;
+  body: string;
+  /** Opens it, for good. */
+  yes: string;
+  /** Leaves every map closed, and the choice still to make. */
+  no: string;
+}
+
+export function sheetAsk(name: string): SheetAsk {
+  return {
+    title: `Open ${name}’s movies?`,
+    body: `${SHEET_ONE} The other names’ maps stay closed.`,
+    yes: 'Open the map',
+    no: 'Not now',
+  };
+}
+
+/** A shut Movies button's label and tooltip: "One Movies map a game. You
+ *  opened Joe Pantoliano’s." Without the name, which the page always has,
+ *  it still says why. */
+export function sheetLockedLabel(name: string | null): string {
+  return name ? `One Movies map a game. You opened ${name}’s.` : 'One Movies map a game. You’ve opened yours.';
+}
+
+/** The sheet the page draws, of the one it has open: only the map the
+ *  game says was chosen, and only while the game is on. So the page never
+ *  asks the server for anyone else's, whatever it was left holding. */
+export function shownSheet(game: Pick<DailyGame, 'phase' | 'sheet'>, open: string | null): string | null {
+  return game.phase === 'play' && open != null && open === game.sheet ? open : null;
+}
+
+/** What becomes of the Movies map once the page has caught up with the
+ *  game as the server has it (`now`, or null when it could not be had),
+ *  after a choice was refused because one was made already, or a sheet
+ *  the server would not show (`refused`). The map chosen opens, whoever's
+ *  it is: the server's choice is the one that holds. With none to open,
+ *  the reader is told the rule. The sheet refused is never opened again
+ *  from here, so a page and a server that disagree cannot go round
+ *  asking for it. Nothing to say once the game is over: the end takes
+ *  over by itself. */
+export function sheetAfter(
+  now: Pick<DailyGame, 'phase' | 'sheet'> | null,
+  refused: string | null = null,
+): { open: string | null; say: boolean } {
+  if (now && now.phase !== 'play') return { open: null, say: false };
+  if (now?.sheet && now.sheet !== refused) return { open: now.sheet, say: false };
+  return { open: null, say: true };
+}
+
+/** What a Movies press does, read against the game as it stands now
+ *  rather than as the row was drawn (moviesButton): the map chosen opens;
+ *  before one is chosen the page asks first (sheetAsk); a shut one does
+ *  nothing. Nor does one that would ask while a move is on its way
+ *  (`busy`), the choice of map among them, just as the page sends one
+ *  move at a time: until a choice lands, every row still offers to
+ *  choose, and a question put over it would be overtaken by the map that
+ *  lands, which opened beneath it still asking about someone else's. The
+ *  map chosen opens all the same, since opening it sends nothing and
+ *  changes nothing in the game. */
+export function moviesPress(
+  game: Pick<DailyGame, 'phase' | 'sheet' | 'slots'>,
+  person: Pick<DailyPerson, 'id' | 'name'>,
+  busy: boolean,
+): 'open' | 'ask' | 'none' {
+  if (game.phase !== 'play') return 'none';
+  const { state } = moviesButton(game, person);
+  if (state === 'open') return 'open';
+  return state === 'choose' && !busy ? 'ask' : 'none';
+}
+
+/** The question the page puts, of the name it was left asking about
+ *  (`asking`): only while the game is on and no map is chosen. A choice
+ *  that lands, from this tab or another, takes the question down, so the
+ *  map chosen never opens under a question still asking about another
+ *  name, nor answers Escape for it unseen. */
+export function shownAsk<P>(game: Pick<DailyGame, 'phase' | 'sheet'>, asking: P | null): P | null {
+  return game.phase === 'play' && !game.sheet ? asking : null;
+}
+
+/** Whether a choice of map sent from the game at `was` came back with
+ *  the game moved on under it and no map chosen (`now`, the game the
+ *  page has since): refused as stale, another tab having played on
+ *  without choosing, which the server says nothing more about. The
+ *  reader has answered, so the page sends the choice once more from
+ *  there; overtaken again, it puts the question back up rather than drop
+ *  the answer without a word. A choice refused for anything else leaves
+ *  the game where it was, and has its reason said (refusalText). */
+export function choiceOvertaken(
+  was: Pick<DailyGame, 'seq'>,
+  now: Pick<DailyGame, 'phase' | 'seq' | 'sheet'> | null,
+): boolean {
+  return now != null && now.phase === 'play' && now.seq !== was.seq && !now.sheet;
+}
 
 /** The years a bought decade or five years take in, inclusive, or null
  *  with neither bought. The five years win: they are inside the decade. */
@@ -1212,10 +1358,14 @@ export const SEARCH_MIN_CHARS = 2;
 /** What the reader is told, at once and without asking, about a move the
  *  server would refuse: a name when everyone is showing, a fact already
  *  bought or the years before the decade, a purchase the points would not
- *  leave one over from, a movie already guessed. Empty for a move worth
- *  sending. The page's buttons already hold back most of these; this is
- *  for the rest, and for a press that lands as the game changes under it. */
-export function earlyRefusal(game: Pick<DailyGame, 'pts' | 'slots' | 'facts' | 'log'>, move: DailyMove): string {
+ *  leave one over from, a movie already guessed, a second Movies map or
+ *  one for a name not showing. Empty for a move worth sending. The
+ *  page's buttons already hold back most of these; this is for the rest,
+ *  and for a press that lands as the game changes under it. */
+export function earlyRefusal(
+  game: Pick<DailyGame, 'pts' | 'slots' | 'facts' | 'log' | 'sheet'>,
+  move: DailyMove,
+): string {
   switch (move.kind) {
     case 'next':
       if (!game.slots.some((s) => !s.shown)) return refusalText('known', 'next');
@@ -1226,6 +1376,9 @@ export function earlyRefusal(game: Pick<DailyGame, 'pts' | 'slots' | 'facts' | '
       return affords(game.pts, FACT_COST[move.fact]) ? '' : refusalText('points', 'buy');
     case 'guess':
       return guessedIds(game).has(move.film) ? TOASTS.tried : '';
+    case 'sheet':
+      if (game.sheet) return refusalText('known', 'sheet');
+      return shownSlots(game).some((s) => s.person.id === move.person) ? '' : refusalText('bad', 'sheet');
     case 'reveal':
       return '';
   }
@@ -1356,7 +1509,8 @@ export function newKey(): string {
  *  game is the same request, and is sent again under the same key after
  *  an answer that never came. */
 export function moveSig(move: DailyMove, seq: number): string {
-  const arg = move.kind === 'buy' ? move.fact : move.kind === 'guess' ? move.film : '';
+  const arg =
+    move.kind === 'buy' ? move.fact : move.kind === 'guess' ? move.film : move.kind === 'sheet' ? move.person : '';
   return `${seq}:${move.kind}:${arg}`;
 }
 
@@ -1386,11 +1540,17 @@ export function refusalText(
     case 'known':
       if (kind === 'guess') return TOASTS.tried;
       if (kind === 'next') return 'Everyone’s showing.';
+      if (kind === 'sheet') return 'You’ve already opened your Movies map.';
       return 'You already have that fact.';
     case 'bad':
       if (kind === 'buy') return 'Buy the decade first.';
-      if (kind === 'movies') return 'That name isn’t showing yet.';
+      if (kind === 'movies' || kind === 'sheet') return 'That name isn’t showing yet.';
       return UNREACHABLE;
+    // GET /movies for anyone but the person whose map was chosen, while
+    // the game is on. The page catches up and opens the one chosen; this
+    // is for when there is none to open.
+    case 'sheet':
+      return SHEET_ONE;
     case 'unknown':
       return 'Cinedikt doesn’t know that movie.';
     case 'day':
