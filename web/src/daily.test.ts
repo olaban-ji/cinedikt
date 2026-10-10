@@ -59,6 +59,14 @@ import {
   NOT_READY,
   NUDGE_NAMES,
   NUDGE_NOTE,
+  DISMISS,
+  HAND_IN,
+  HAND_RIPPLE,
+  HAND_TAP,
+  HINT_RISE,
+  IDLE_HINT_MS,
+  MAP_NOTE,
+  NEXT_HINT,
   NUDGE_PULSES,
   NUDGE_PULSE_MS,
   NUDGE_PULSE_PX,
@@ -141,6 +149,9 @@ import {
   endRevealDelay,
   factItems,
   factNudge,
+  firstMiss,
+  idleHint,
+  warmthNote,
   factValue,
   factsHeading,
   fmtN,
@@ -1703,6 +1714,91 @@ describe('the hidden card’s motion', () => {
   });
 });
 
+describe('the first-time hints', () => {
+  const calm = { typing: false, covered: false, opening: false };
+
+  it('have the hand tap the next row once a new game has sat untouched for ten seconds', () => {
+    expect(IDLE_HINT_MS).toBe(10_000);
+    expect(NEXT_HINT).toBe('Tap for the next name · −100');
+    expect(idleHint(gameOf(), calm)).toBe('show');
+  });
+
+  it('wait again while the reader types, has something over the game, or watches Play hide the names', () => {
+    expect(idleHint(gameOf(), { ...calm, typing: true })).toBe('wait');
+    expect(idleHint(gameOf(), { ...calm, covered: true })).toBe('wait');
+    expect(idleHint(gameOf(), { ...calm, opening: true })).toBe('wait');
+  });
+
+  it('never show the hand once anything has been done, with no game on, or with no next name', () => {
+    // A name, a fact, a guess or a map chosen: each is a move, and the
+    // reader has found their way.
+    expect(idleHint(gameOf({ log: [{ type: 'next', cost: 100, slot: 1 }] }), calm)).toBe('never');
+    expect(idleHint(gameOf({ log: [{ type: 'sheet', person: JOE.id }] }), calm)).toBe('never');
+    expect(idleHint(gameOf({ log: [THIRTEENTH] }), { ...calm, typing: true })).toBe('never');
+    expect(idleHint(null, calm)).toBe('never');
+    expect(idleHint(gameOf({ phase: 'done' }), calm)).toBe('never');
+    expect(idleHint(gameOf({ pts: 100 }), calm)).toBe('never');
+    expect(idleHint(gameOf({ slots: ALL_SHOWN }), calm)).toBe('never');
+  });
+
+  it('explain a map nothing names yet by the two facts that name its movies, and no others', () => {
+    expect(MAP_NOTE).toEqual({
+      title: 'The titles are hidden for now',
+      body: 'Buy the decade or a rating range, and the movies inside it show their titles. Today’s movie is one of these cards.',
+      ok: 'Got it',
+    });
+    expect(MAP_NOTE.body).not.toMatch(/years|genre/);
+  });
+
+  it('say what warmth means after the game’s first wrong guess, at what the next miss costs', () => {
+    expect(warmthNote(150)).toBe('Cold, warm or hot says how close that guess was. The next miss costs 150.');
+    expect(warmthNote(1200)).toBe('Cold, warm or hot says how close that guess was. The next miss costs 1,200.');
+    expect(DISMISS).toBe('Dismiss');
+    const one = gameOf({ seq: 1, log: [THIRTEENTH] });
+    expect(firstMiss(gameOf(), one)).toBe(true);
+    // From nothing, as a game handed back by a refusal can be.
+    expect(firstMiss(null, one)).toBe(true);
+    // The second miss, the same game again, a name bought, or a miss
+    // that ended the game are not.
+    expect(firstMiss(one, gameOf({ seq: 2, log: [THIRTEENTH, SPEED] }))).toBe(false);
+    expect(firstMiss(one, one)).toBe(false);
+    expect(firstMiss(gameOf(), gameOf({ log: [{ type: 'next', cost: 100, slot: 1 }] }))).toBe(false);
+    expect(firstMiss(gameOf(), gameOf({ phase: 'done', log: [THIRTEENTH] }))).toBe(false);
+  });
+
+  it('move as the handoff has them: the hand in over 600ms, tapping every 1.7s after 650ms, the notes rising 8px', () => {
+    expect(HAND_IN.keyframes).toEqual([
+      { opacity: 0, translate: '18px 22px' },
+      { opacity: 1, translate: '0 0' },
+    ]);
+    expect(HAND_IN.options).toEqual({ duration: 600, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+    const tapping = { duration: 1700, delay: 650, iterations: Infinity, easing: 'ease-out' };
+    expect(HAND_TAP.options).toEqual(tapping);
+    expect(HAND_RIPPLE.options).toEqual(tapping);
+    expect(HAND_TAP.keyframes.map((k) => [k.offset, k.scale])).toEqual([
+      [0, 1],
+      [0.05, 1],
+      [0.17, 0.84],
+      [0.35, 1],
+      [1, 1],
+    ]);
+    expect(HAND_RIPPLE.keyframes.map((k) => [k.offset, k.scale, k.opacity])).toEqual([
+      [0, 0.3, 0],
+      [0.14, 0.3, 0],
+      [0.17, 0.3, 0.95],
+      [0.62, 1.6, 0],
+      [1, 1.6, 0],
+    ]);
+    expect(HINT_RISE).toEqual({
+      keyframes: [
+        { opacity: 0, translate: '0 8px' },
+        { opacity: 1, translate: '0 0' },
+      ],
+      options: { duration: 320, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+    });
+  });
+});
+
 describe('touch', () => {
   it('reaches 44px round every small control, as the handoff sets each one out', () => {
     expect(HIT_INSETS).toEqual({
@@ -1711,6 +1807,7 @@ describe('touch', () => {
       fact: '-5px -3px',
       movies: '-5px -2px',
       tab: '-7px 0',
+      dismiss: '-4px',
     });
   });
 

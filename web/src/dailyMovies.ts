@@ -18,6 +18,7 @@
 
 import type { DailyBlankMovie, DailyGame, DailyMovie, DailyPerson, DailyReadableMovie } from './api';
 import {
+  MAP_NOTE,
   SHEET_COACH,
   SHEET_METRICS,
   SHEET_PHONE_SHARE,
@@ -439,6 +440,9 @@ export interface SheetState {
   /** The one-time pointer at the named cards is still to be shown on
    *  this device, and nothing has been tapped yet. */
   coach?: boolean;
+  /** The first-time note on a map nothing names yet is still to be shown
+   *  on this device, and has not been put away. */
+  mapNote?: boolean;
 }
 
 export interface SheetView {
@@ -468,6 +472,9 @@ export interface SheetView {
   /** The one-time pointer, when it is due and there is a card to point
    *  at. */
   coach: SheetCoach | null;
+  /** The first-time note over the map, when it is due and no range is
+   *  bought: once one is, there are titles, and nothing to explain. */
+  note: typeof MAP_NOTE | null;
 }
 
 /** Everything the sheet draws, from where it stands. */
@@ -508,6 +515,7 @@ export function sheetView(s: SheetState): SheetView {
     scrollTo: openingScroll(cards),
     coach:
       s.coach && layout && !s.pick ? coachAt(cards, layout.plotW, layout.metrics.cardW, layout.metrics.cardH) : null,
+    note: s.mapNote && !ranged ? MAP_NOTE : null,
   };
 }
 

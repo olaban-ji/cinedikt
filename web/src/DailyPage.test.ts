@@ -30,7 +30,9 @@ import {
   openingRows,
   revealDelays,
   todaysPeople,
+  warmthNote,
 } from './daily';
+import { HINTS_KEY, hintSeen } from './dailyHints';
 import css from './grid.css?raw';
 
 // ---- today's movie: The Matrix, No. 143 ----
@@ -565,6 +567,40 @@ describe('after a wrong guess', () => {
     // Reopened, the page starts with no message up, as the design does.
     expect(drawn(PLAYING)).toContain('<div class="cd-nd-msgwrap" aria-live="polite"></div>');
   });
+
+  const barWith = (note: string | null, onNoteClose = () => {}) =>
+    createElement(DailyBar, {
+      game: PLAYING,
+      message: guessMessage(THIRTEENTH.guess, PLAYING),
+      note,
+      onNoteClose,
+      codes: codesOf(todaysPeople(PLAYING)),
+      theme: 'dark',
+      phone: false,
+      opening: false,
+      guessed: new Set([THIRTEENTH.guess.id]),
+      inputRef: { current: null },
+      onGuess: async () => true,
+      say: () => {},
+    });
+
+  it('puts the first-time warmth note over the message, said as a status, with Dismiss', () => {
+    const html = renderToStaticMarkup(barWith(warmthNote(150)));
+    expect(html).toContain(
+      '<div class="cd-nd-tipwrap" role="status"><div class="cd-nd-tip"><span class="cd-nd-tip-text">Cold, warm or hot says how close that guess was. The next miss costs 150.</span><button type="button" class="cd-nd-tip-x" aria-label="Dismiss"><svg',
+    );
+    expect(html.indexOf('cd-nd-tipwrap')).toBeLessThan(html.indexOf('cd-nd-msgwrap'));
+    const closed = vi.fn();
+    const presses = pressesIn(barWith(warmthNote(150), closed), 'cd-nd-tip-x');
+    expect(presses).toHaveLength(1);
+    presses[0]();
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the note’s status there and empty with no note, as a reopened page has', () => {
+    expect(renderToStaticMarkup(barWith(null))).toContain('<div class="cd-nd-tipwrap" role="status"></div>');
+    expect(drawn(PLAYING)).toContain('<div class="cd-nd-tipwrap" role="status"></div>');
+  });
 });
 
 describe('the results list', () => {
@@ -642,6 +678,37 @@ describe('the results list', () => {
 
 describe('the cast list', () => {
   const codes = codesOf(todaysPeople(SOLVED));
+
+  const castWith = (game: DailyGame, nudge: boolean) =>
+    renderToStaticMarkup(
+      createElement(DailyCast, {
+        rows: castRows(game),
+        playing: true,
+        delays: new Map(),
+        codes,
+        theme: 'dark',
+        nudge,
+        onNext: () => {},
+        onMovies: () => {},
+      }),
+    );
+
+  it('has a hand tap the next row when the page asks, the row saying what a tap does', () => {
+    const html = castWith(gameOf(), true);
+    expect(html).toContain('<span class="cd-nd-next-word">Tap for the next name · −100</span>');
+    // In the row, after its button, for the eye alone.
+    expect(html).toMatch(
+      /<button type="button" class="cd-nd-row-go" aria-label="Show the next name\. It costs 100 points\."><\/button><span class="cd-nd-hand" aria-hidden="true"><span class="cd-nd-hand-ring"><\/span><span class="cd-nd-hand-glyph"><svg width="46" height="46" viewBox="0 0 24 24" focusable="false"><path class="cd-nd-hand-body" d="M6 4a2/,
+    );
+    expect(html.match(/cd-nd-hand"/g)).toHaveLength(1);
+  });
+
+  it('keeps the row as it was otherwise, and has no hand without a next row', () => {
+    const plain = castWith(gameOf(), false);
+    expect(plain).toContain('<span class="cd-nd-next-word">Next</span>');
+    expect(plain).not.toContain('cd-nd-hand');
+    expect(castWith(gameOf({ pts: 100 }), true)).not.toContain('cd-nd-hand');
+  });
 
   it('holds every name back while Play hides them, so the first comes in from nothing', () => {
     const html = renderToStaticMarkup(
@@ -1145,6 +1212,27 @@ describe('starting again', () => {
       expect(said, failure.name).toEqual(['Couldn’t start again. Try again.']);
     }
   });
+
+  it('starts the reader again as one who has seen none of the first-time hints, only once the server has', async () => {
+    const kept = new Map([[HINTS_KEY, '{"idle":1,"map":1,"warm":1,"coach":1}']]);
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+      removeItem: (k: string) => void kept.delete(k),
+    });
+    await playAgain(() => Promise.reject(new TypeError('Failed to fetch')), vi.fn(), () => {});
+    expect(kept.has(HINTS_KEY)).toBe(true);
+    let seenAtRestart = true;
+    await playAgain(
+      () => Promise.resolve(),
+      () => {
+        seenAtRestart = hintSeen('idle');
+      },
+      () => {},
+    );
+    expect(kept.has(HINTS_KEY)).toBe(false);
+    expect(seenAtRestart).toBe(false);
+  });
 });
 
 describe('the header’s end on /daily', () => {
@@ -1225,6 +1313,45 @@ function stillRules(): string {
 }
 
 describe('Name Drop’s stylesheet', () => {
+  it('sets the first-time hand in the next row at the handoff’s place, out of the way of a press', () => {
+    const hand = decls('.cd-nd-hand');
+    for (const [k, v] of [
+      ['position', 'absolute'],
+      ['z-index', '3'],
+      ['right', '12px'],
+      ['top', '50%'],
+      ['width', '46px'],
+      ['height', '46px'],
+      ['margin-top', '-4px'],
+      ['pointer-events', 'none'],
+    ])
+      expect(hand.get(k), k).toBe(v);
+    expect(decls('.cd-nd-row').get('position')).toBe('relative');
+    // The ring is centred on the fingertip, 15px across and 4px down.
+    const ring = decls('.cd-nd-hand-ring');
+    expect([ring.get('left'), ring.get('top'), ring.get('width'), ring.get('opacity')]).toEqual(['-7px', '-18px', '44px', '0']);
+    expect(-7 + 44 / 2).toBe(15);
+    expect(-18 + 44 / 2).toBe(4);
+    expect(decls('.cd-nd-hand-glyph').get('transform-origin')).toBe('15px 4px');
+    expect(decls('.cd-nd-hand-glyph').get('filter')).toBe('var(--nd-hand-shadow)');
+    expect(decls('.cd-daily').get('--nd-hand-shadow')).toBe('drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35))');
+    expect(decls('.cd-nd-hand-body').get('stroke-width')).toBe('1.3');
+    expect(decls('.cd-nd-hand-crease').get('stroke-width')).toBe('1.1');
+  });
+
+  it('draws the warmth note on the anchor’s wash, wrapping, and gives back its gap when empty', () => {
+    const tip = decls('.cd-nd-tip');
+    expect([tip.get('padding'), tip.get('border-radius'), tip.get('background'), tip.get('box-shadow')]).toEqual([
+      '4px 4px 4px 12px',
+      '12px',
+      'var(--ancBg)',
+      'inset 0 0 0 1px var(--accSoft)',
+    ]);
+    expect(decls('.cd-nd-tip-text').get('font-size')).toBe('13px');
+    expect(decls('.cd-nd-tip-text').get('text-wrap')).toBe('pretty');
+    expect(decls('.cd-nd-tipwrap:empty').get('margin-top')).toBe('-8px');
+  });
+
   it('sets out the column, the card and the rows at the design’s numbers', () => {
     expect(decls('.cd-nd-col').get('max-width')).toBe('600px');
     expect(decls('.cd-nd-col').get('padding')).toBe('18px clamp(14px, 4vw, 20px) 22px');
@@ -1318,7 +1445,10 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-fact::before').get('inset')).toBe(HIT_INSETS.fact);
     expect(decls('.cd-nd-movies::before').get('inset')).toBe(HIT_INSETS.movies);
     expect(decls('.cd-nd-tab::before').get('inset')).toBe(HIT_INSETS.tab);
-    for (const c of ['.cd-nd-tried-chip', '.cd-nd-giveup', '.cd-nd-fact', '.cd-nd-movies', '.cd-nd-tab']) {
+    expect(decls('.cd-nd-tip-x::before').get('inset')).toBe(HIT_INSETS.dismiss);
+    expect(decls('.cd-nd-tip-x').get('width')).toBe('36px');
+    expect(36 - 2 * parseFloat(HIT_INSETS.dismiss)).toBe(44);
+    for (const c of ['.cd-nd-tried-chip', '.cd-nd-giveup', '.cd-nd-fact', '.cd-nd-movies', '.cd-nd-tab', '.cd-nd-tip-x']) {
       expect(decls(c).get('position'), c).toBe('relative');
     }
   });

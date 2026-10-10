@@ -24,6 +24,7 @@ import {
 } from './api';
 import { DailyBar } from './DailyBar';
 import { DailyCast } from './DailyCast';
+import { forgetHints, hintSeen, markHint } from './dailyHints';
 import { DailyMoviesSheet } from './DailyMoviesSheet';
 import { AgainButton, DailyLeaderboard, DailyResult, useBoards } from './DailyResult';
 import { DailyRules } from './DailyRules';
@@ -35,6 +36,7 @@ import {
   CAST_HEADING,
   FACTS_NOTE,
   GAME_NAME,
+  IDLE_HINT_MS,
   NEXT_IN_VIEW_MS,
   NUDGE_NOTE,
   PLAY_HIDE_MS,
@@ -57,10 +59,12 @@ import {
   factItems,
   factNudge,
   factsHeading,
+  firstMiss,
   guessById,
   guessMessage,
   guessedIds,
   hueColour,
+  idleHint,
   midnightText,
   moveSig,
   moviesPress,
@@ -87,6 +91,7 @@ import {
   triedChips,
   viewportFit,
   warmthColour,
+  warmthNote,
   watchMidnight,
   type PageSection,
 } from './daily';
@@ -132,16 +137,23 @@ type Load =
 
 /** Play again, in development: asks the server to start the reader
  *  again (resetDaily, as `reset`), and once it has, starts the page
- *  again from nothing, `restart`, as though it had just been opened. A
- *  reset that is refused changed nothing, and one that never got an
- *  answer changed nothing the page can know of, so either leaves the
- *  page as it was and tells the reader, who can simply press again. */
+ *  again from nothing, `restart`, as though it had just been opened, by
+ *  a reader who has seen none of the first-time hints. A reset that is
+ *  refused changed nothing, and one that never got an answer changed
+ *  nothing the page can know of, so either leaves the page as it was,
+ *  hints and all, and tells the reader, who can simply press again. */
 export function playAgain(
   reset: () => Promise<void>,
   restart: () => void,
   say: (text: string) => void,
 ): Promise<void> {
-  return reset().then(restart, () => say(AGAIN_FAILED));
+  return reset().then(
+    () => {
+      forgetHints();
+      restart();
+    },
+    () => say(AGAIN_FAILED),
+  );
 }
 
 /** Sizes the app to the visual viewport while the Daily is up: its top
@@ -334,6 +346,11 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
   const busyRef = useRef(false);
   const [topAsk, setTopAsk] = useState(0);
   const [focusAsk, setFocusAsk] = useState(0);
+  // The first-time hints (daily.ts): the hand on the next row, and the
+  // warmth note, kept by the game's seq when it came, so the next move,
+  // here or in another tab, takes it away.
+  const [nudge, setNudge] = useState(false);
+  const [warmAt, setWarmAt] = useState<number | null>(null);
 
   // Timers that must not outlive the view.
   const timers = useRef(new Set<number>());
@@ -396,6 +413,10 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
       gameRef.current = next;
       setGame(next);
       if (next.phase === 'play' && newWrongGuess(was, next)) setMsgId(newestGuess(next)?.id ?? null);
+      if (firstMiss(was, next) && !hintSeen('warm')) {
+        markHint('warm');
+        setWarmAt(next.seq);
+      }
       if (rippleSlot(was, next) != null) later(keepNextInView, NEXT_IN_VIEW_MS);
       if (was?.phase === 'play' && next.phase === 'done') {
         // A game that ended in another tab was counted there.
@@ -464,6 +485,54 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // ---- the hand on the next row ----
+
+  // A new game left untouched for IDLE_HINT_MS has a hand tap the next
+  // row, once on a device. Any press or key starts the wait again, or,
+  // once the hand is up, takes it away for the rest of the game; so does
+  // anything done in it, which ends the wait for good. When the wait runs
+  // out on a reader typing a guess or with something open over the game,
+  // it waits again (idleHint).
+  const untouched = game?.phase === 'play' && game.log.length === 0;
+  useEffect(() => {
+    if (!untouched || hintSeen('idle')) return;
+    let timer = 0;
+    let up = false;
+    let over = false;
+    const arm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(ring, IDLE_HINT_MS);
+    };
+    const ring = () => {
+      const now = idleHint(gameRef.current, {
+        typing: (inputRef.current?.value.trim() ?? '') !== '',
+        covered: rulesRef.current || sheetRef.current != null || askingRef.current != null,
+        opening: openingRef.current,
+      });
+      if (now === 'wait') return arm();
+      over = true;
+      if (now === 'never') return;
+      up = true;
+      markHint('idle');
+      setNudge(true);
+    };
+    const poke = () => {
+      if (up) {
+        up = false;
+        setNudge(false);
+      } else if (!over) arm();
+    };
+    arm();
+    window.addEventListener('pointerdown', poke, true);
+    window.addEventListener('keydown', poke, true);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('pointerdown', poke, true);
+      window.removeEventListener('keydown', poke, true);
+      setNudge(false);
+    };
+  }, [untouched]);
 
   // ---- Play ----
 
@@ -724,6 +793,7 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
         delays={delays}
         codes={codes}
         theme={theme}
+        nudge={nudge && untouched && !opening}
         onNext={next}
         onMovies={movies}
       />
@@ -770,6 +840,8 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
           <DailyBar
             game={game}
             message={message}
+            note={warmAt === game.seq ? warmthNote(game.nextCost) : null}
+            onNoteClose={() => setWarmAt(null)}
             codes={codes}
             theme={theme}
             phone={live.phone}

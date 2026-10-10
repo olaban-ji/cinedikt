@@ -3,6 +3,10 @@ import type { DailyPerson } from './api';
 import {
   BAR_WIDTHS,
   CAST_LIST_LABEL,
+  HAND_IN,
+  HAND_RIPPLE,
+  HAND_TAP,
+  NEXT_HINT,
   NEXT_ROW_LABEL,
   PEEK_REST_MS,
   hueColour,
@@ -11,6 +15,7 @@ import {
   type CastRow,
 } from './daily';
 import { DailyFace } from './DailyFace';
+import { animate } from './motion';
 import type { Theme } from './theme';
 
 // The cast list: today's six names in reveal order, sixth-billed first and
@@ -59,6 +64,9 @@ interface CastProps {
   delays: ReadonlyMap<number, number>;
   codes: ReadonlyMap<string, string>;
   theme: Theme;
+  /** The first-time hand on the next row: a new game has sat untouched
+   *  (idleHint), and the row says what tapping it does. */
+  nudge?: boolean;
   onNext: () => void;
   /** A Movies button pressed, to choose or to open: the page works out
    *  which from the game as it stands when it is pressed. A shut one
@@ -70,7 +78,7 @@ interface CastProps {
  *  preview is one at a time: on a mouse, after resting on a shown face for
  *  PEEK_REST_MS, gone on leaving it; on touch, a tap on the face toggles
  *  it, and a tap anywhere else puts it away. */
-export function DailyCast({ rows, playing, delays, codes, theme, onNext, onMovies }: CastProps) {
+export function DailyCast({ rows, playing, delays, codes, theme, nudge = false, onNext, onMovies }: CastProps) {
   const [peek, setPeek] = useState<number | null>(null);
   const rest = useRef(0);
   useEffect(() => () => window.clearTimeout(rest.current), []);
@@ -142,7 +150,7 @@ export function DailyCast({ rows, playing, delays, codes, theme, onNext, onMovie
             <span className="cd-nd-text">
               <span className="cd-nd-ph" style={late} aria-hidden="true">
                 <span className="cd-nd-skel" style={{ width: `${shown ? BAR_WIDTHS[r.slot] : r.bar}%` }} />
-                {next && <span className="cd-nd-next-word">Next</span>}
+                {next && <span className="cd-nd-next-word">{nudge ? NEXT_HINT : 'Next'}</span>}
               </span>
               <span className="cd-nd-who" style={late}>
                 {shown ? (
@@ -173,10 +181,44 @@ export function DailyCast({ rows, playing, delays, codes, theme, onNext, onMovie
               </button>
             )}
             {next && <button type="button" className="cd-nd-row-go" aria-label={NEXT_ROW_LABEL} onClick={onNext} />}
+            {next && nudge && <NextHand />}
           </li>
         );
       })}
     </ol>
+  );
+}
+
+/** The hand tapping the next row: in the row, so it scrolls with it,
+ *  over it, and never in the way of a press, which goes through it to the
+ *  row. Its motion is played from script (HAND_IN, HAND_TAP, HAND_RIPPLE),
+ *  so a render while it taps never starts it over; with stillness asked
+ *  for it is simply there, and the ring under it never shows. */
+function NextHand() {
+  const box = useRef<HTMLSpanElement>(null);
+  const hand = useRef<HTMLSpanElement>(null);
+  const ring = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    const played = [
+      animate(box.current, HAND_IN.keyframes, HAND_IN.options),
+      animate(hand.current, HAND_TAP.keyframes, HAND_TAP.options),
+      animate(ring.current, HAND_RIPPLE.keyframes, HAND_RIPPLE.options),
+    ];
+    return () => played.forEach((a) => a?.cancel());
+  }, []);
+  return (
+    <span ref={box} className="cd-nd-hand" aria-hidden="true">
+      <span ref={ring} className="cd-nd-hand-ring" />
+      <span ref={hand} className="cd-nd-hand-glyph">
+        <svg width="46" height="46" viewBox="0 0 24 24" focusable="false">
+          <path
+            className="cd-nd-hand-body"
+            d="M6 4a2 2 0 0 1 4 0V9a2 2 0 0 1 4 0v1a2 2 0 0 1 4 0v1.5a2 2 0 0 1 4 0V15a7 7 0 0 1-7 7h-2.5c-2.4 0-4-.8-5.4-2.2L2.6 16.3a1.9 1.9 0 0 1 2.7-2.7L6 14.3Z"
+          />
+          <path className="cd-nd-hand-crease" d="M10 9v3.5M14 10v3M18 11.5v2.5" />
+        </svg>
+      </span>
+    </span>
   );
 }
 

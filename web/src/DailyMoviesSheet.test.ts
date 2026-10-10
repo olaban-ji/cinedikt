@@ -1,4 +1,4 @@
-import { createElement } from 'react';
+import { createElement, isValidElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DailyGame, DailyGuess, DailyMovie, DailyPerson, DailySlot } from './api';
@@ -310,6 +310,60 @@ describe('the one-time pointer at the named cards', () => {
         }),
       ),
     ).not.toContain('cd-msheet-coach');
+  });
+});
+
+describe('the first-time note on a map nothing names yet', () => {
+  const unread = { game: gameOf({ facts: {} }), movies: BLANKS };
+
+  it('floats over the map, before the footer, saying why the titles are hidden, with Got it', () => {
+    const html = draw({ ...unread, mapNote: true });
+    expect(html).toContain(
+      '<div class="cd-msheet-tip" role="note"><p class="cd-msheet-tip-title">The titles are hidden for now</p><p class="cd-msheet-tip-body">Buy the decade or a rating range, and the movies inside it show their titles. Today’s movie is one of these cards.</p><button type="button" class="cd-msheet-tip-ok">Got it</button></div><div class="cd-msheet-foot">',
+    );
+    // The legend and the footer say what they always do.
+    expect(html).toContain('<p class="cd-msheet-legend">Buy the decade or a rating range to see titles.');
+    expect(html).toContain('<span class="cd-msheet-hint">The decade and the rating are among the facts under the card.</span>');
+  });
+
+  it('is put away by Got it', () => {
+    let ok = 0;
+    const view = sheetView(stateOf({ ...unread, mapNote: true }));
+    const el = createElement(MoviesSheetView, {
+      view,
+      phone: false,
+      theme: 'dark',
+      height: null,
+      held: 0,
+      loading: false,
+      failed: null,
+      on: { ...none, noteOk: () => ok++ },
+    });
+    const tree = renderToStaticMarkup(el);
+    expect(tree).toContain('cd-msheet-tip-ok');
+    // MoviesSheetView hands Got it to the note as it is.
+    const found: (() => void)[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (!isValidElement(node)) return;
+      const { type, props } = node as ReactElement<{ className?: string; onClick?: () => void; onOk?: () => void; children?: unknown }>;
+      if (typeof type === 'function') return walk((type as (p: unknown) => unknown)(props));
+      if (props.className === 'cd-msheet-tip-ok' && props.onClick) found.push(props.onClick);
+      walk(props.children);
+    };
+    function Probe() {
+      walk(el);
+      return null;
+    }
+    renderToStaticMarkup(createElement(Probe));
+    expect(found).toHaveLength(1);
+    found[0]();
+    expect(ok).toBe(1);
+  });
+
+  it('is not there once a range is bought, nor when it is not due', () => {
+    expect(draw({ mapNote: true })).not.toContain('cd-msheet-tip');
+    expect(draw(unread)).not.toContain('cd-msheet-tip');
   });
 });
 

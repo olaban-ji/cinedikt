@@ -598,6 +598,20 @@ describe('the one-time pointer at the named cards', () => {
     expect(coachAt([at(530, 0)], 540, 20, 42)).toMatchObject({ left: 540 - COACH_W, caret: COACH_W - 18 });
   });
 
+  it('leaves the map note to a map nothing names yet', () => {
+    // Due, before any range: the note, with what names the movies.
+    const before = sheetView(stateOf({ mapNote: true, game: gameOf({ facts: {} }), movies: BLANKS }));
+    expect(before.note?.title).toBe('The titles are hidden for now');
+    // A genre or a length bought names nothing, so it still explains.
+    expect(sheetView(stateOf({ mapNote: true, game: gameOf({ facts: { genre: ['Drama'], length: 2 } }), movies: BLANKS })).note).not.toBeNull();
+    // While the movies are on their way too: the map is still unread.
+    expect(sheetView(stateOf({ mapNote: true, game: gameOf({ facts: {} }), movies: null })).note).not.toBeNull();
+    // Not due, or a range bought: nothing to explain.
+    expect(sheetView(stateOf({ game: gameOf({ facts: {} }), movies: BLANKS })).note).toBeNull();
+    expect(sheetView(stateOf({ mapNote: true })).note).toBeNull();
+    expect(sheetView(stateOf({ mapNote: true, game: gameOf({ facts: { rating: 2 } }) })).note).toBeNull();
+  });
+
   it('is only there when it is due, there is a named card, the movies have come and nothing has been tapped', () => {
     expect(sheetView(stateOf()).coach).toBeNull();
     expect(sheetView(stateOf({ coach: true, pick: 'tt0106977' })).coach).toBeNull();
@@ -655,6 +669,17 @@ describe('the stylesheet', () => {
   it('draws the grabber 38 by 5, 8px from the top', () => {
     expect(rule('.cd-msheet-grab span')).toMatch(/width: 38px;\s*height: 5px;\s*border-radius: 3px;\s*background: var\(--ln3\);/);
     expect(rule('.cd-msheet-grab')).toContain('padding-top: 8px;');
+  });
+
+  it('floats the map note over the map, just above the footer, with a 44px Got it', () => {
+    const tip = rule('.cd-msheet-tip');
+    for (const d of ['position: absolute;', 'z-index: 8;', 'left: 14px;', 'right: 14px;', 'bottom: calc(78px + env(safe-area-inset-bottom));', 'border-radius: 16px;'])
+      expect(tip).toContain(d);
+    expect(tip).toContain('box-shadow: inset 0 0 0 1px var(--accSoft), var(--pop);');
+    // Clear of the footer, which is at least 66px tall.
+    expect(rule('.cd-msheet-foot')).toContain('min-height: 66px;');
+    expect(rule('.cd-msheet-tip-title')).toMatch(/font-family: 'Young Serif', serif;[\s\S]*font-size: 17px;/);
+    expect(rule('.cd-msheet-tip-ok')).toMatch(/height: 44px;[\s\S]*background: var\(--acc\);[\s\S]*color: var\(--accInk\);/);
   });
 
   it('lets a press through the pointer to the cards, and keeps it still when motion is reduced', () => {

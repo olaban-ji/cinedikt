@@ -11,7 +11,8 @@ import {
   type Ref,
 } from 'react';
 import { ApiError, fetchDailyMovies, type DailyGame, type DailyMovie } from './api';
-import { rangesKey, toneStyle } from './daily';
+import { HINT_RISE, rangesKey, toneStyle } from './daily';
+import { hintSeen, markHint } from './dailyHints';
 import {
   MOVIES_LOADING,
   SHEET_CARD_PAD,
@@ -27,6 +28,7 @@ import {
 } from './dailyMovies';
 import { useLiveScreen } from './dailyScreen';
 import { warmSpan, warmTop } from './grid';
+import { animate } from './motion';
 import { PersonFace } from './PersonFace';
 import { PosterImage } from './PosterImage';
 import { posterFallback } from './poster';
@@ -151,14 +153,42 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
     [movies, width, phone],
   );
   // The pointer at the named cards is shown once on a device, the first
-  // time a map has any, and is gone from the first tap.
-  const [coachDue] = useState(() => !coachSeen());
+  // time a map has any, and is gone from the first tap. The note on a map
+  // nothing names yet is shown until Got it, or until the sheet closes
+  // with it up, and either way not again.
+  const [coachDue] = useState(() => !hintSeen('coach'));
   const [tapped, setTapped] = useState(false);
-  const view = sheetView({ game, person, movies, layout, pick, reach, theme, coach: coachDue && !tapped });
+  const [noteDue] = useState(() => !hintSeen('map'));
+  const [noteOk, setNoteOk] = useState(false);
+  const view = sheetView({
+    game,
+    person,
+    movies,
+    layout,
+    pick,
+    reach,
+    theme,
+    coach: coachDue && !tapped,
+    mapNote: noteDue && !noteOk,
+  });
   const coached = view.coach != null;
   useEffect(() => {
-    if (coached) markCoachSeen();
+    if (coached) markHint('coach');
   }, [coached]);
+  const noted = useRef(false);
+  noted.current = view.note != null;
+  useEffect(
+    () => () => {
+      if (noted.current) markHint('map');
+    },
+    [],
+  );
+  const noteDone = () => {
+    markHint('map');
+    setNoteOk(true);
+    // Got it goes with the note: the focus goes back to the sheet.
+    ref.current?.focus();
+  };
 
   // It opens scrolled to the first readable movie, once, as soon as there
   // is a map to scroll. Instant whatever the motion setting: nothing has
@@ -221,6 +251,7 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
         },
         guess,
         retry: () => setAttempt((n) => n + 1),
+        noteOk: noteDone,
         key: onKeyDown,
         scroll: onScroll,
         dragDown,
@@ -229,27 +260,6 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
       }}
     />
   );
-}
-
-/** Where the device keeps that the pointer at the named cards has been
- *  shown. */
-const COACH_KEY = 'cinedikt.daily.coach';
-
-function coachSeen(): boolean {
-  try {
-    return localStorage.getItem(COACH_KEY) != null;
-  } catch {
-    // With storage blocked it would be shown on every map, so it is not.
-    return true;
-  }
-}
-
-function markCoachSeen(): void {
-  try {
-    localStorage.setItem(COACH_KEY, '1');
-  } catch {
-    // Nothing to keep it in; coachSeen says so already.
-  }
 }
 
 /** The band of the map around where the scroller stands, in the warm
@@ -263,6 +273,8 @@ export interface SheetHandlers {
   card(id: string): void;
   guess(): void;
   retry(): void;
+  /** Got it, on the first-time note. */
+  noteOk?(): void;
   key?(e: KeyboardEvent<HTMLDivElement>): void;
   scroll?(): void;
   dragDown?(e: PointerEvent): void;
@@ -440,6 +452,8 @@ export function MoviesSheetView({
           )}
         </div>
 
+        {view.note && <SheetNote note={view.note} onOk={on.noteOk} />}
+
         <div className="cd-msheet-foot">
           <div className="cd-msheet-say" aria-live="polite">
             {foot.kind === 'pick' ? (
@@ -459,6 +473,25 @@ export function MoviesSheetView({
         </div>
       </div>
     </>
+  );
+}
+
+/** The first-time note on a map nothing names yet, floating over the map
+ *  just above the footer, rising in as it comes (HINT_RISE). */
+function SheetNote({ note, onOk }: { note: NonNullable<SheetView['note']>; onOk?: () => void }) {
+  const el = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const a = animate(el.current, HINT_RISE.keyframes, HINT_RISE.options);
+    return () => a?.cancel();
+  }, []);
+  return (
+    <div ref={el} className="cd-msheet-tip" role="note">
+      <p className="cd-msheet-tip-title">{note.title}</p>
+      <p className="cd-msheet-tip-body">{note.body}</p>
+      <button type="button" className="cd-msheet-tip-ok" onClick={onOk}>
+        {note.ok}
+      </button>
+    </div>
   );
 }
 

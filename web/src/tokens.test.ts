@@ -186,7 +186,8 @@ describe('the theme tokens', () => {
     // own rules set (.cd-face-chip and the rest). Name Drop's hidden card
     // is lit in white whatever the theme, as a poster is, and its sheen,
     // edge, "?" and stand-in title's shadow are set on .cd-daily, with the
-    // bands of light that cross the title screen's card and Play.
+    // bands of light that cross the title screen's card and Play, and the
+    // first-time hand, white with a dark edge whatever the theme.
     const local = new Set([
       '--wash',
       '--face',
@@ -199,6 +200,9 @@ describe('the theme tokens', () => {
       '--nd-glow',
       '--nd-card-shine',
       '--nd-play-shine',
+      '--nd-hand',
+      '--nd-hand-ink',
+      '--nd-hand-shadow',
     ]);
     const used = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]));
     const missing = [...used].filter((v) => !defined.has(v) && !inline.has(v) && !local.has(v));

@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { searchMovies, type DailyGame, type SearchHit } from './api';
 import {
+  DISMISS,
   GUESS_FIELD,
+  HINT_RISE,
   LIST_CLOSE_MS,
   MESSAGE_FACES,
   SEARCH_MIN_CHARS,
@@ -18,6 +20,7 @@ import {
   type GuessMessage,
 } from './daily';
 import { DailyFace } from './DailyFace';
+import { animate } from './motion';
 import { PosterImage } from './PosterImage';
 import { posterFallback } from './poster';
 import type { Theme } from './theme';
@@ -34,6 +37,10 @@ interface BarProps {
   /** What the wrong guess on show told: the newest, or the one whose chip
    *  was pressed. Null with none on show. */
   message: GuessMessage | null;
+  /** The first-time warmth note, over the message, after the game's
+   *  first wrong guess (warmthNote); null with none to show. */
+  note?: string | null;
+  onNoteClose?: () => void;
   codes: ReadonlyMap<string, string>;
   theme: Theme;
   /** Below 640px, now, where the list holds four results rather than
@@ -53,6 +60,8 @@ interface BarProps {
 export function DailyBar({
   game,
   message,
+  note = null,
+  onNoteClose,
   codes,
   theme,
   phone,
@@ -176,6 +185,11 @@ export function DailyBar({
             onPick={(hit) => void guess(hit)}
           />
         )}
+        {/* Always there, as the message's is, so the note is heard when
+            it comes; it gives way to the results as the message does. */}
+        <div className="cd-nd-tipwrap" role="status">
+          {note && !typing && <HintStrip text={note} onClose={onNoteClose} />}
+        </div>
         {/* Always there, so what it comes to say is heard; empty, it takes
             no room (grid.css). */}
         <div className="cd-nd-msgwrap" aria-live="polite">
@@ -216,6 +230,36 @@ export function DailyBar({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** A first-time note over the message, with its close button, rising in
+ *  as it comes (HINT_RISE). */
+function HintStrip({ text, onClose }: { text: string; onClose?: () => void }) {
+  const el = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const a = animate(el.current, HINT_RISE.keyframes, HINT_RISE.options);
+    return () => a?.cancel();
+  }, []);
+  return (
+    <div ref={el} className="cd-nd-tip">
+      <span className="cd-nd-tip-text">{text}</span>
+      <button type="button" className="cd-nd-tip-x" aria-label={DISMISS} onClick={onClose}>
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path d="M6 6l12 12M18 6L6 18" />
+        </svg>
+      </button>
     </div>
   );
 }

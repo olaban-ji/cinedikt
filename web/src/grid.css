@@ -6089,6 +6089,11 @@ button {
   --nd-glow: 0 1px 8px rgba(0, 0, 0, 0.5);
   --nd-card-shine: rgba(255, 255, 255, 0.3);
   --nd-play-shine: rgba(255, 255, 255, 0.4);
+  /* The first-time hand on the next row is white with a dark outline on
+     either ground, as a cursor is. */
+  --nd-hand: #ffffff;
+  --nd-hand-ink: oklch(0.2 0.01 60);
+  --nd-hand-shadow: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
 }
 
 /* While the Daily is up the app is sized to the visual viewport, which
@@ -7036,6 +7041,62 @@ button.cd-nd-tried-chip::before {
   transition: background-color 0.15s ease;
 }
 
+/* The first-time hand (daily.ts's idleHint): in the next row, by its
+   right edge, its fingertip at the row's middle, over the row's button
+   but never taking a press from it. The ring spreads from the fingertip
+   (15px, 4px in) as it taps; at rest it is not there. Its motion is
+   played from script, and with stillness asked for the hand just sits. */
+.cd-nd-hand {
+  position: absolute;
+  z-index: 3;
+  right: 12px;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin-top: -4px;
+  pointer-events: none;
+}
+
+.cd-nd-hand-ring {
+  position: absolute;
+  left: -7px;
+  top: -18px;
+  width: 44px;
+  height: 44px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid var(--acc);
+  background: var(--accSoft);
+  opacity: 0;
+}
+
+.cd-nd-hand-glyph {
+  display: block;
+  width: 46px;
+  height: 46px;
+  transform-origin: 15px 4px;
+  filter: var(--nd-hand-shadow);
+}
+
+.cd-nd-hand-glyph svg {
+  display: block;
+  overflow: visible;
+}
+
+.cd-nd-hand-body {
+  fill: var(--nd-hand);
+  stroke: var(--nd-hand-ink);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+
+.cd-nd-hand-crease {
+  fill: none;
+  stroke: var(--nd-hand-ink);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+
 /* A bigger photo, beside the face: rows 1–3 hang it down, 4–6 stand it
    up, so it stays on the page. For looking only: it never takes the
    pointer. */
@@ -7211,9 +7272,58 @@ button.cd-nd-tried-chip::before {
 }
 
 /* The message box's live region is always there, so what it comes to say
-   is heard; empty, it hands back the gap it would take. */
-.cd-nd-msgwrap:empty {
+   is heard; empty, it hands back the gap it would take. The warmth note's
+   is the same. */
+.cd-nd-msgwrap:empty,
+.cd-nd-tipwrap:empty {
   margin-top: -8px;
+}
+
+/* The first-time warmth note, over the message: the anchor's wash with an
+   accent edge, its words wrapping as they need to, and a close button. */
+.cd-nd-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 12px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--ancBg);
+  box-shadow: inset 0 0 0 1px var(--accSoft);
+}
+
+.cd-nd-tip-text {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--t);
+  text-wrap: pretty;
+}
+
+.cd-nd-tip-x {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--t2);
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.cd-nd-tip-x::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
 }
 
 /* One row that scrolls sideways: nothing in it shrinks or wraps. */
@@ -7465,6 +7575,11 @@ button.cd-nd-tried-chip::before {
 
   .cd-nd-row-go:hover {
     background: var(--accSoft);
+  }
+
+  .cd-nd-tip-x:hover {
+    color: var(--t);
+    background: var(--ln);
   }
 
   .cd-nd-hit:not(.cd-nd-hit-held):hover {
@@ -8766,6 +8881,55 @@ button.cd-nd-tried-chip::before {
   cursor: default;
 }
 
+/* The first-time note on a map nothing names yet: a card over the map,
+   just above the footer (66px at least), with Got it. */
+.cd-msheet-tip {
+  position: absolute;
+  z-index: 8;
+  left: 14px;
+  right: 14px;
+  bottom: calc(78px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 14px 12px;
+  box-sizing: border-box;
+  border-radius: 16px;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--accSoft), var(--pop);
+}
+
+.cd-msheet-tip-title {
+  margin: 0;
+  font-family: 'Young Serif', serif;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--t);
+}
+
+.cd-msheet-tip-body {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--t2);
+  text-wrap: pretty;
+}
+
+.cd-msheet-tip-ok {
+  height: 44px;
+  margin-top: 2px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--acc);
+  color: var(--accInk);
+  font-size: 14px;
+  font-weight: 700;
+  transition: filter 0.15s ease;
+}
+
 /* 44px to a finger, as the handoff asks of every control: the close
    button is 40 to the eye and Try again 36. At every size, as the page's
    own small controls are. */
@@ -8786,13 +8950,15 @@ button.cd-nd-tried-chip::before {
     color: var(--t);
   }
 
-  .cd-msheet-guess:not(:disabled):hover {
+  .cd-msheet-guess:not(:disabled):hover,
+  .cd-msheet-tip-ok:hover {
     filter: brightness(1.06);
   }
 }
 
 .cd-msheet-close:focus-visible,
 .cd-msheet-guess:focus-visible,
+.cd-msheet-tip-ok:focus-visible,
 .cd-msheet-retry:focus-visible,
 .cd-msheet-card:focus-visible {
   outline: 2px solid var(--acc);
@@ -8804,7 +8970,8 @@ button.cd-nd-tried-chip::before {
 @media (forced-colors: active) {
   .cd-msheet,
   .cd-msheet-card,
-  .cd-msheet-coach {
+  .cd-msheet-coach,
+  .cd-msheet-tip {
     border: 1px solid ButtonText;
   }
 

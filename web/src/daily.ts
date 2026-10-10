@@ -378,6 +378,59 @@ export function factNudge(game: Pick<DailyGame, 'phase' | 'slots' | 'facts'>): b
   );
 }
 
+// ---- the first-time hints ----
+//
+// Three hints for a first game, each shown once on a device at the moment
+// it is of use, rather than a tutorial up front: a hand tapping the next
+// row when a new game sits untouched, a note on a Movies map opened before
+// anything names its movies, and a line on cold, warm and hot after the
+// first wrong guess. Which have been shown is the device's (dailyHints.ts),
+// with the map's pointer at its named cards (SHEET_COACH) beside them.
+
+/** How long a new game sits untouched before the hand shows. Any press or
+ *  key on the page starts the wait again. */
+export const IDLE_HINT_MS = 10_000;
+
+/** The next row's word while the hand taps it, in place of "Next". */
+export const NEXT_HINT = `Tap for the next name · −${NEXT_COST}`;
+
+/** What the hand's wait comes to when it runs out: show it; wait again,
+ *  for a reader who is typing a guess, has something open over the game
+ *  (the rules, a Movies map or the question before one) or is still
+ *  watching Play hide the names; or never, this game, once anything has
+ *  been done in it, or with no next name to show. */
+export function idleHint(
+  game: Pick<DailyGame, 'phase' | 'pts' | 'slots' | 'log'> | null,
+  now: { typing: boolean; covered: boolean; opening: boolean },
+): 'show' | 'wait' | 'never' {
+  if (!game || game.phase !== 'play' || game.log.length > 0 || nextSlot(game) == null) return 'never';
+  return now.typing || now.covered || now.opening ? 'wait' : 'show';
+}
+
+/** The note over a Movies map that nothing names yet: why the titles are
+ *  hidden, and what shows them. Only the decade and a rating range do
+ *  (rangeBought): the handoff's copy also named the five years, which are
+ *  no longer sold, and the genre, which never names a card. */
+export const MAP_NOTE = {
+  title: 'The titles are hidden for now',
+  body: 'Buy the decade or a rating range, and the movies inside it show their titles. Today’s movie is one of these cards.',
+  ok: 'Got it',
+} as const;
+
+/** Whether the game just handed back has had its first wrong guess,
+ *  and is still on: the moment for the warmth note. */
+export function firstMiss(was: Pick<DailyGame, 'log'> | null, now: Pick<DailyGame, 'phase' | 'log'>): boolean {
+  return now.phase === 'play' && newWrongGuess(was, now) && guessesOf(now).length === 1;
+}
+
+/** The warmth note, at what the next miss costs now. */
+export function warmthNote(nextCost: number): string {
+  return `Cold, warm or hot says how close that guess was. The next miss costs ${fmtN(nextCost)}.`;
+}
+
+/** The warmth note's close button, for a screen reader. */
+export const DISMISS = 'Dismiss';
+
 // ---- the cast ----
 
 /** The slots the reader saw, which is what the result counts and the
@@ -1908,6 +1961,48 @@ export function nudgePulse(ring: string): Motion {
   };
 }
 
+/** The hand on the next row: it comes in from 18px right and 22px down
+ *  over 600ms, then, 650ms in, taps every 1.7s until it goes, pressing
+ *  down to 0.84 about its fingertip while a ring of the accent spreads
+ *  from under it and fades. A still hand, with stillness asked for. */
+export const HAND_IN: Motion = {
+  keyframes: [
+    { opacity: 0, translate: '18px 22px' },
+    { opacity: 1, translate: '0 0' },
+  ],
+  options: { duration: 600, easing: RISE_EASE },
+};
+const TAPPING: KeyframeAnimationOptions = { duration: 1700, delay: 650, iterations: Infinity, easing: 'ease-out' };
+export const HAND_TAP: Motion = {
+  keyframes: [
+    { scale: 1, offset: 0 },
+    { scale: 1, offset: 0.05 },
+    { scale: 0.84, offset: 0.17 },
+    { scale: 1, offset: 0.35 },
+    { scale: 1, offset: 1 },
+  ],
+  options: TAPPING,
+};
+export const HAND_RIPPLE: Motion = {
+  keyframes: [
+    { scale: 0.3, opacity: 0, offset: 0 },
+    { scale: 0.3, opacity: 0, offset: 0.14 },
+    { scale: 0.3, opacity: 0.95, offset: 0.17 },
+    { scale: 1.6, opacity: 0, offset: 0.62 },
+    { scale: 1.6, opacity: 0, offset: 1 },
+  ],
+  options: TAPPING,
+};
+
+/** The map note and the warmth note coming in: up 8px and in, 320ms. */
+export const HINT_RISE: Motion = {
+  keyframes: [
+    { opacity: 0, translate: '0 8px' },
+    { opacity: 1, translate: '0 0' },
+  ],
+  options: { duration: 320, easing: RISE_EASE },
+};
+
 // ---- touch ----
 
 /** Every control's hit area is at least 44px, even where it looks smaller,
@@ -1925,6 +2020,8 @@ export const HIT_INSETS = {
   movies: '-5px -2px',
   /** A leaderboard tab, 30px. */
   tab: '-7px 0',
+  /** The warmth note's close button, 36px. */
+  dismiss: '-4px',
 } as const;
 
 // ---- the screen ----
