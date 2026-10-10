@@ -99,36 +99,42 @@ export function DailyTitle({
         <p className="cd-nd-title-fine" data-rise="">
           {TITLE_SCREEN.fine}
         </p>
-        <button
-          type="button"
-          className="cd-nd-play"
-          onClick={onPlay}
-          disabled={busy}
-          aria-busy={busy || undefined}
-          data-rise=""
-        >
-          <span className="cd-nd-play-shine" aria-hidden="true" data-anim="shine" />
-          {TITLE_SCREEN.play}
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
+        {/* Play and the players line share a footer that keeps to the
+            foot of the scroller, so on a phone where the screen runs
+            taller than the window Play is never under the browser's
+            bottom bar; where it all fits, it sits where it would. The two
+            rise as one. */}
+        <div className="cd-nd-title-go" data-rise="">
+          <button
+            type="button"
+            className="cd-nd-play"
+            onClick={onPlay}
+            disabled={busy}
+            aria-busy={busy || undefined}
           >
-            <path d="M5 12h14M13 6l6 6-6 6" />
-          </svg>
-        </button>
-        {played && (
-          <p className="cd-nd-title-played" data-rise="">
-            <span className="cd-nd-title-count">{played.count}</span>
-            {played.rest}
-          </p>
-        )}
+            <span className="cd-nd-play-shine" aria-hidden="true" data-anim="shine" />
+            {TITLE_SCREEN.play}
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+          </button>
+          {played && (
+            <p className="cd-nd-title-played">
+              <span className="cd-nd-title-count">{played.count}</span>
+              {played.rest}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -1800,7 +1800,8 @@ function swing(keyframes: Keyframe[], ms: number): Motion {
 
 /** The title screen's parts rise in one after another, in the order
  *  they are drawn: the picture, the pill row, the heading and lead, the
- *  steps, the fine print, Play, then the players line. Each fades in from
+ *  steps, the fine print, then Play with the players line under it, the
+ *  footer the two share. Each fades in from
  *  RISE_PX down over RISE_MS on the settle curve (motion.ts's EASE.settle),
  *  the first 80ms in and the rest 90ms apart, each held out of sight
  *  (`backwards`) until its turn. */

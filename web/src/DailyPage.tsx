@@ -97,7 +97,6 @@ import {
 } from './daily';
 import { useLiveScreen } from './dailyScreen';
 import { animate, stillNow } from './motion';
-import { listenWheelSideways } from './PeopleChips';
 import { PosterImage } from './PosterImage';
 import { posterFallback } from './poster';
 import { useScreen } from './screen';
@@ -1091,14 +1090,9 @@ function DailyAbout({ end }: { end: NonNullable<DailyGame['end']> }) {
 }
 
 /** The panel the facts sit in: a head row, the heading and a note beside
- *  it, over one row of chips that scrolls sideways. The note is a polite
- *  live region, so the nudge is heard as well as seen.
- *
- *  A mouse wheel over the row moves the row (listenWheelSideways), heard
- *  on the row itself rather than through onWheel: React hears every wheel
- *  passively, at its root, so the page here would scroll first and carry
- *  the row out from under the pointer, and the chips past the edge could
- *  only be reached with Shift or Tab. */
+ *  it, over the chips, wrapping onto as many lines as they need so every
+ *  one is in sight. The note is a polite live region, so the nudge is
+ *  heard as well as seen. */
 function FactsPanel({
   id,
   heading,
@@ -1114,8 +1108,6 @@ function FactsPanel({
   panelRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }) {
-  const list = useRef<HTMLDivElement>(null);
-  useEffect(() => listenWheelSideways(list.current), []);
   return (
     <section ref={panelRef} className={`cd-nd-facts${nudge ? ' cd-nd-facts-nudge' : ''}`} aria-labelledby={id}>
       <div className="cd-nd-facts-top">
@@ -1128,7 +1120,7 @@ function FactsPanel({
           </p>
         )}
       </div>
-      <div ref={list} className="cd-nd-fact-list">
+      <div className="cd-nd-fact-list">
         {children}
       </div>
     </section>

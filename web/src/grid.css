@@ -6208,7 +6208,8 @@ button {
   align-items: center;
   justify-content: center;
   gap: 20px;
-  padding: 32px 20px 40px;
+  /* The footer under Play carries the bottom space. */
+  padding: 32px 20px 0;
   text-align: center;
 }
 
@@ -6466,6 +6467,29 @@ button {
   background: linear-gradient(100deg, transparent, var(--nd-play-shine), transparent);
   translate: -120% 0;
   pointer-events: none;
+}
+
+/* Play and the players line, in a footer that sticks to the foot of the
+   title's scroller: on a phone the screen runs taller than the window,
+   and Play would sit half under Safari's toolbar with the players line
+   off the screen. Where it all fits it rests where it would. It runs out
+   to the column's edges, and fades in from the page's ground over its
+   top 16px, which the margin gives back so the gap over Play stays 20px
+   at rest. The ground behind it also keeps Safari from tinting its
+   toolbar from Play's purple. */
+.cd-nd-title-go {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  align-self: stretch;
+  margin: -16px -20px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px calc(24px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  background: linear-gradient(to bottom, transparent, var(--g) 16px);
 }
 
 .cd-nd-title-played {
@@ -6766,27 +6790,18 @@ button.cd-nd-tried-chip::before {
   color: var(--accText);
 }
 
-/* One row that scrolls sideways, its scrollbar hidden, out to the panel's
-   edges. Its 5px above and below, given back by the margin, keep each
-   fact's hit area and focus ring inside the scroller, which would clip
-   them. Nothing in it shrinks or wraps. */
+/* The facts wrap onto as many lines as they need, so all five are
+   always in sight and none is cut at the panel's edge: two lines on a
+   390px phone, one on a desktop. 10px between lines keeps the facts'
+   44px hit areas, 5px past each edge, from overlapping. */
 .cd-nd-fact-list {
   display: flex;
-  flex-wrap: nowrap;
-  gap: 6px;
-  margin: -5px -12px;
-  padding: 5px 12px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.cd-nd-fact-list::-webkit-scrollbar {
-  display: none;
+  flex-wrap: wrap;
+  gap: 10px 6px;
 }
 
 .cd-nd-fact-list > * {
-  flex-shrink: 0;
-  white-space: nowrap;
+  max-width: 100%;
 }
 
 /* For sale: on the page's ground, so it reads as a button on the panel. */
@@ -6804,6 +6819,7 @@ button.cd-nd-tried-chip::before {
   color: var(--t);
   font-size: 13px;
   font-weight: 700;
+  white-space: nowrap;
   transition:
     box-shadow 0.15s ease,
     opacity 0.15s ease;
@@ -6821,7 +6837,8 @@ button.cd-nd-tried-chip::before {
 
 .cd-nd-fact-got {
   display: flex;
-  flex-wrap: nowrap;
+  /* A long list of directors wraps inside its chip. */
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 0 6px;
   min-height: 34px;

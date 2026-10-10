@@ -274,17 +274,17 @@ describe('the title screen', () => {
       'You start with 1,000 points. Extra names, facts and wrong guesses cost points. There’s no clock.',
     );
     expect(html).toMatch(
-      /<button type="button" class="cd-nd-play" data-rise=""><span class="cd-nd-play-shine" aria-hidden="true" data-anim="shine"><\/span>Play<svg [^>]*aria-hidden="true">/,
+      /<div class="cd-nd-title-go" data-rise=""><button type="button" class="cd-nd-play"><span class="cd-nd-play-shine" aria-hidden="true" data-anim="shine"><\/span>Play<svg [^>]*aria-hidden="true">/,
     );
     expect(html).toContain('<span class="cd-nd-title-count">61,240</span> people have played today.');
     // The order the design gives them.
-    const order = ['cd-nd-title-pic', 'cd-nd-title-meta', 'cd-nd-title-words', 'cd-nd-steps', 'cd-nd-title-fine', 'cd-nd-play', 'cd-nd-title-played'];
+    const order = ['cd-nd-title-pic', 'cd-nd-title-meta', 'cd-nd-title-words', 'cd-nd-steps', 'cd-nd-title-fine', 'cd-nd-title-go', 'cd-nd-play', 'cd-nd-title-played'];
     const found = order.map((c) => at(html, c));
     expect(found.every((n) => n >= 0)).toBe(true);
     expect([...found].sort((a, b) => a - b)).toEqual(found);
   });
 
-  it('rises its seven parts in the order they are drawn, the picture first and the players line last', () => {
+  it('rises its six parts in the order they are drawn, the picture first and Play with the players line last, as one', () => {
     const html = drawn(null);
     const rising = [...html.matchAll(/class="([\w-]+)[^"]*"[^>]*data-rise=""/g)].map((m) => m[1]);
     expect(rising).toEqual([
@@ -293,9 +293,10 @@ describe('the title screen', () => {
       'cd-nd-title-words',
       'cd-nd-steps',
       'cd-nd-title-fine',
-      'cd-nd-play',
-      'cd-nd-title-played',
+      'cd-nd-title-go',
     ]);
+    // Play and the players line are inside the footer, rising with it.
+    expect(html).toMatch(/<div class="cd-nd-title-go" data-rise=""><button[^>]*class="cd-nd-play"[\s\S]*<p class="cd-nd-title-played">[\s\S]*<\/p><\/div>/);
     expect(RISE_STEP_MS).toBe(90);
   });
 
@@ -435,7 +436,7 @@ describe('the game page while the game is on', () => {
     expect(html.match(/data-peek="1"/g)).toHaveLength(4);
   });
 
-  it('heads the facts panel “Buy a fact”, with a note beside it, over one row of facts', () => {
+  it('heads the facts panel “Buy a fact”, with a note beside it, over the facts, wrapping as they need', () => {
     const html = drawn(PLAYING);
     expect(html).toContain(
       '<section class="cd-nd-facts" aria-labelledby="cd-nd-facts-head"><div class="cd-nd-facts-top"><h2 id="cd-nd-facts-head" class="cd-nd-facts-head">Buy a fact</h2><p class="cd-nd-facts-note" aria-live="polite">Decade and rating mark the map</p></div><div class="cd-nd-fact-list">',
@@ -1352,6 +1353,25 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-tipwrap:empty').get('margin-top')).toBe('-8px');
   });
 
+  it('keeps Play and the players line in a footer stuck to the foot of the title screen, clear of a phone’s toolbar', () => {
+    const go = decls('.cd-nd-title-go');
+    for (const [k, v] of [
+      ['position', 'sticky'],
+      ['bottom', '0'],
+      ['z-index', '2'],
+      ['align-self', 'stretch'],
+      ['margin', '-16px -20px 0'],
+      ['gap', '12px'],
+      ['padding', '16px 20px calc(24px + env(safe-area-inset-bottom))'],
+      ['background', 'linear-gradient(to bottom, transparent, var(--g) 16px)'],
+    ])
+      expect(go.get(k), k).toBe(v);
+    // The fade the margin gives back leaves 20px over Play at rest: the
+    // column's gap, less the margin, plus the footer's own padding.
+    const first = (v: string | undefined) => parseFloat(v!.split(' ')[0]);
+    expect(first(decls('.cd-nd-title-col').get('gap')) + first(go.get('margin')) + first(go.get('padding'))).toBe(20);
+  });
+
   it('sets out the column, the card and the rows at the design’s numbers', () => {
     expect(decls('.cd-nd-col').get('max-width')).toBe('600px');
     expect(decls('.cd-nd-col').get('padding')).toBe('18px clamp(14px, 4vw, 20px) 22px');
@@ -1365,7 +1385,8 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-face').get('width')).toBe('44px');
     expect(decls('.cd-nd-face').get('box-shadow')).toBe('0 0 0 2px var(--s), 0 0 0 3.5px var(--tone)');
     expect(decls('.cd-nd-face').get('background')).toBe('color-mix(in oklch, var(--tone) 24%, var(--s))');
-    expect(decls('.cd-nd-title-col').get('padding')).toBe('32px 20px 40px');
+    // The footer under Play carries the bottom space.
+    expect(decls('.cd-nd-title-col').get('padding')).toBe('32px 20px 0');
     expect(decls('.cd-nd-play').get('height')).toBe('56px');
   });
 
@@ -1413,17 +1434,21 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-facts-note').get('font-size')).toBe('12.5px');
     expect(decls('.cd-nd-facts-note').get('color')).toBe('var(--t3)');
     expect(decls('.cd-nd-facts-nudge .cd-nd-facts-note').get('color')).toBe('var(--accText)');
+    // Every fact in sight, wrapping onto lines rather than running off
+    // the panel's edges, and nothing left to scroll.
     const row = decls('.cd-nd-fact-list');
-    expect(row.get('flex-wrap')).toBe('nowrap');
-    expect(row.get('overflow-x')).toBe('auto');
-    expect(row.get('scrollbar-width')).toBe('none');
-    // 5px above and below, given back by the margin, and out to the
-    // panel's edges: the facts' -5px hit areas fit inside.
-    expect(row.get('padding')).toBe('5px 12px');
-    expect(row.get('margin')).toBe('-5px -12px');
+    expect(row.get('flex-wrap')).toBe('wrap');
+    for (const gone of ['overflow-x', 'scrollbar-width', 'margin', 'padding']) expect(row.has(gone), gone).toBe(false);
+    expect(css).not.toContain('.cd-nd-fact-list::-webkit-scrollbar');
+    // The lines far enough apart that the facts' hit areas, 5px past
+    // each edge, never overlap.
+    const [between, beside] = row.get('gap')!.split(' ').map(parseFloat);
     expect(parseFloat(HIT_INSETS.fact)).toBe(-5);
-    expect(decls('.cd-nd-fact-list > *').get('flex-shrink')).toBe('0');
-    expect(decls('.cd-nd-fact-list > *').get('white-space')).toBe('nowrap');
+    expect(between).toBeGreaterThanOrEqual(-2 * parseFloat(HIT_INSETS.fact));
+    expect(beside).toBe(6);
+    expect(decls('.cd-nd-fact-list > *').get('max-width')).toBe('100%');
+    expect(decls('.cd-nd-fact').get('white-space')).toBe('nowrap');
+    expect(decls('.cd-nd-fact-got').get('flex-wrap')).toBe('wrap');
     // For sale on the page's ground.
     expect(decls('.cd-nd-fact').get('background')).toBe('var(--g)');
   });
