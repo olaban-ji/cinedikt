@@ -812,36 +812,75 @@ export function paidFor(log: readonly DailyEntry[]): PaidChip[] {
   return out;
 }
 
-/** What a solve used, for the share text: "3 names, the decade and one
- *  wrong guess". */
-export function usedText(game: Pick<DailyGame, 'log'>): string {
-  const n = seenSlots(game).size;
-  const parts = [n === 1 ? 'one name' : `${n} names`];
+// ---- the share card ----
+//
+// What Share result puts on the clipboard, to paste into a chat: a card
+// to read at a glance, as a puzzle game's share is, not a receipt. A
+// headline that says how it went, the six names as squares, the score
+// with what the reader leaned on as emoji, and the way in, with nothing
+// that names the movie.
+
+/** Each fact bought, as the share card shows it. */
+export const FACT_EMOJI: Record<DailyFactKind, string> = {
+  length: '⏱️',
+  rating: '⭐',
+  genre: '🎭',
+  decade: '📅',
+  director: '🎥',
+};
+
+/** The six squares, 🟪 for each name the reader saw and ⬜ for the rest,
+ *  in reveal order. */
+export function shareMarks(game: Pick<DailyGame, 'log'>): string {
+  const seen = seenSlots(game);
+  let out = '';
+  for (let k = 0; k < CAST_SIZE; k++) out += seen.has(k) ? '🟪' : '⬜';
+  return out;
+}
+
+/** What the reader leaned on: an emoji for each fact bought, in the row's
+ *  order, then ❌ for each wrong guess; nothing for a game played on
+ *  names alone. */
+export function shareHelp(game: Pick<DailyGame, 'log'>): string {
   const bought = new Set<DailyFactKind>();
   let wrong = 0;
   for (const e of game.log) {
     if (e.type === 'fact') bought.add(e.kind);
     else if (e.type === 'guess') wrong += 1;
   }
-  for (const kind of FACT_ORDER) if (bought.has(kind)) parts.push(FACTS[kind].used);
-  if (wrong) parts.push(wrong === 1 ? 'one wrong guess' : `${wrong} wrong guesses`);
-  return andList(parts);
+  const facts = FACT_ORDER.filter((kind) => bought.has(kind))
+    .map((kind) => FACT_EMOJI[kind])
+    .join('');
+  return [facts, '❌'.repeat(wrong)].filter(Boolean).join(' ');
 }
 
-/** The six squares, ■ for each name the reader saw, in reveal order. */
-export function shareMarks(game: Pick<DailyGame, 'log'>): string {
-  const seen = seenSlots(game);
-  let out = '';
-  for (let k = 0; k < CAST_SIZE; k++) out += seen.has(k) ? '■' : '□';
-  return out;
+/** How it went, in a few words: the names it took, "from one name" for
+ *  the best there is, or how it was lost. */
+export function shareHeadline(game: Pick<DailyGame, 'won' | 'gaveUp' | 'log'>): string {
+  if (game.won) {
+    const n = seenSlots(game).size;
+    return n === 1 ? 'Got it from one name 🤯' : `Got it in ${n} names`;
+  }
+  return game.gaveUp ? 'Stumped 🏳️' : 'Ran out of points 💸';
 }
 
-/** What Share result puts on the clipboard: the puzzle and the game, the
- *  score and what it took (or how it was missed), the squares, and where
- *  to play, so a pasted result is also the way in. */
+/** The share card, four lines at most:
+ *
+ *    Name Drop #2 🎬 Got it in 5 names
+ *    🟪🟪🟪🟪🟪⬜
+ *    350 points · ⭐🎭📅 ❌
+ *    cinedikt.com/daily
+ *
+ *  A loss has no score, and its third line only when anything was leaned
+ *  on. The address goes without its scheme, which every chat app links
+ *  all the same, so it reads as a name rather than a URL. */
 export function shareText(no: number, game: Pick<DailyGame, 'won' | 'gaveUp' | 'pts' | 'log'>, origin: string): string {
-  const line = game.won ? `${fmtN(game.pts)} points · ${usedText(game)}` : game.gaveUp ? 'Gave up' : 'Missed it';
-  return `Cinedikt Daily No. ${no} · ${GAME_NAME}\n${line}\n${shareMarks(game)}\n${origin}/daily`;
+  const help = shareHelp(game);
+  const tally = game.won ? [`${fmtN(game.pts)} points`, help].filter(Boolean).join(' · ') : help;
+  const site = origin.replace(/^https?:\/\//, '');
+  return [`${GAME_NAME} #${no} 🎬 ${shareHeadline(game)}`, shareMarks(game), tally, `${site}/daily`]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** The streak once today's game is part of it. The server works it out

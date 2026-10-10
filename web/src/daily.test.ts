@@ -205,6 +205,8 @@ import {
   rippleSlot,
   scoreAt,
   seenSlots,
+  shareHeadline,
+  shareHelp,
   shareMarks,
   shareText,
   sharedPeople,
@@ -229,7 +231,7 @@ import {
   todaysPeople,
   toneStyle,
   triedChips,
-  usedText,
+  FACT_EMOJI,
   viewportFit,
   warmthColour,
   watchMidnight,
@@ -929,11 +931,11 @@ describe('the result', () => {
   it('passes over a fact no longer sold, should a log from before ever carry one', () => {
     // The five years are gone, and the server replays a recorded "years"
     // as nothing; were one ever handed back, it is neither paid for nor
-    // used, rather than an empty chip or "undefined" in the share text.
+    // shared, rather than an empty chip or "undefined" on the share card.
     const old = { type: 'fact', kind: 'years', cost: 100 } as unknown as DailyEntry;
     const log: DailyEntry[] = [{ type: 'fact', kind: 'decade', cost: 100 }, old];
     expect(paidFor(log)).toEqual([{ label: 'Decade', price: '−100' }]);
-    expect(usedText({ log })).toBe('one name and the decade');
+    expect(shareHelp({ log })).toBe('📅');
   });
 
   it('says the streak once today is in it', () => {
@@ -972,21 +974,28 @@ describe('the result', () => {
 describe('sharing a result', () => {
   const origin = 'https://cinedikt.com';
 
-  it('copies the game, the score and what it took, the six squares, and where to play', () => {
-    // The handoff's example: three names, the decade and one wrong guess.
+  it('is a card to read at a glance: how it went, the six names as squares, the score with what helped, and the way in', () => {
+    // Three names, the decade and one wrong guess.
     const game = ended(
       [{ type: 'fact', kind: 'decade', cost: 100 }, { type: 'next', cost: 100, slot: 1 }, THIRTEENTH, { type: 'win' }],
       { won: true, pts: 800 },
     );
     expect(shareText(143, game, origin)).toBe(
-      'Cinedikt Daily No. 143 · Name Drop\n800 points · 3 names, the decade and one wrong guess\n■■■□□□\nhttps://cinedikt.com/daily',
+      'Name Drop #143 🎬 Got it in 3 names\n🟪🟪🟪⬜⬜⬜\n800 points · 📅 ❌\ncinedikt.com/daily',
     );
   });
 
-  it('says one name in words, and counts the rest', () => {
-    expect(usedText({ log: [] })).toBe('one name');
+  it('cheers the best there is, a movie from one name', () => {
+    const first = ended([{ type: 'win' }], { won: true, pts: 1000 });
+    expect(shareText(143, first, origin)).toBe('Name Drop #143 🎬 Got it from one name 🤯\n🟪⬜⬜⬜⬜⬜\n1,000 points\ncinedikt.com/daily');
+    expect(shareHeadline(first)).toBe('Got it from one name 🤯');
+  });
+
+  it('shows each fact bought as its emoji, in the row’s order, then a ❌ for each miss', () => {
+    expect(Object.values(FACT_EMOJI)).toEqual(['⏱️', '⭐', '🎭', '📅', '🎥']);
+    expect(shareHelp({ log: [] })).toBe('');
     expect(
-      usedText({
+      shareHelp({
         log: [
           { type: 'fact', kind: 'director', cost: 250 },
           { type: 'fact', kind: 'length', cost: 50 },
@@ -994,15 +1003,31 @@ describe('sharing a result', () => {
           SPEED,
         ],
       }),
-    ).toBe('4 names, the length range, the director and 2 wrong guesses');
+    ).toBe('⏱️🎥 ❌❌');
+    expect(shareHelp({ log: [THIRTEENTH] })).toBe('❌');
   });
 
-  it('says a loss as missed or given up, with the squares of the names seen', () => {
+  it('says a loss as stumped or out of points, with no score, and what helped only when anything did', () => {
     expect(shareText(143, ended([THIRTEENTH, { type: 'out' }], { pts: 0 }), origin)).toBe(
-      'Cinedikt Daily No. 143 · Name Drop\nMissed it\n■■□□□□\nhttps://cinedikt.com/daily',
+      'Name Drop #143 🎬 Ran out of points 💸\n🟪🟪⬜⬜⬜⬜\n❌\ncinedikt.com/daily',
     );
-    expect(shareText(143, ended([{ type: 'gaveup' }], { pts: 0, gaveUp: true }), origin).split('\n')[1]).toBe('Gave up');
-    expect(shareMarks(SOLVED)).toBe('■■■■□□');
+    expect(shareText(143, ended([{ type: 'gaveup' }], { pts: 0, gaveUp: true }), origin)).toBe(
+      'Name Drop #143 🎬 Stumped 🏳️\n🟪⬜⬜⬜⬜⬜\ncinedikt.com/daily',
+    );
+    expect(shareMarks(SOLVED)).toBe('🟪🟪🟪🟪⬜⬜');
+  });
+
+  it('writes the address without its scheme, whichever server it is', () => {
+    const game = ended([{ type: 'win' }], { won: true, pts: 1000 });
+    expect(shareText(2, game, 'https://cinedikt-dev.up.railway.app').split('\n').at(-1)).toBe('cinedikt-dev.up.railway.app/daily');
+    expect(shareText(2, game, 'http://localhost:5173').split('\n').at(-1)).toBe('localhost:5173/daily');
+  });
+
+  it('never names the movie', () => {
+    for (const game of [SOLVED, ended([{ type: 'gaveup' }], { pts: 0, gaveUp: true })]) {
+      const text = shareText(143, game, origin);
+      expect(text).not.toMatch(/Matrix|tt0133093/);
+    }
   });
 });
 
@@ -1376,8 +1401,8 @@ describe('the one Movies map', () => {
     expect(paidFor(first.log)).toEqual([]);
     expect(resultKicker(first)).toBe('Got it on the first name');
     expect([...seenSlots(first)]).toEqual([0]);
-    expect(usedText(first)).toBe('one name');
-    expect(shareMarks(first)).toBe('■□□□□□');
+    expect(shareHelp(first)).toBe('');
+    expect(shareMarks(first)).toBe('🟪⬜⬜⬜⬜⬜');
     expect(paidFor([...PLAYING.log, sheet])).toEqual(paidFor(PLAYING.log));
   });
 });
