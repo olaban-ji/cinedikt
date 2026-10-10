@@ -360,9 +360,9 @@ func TestTheSheetsAreTheSixsMoviesWithTheAnswerUnmarked(t *testing.T) {
 // TestEachSheetIsItsOwnFourHundredMostVoted: four hundred and ten more
 // of Pantoliano's, the least voted of his, leave his fifteen fewest off
 // his sheet, though Foster is on the ten fewest and her sheet, far from
-// full, has them. On his they would be cards past his cap with only him
-// showing on them, each a sign that someone hidden is in it, and his
-// sheet run past MaxSheet would say that such cards were there to find.
+// full, has them. On his they would be cards past his cap, there only
+// because someone else of the six is in them, and his sheet run past
+// MaxSheet would say that such cards were there to find.
 // The other five are on nobody's sheet and are not kept; and the answer,
 // made the least voted of all, is on every sheet still.
 func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
@@ -385,7 +385,9 @@ func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
 		fmt.Sscanf(id, "tt97%05d", &n)
 		return n
 	}
-	joe := p.SheetWants(0)
+	// Once it is over, every card on a sheet is readable: the whole sheet.
+	over := Replay(p, []Move{{Seq: 1, Key: "k", Kind: KindReveal}})
+	joe := p.SheetWants(over, 0)
 	if len(joe) != MaxSheet || !slices.Contains(joe, answer.ID) {
 		t.Errorf("Pantoliano's sheet has %d movies, the answer among them %v; want %d", len(joe), slices.Contains(joe, answer.ID), MaxSheet)
 	}
@@ -395,7 +397,7 @@ func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
 		}
 	}
 	// Hers: the answer, Man and Boy, the three with Fishburne and the ten.
-	gloria := p.SheetWants(1)
+	gloria := p.SheetWants(over, 1)
 	for n := 1; n <= 10; n++ {
 		if !slices.Contains(gloria, fmt.Sprintf("tt97%05d", n)) {
 			t.Errorf("Extra %d, which Foster is on, is not on her sheet", n)
@@ -416,18 +418,13 @@ func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
 		}
 	}
 
-	// Once Foster shows, her sheet lights Pantoliano on the ten, and his
-	// stays at MaxSheet without them.
+	// Played, with Foster showing, her sheet is her fifteen, the ten
+	// among them, and his stays at MaxSheet without them.
 	g := play(t, p)
 	g.do(KindNext, "")
 	hers, ok := p.SheetOf(g.state(), 1, Live{})
 	if !ok || len(hers) != 15 {
 		t.Fatalf("Foster's sheet with her showing: %d movies, %v", len(hers), ok)
-	}
-	for _, m := range hers {
-		if n := extra(m.ID); n >= 1 && n <= 10 && !slices.Equal(m.On, []int{0, 1}) {
-			t.Errorf("Extra %d on Foster's sheet lights %v, want [0 1]", n, m.On)
-		}
 	}
 	if his, _ := p.SheetOf(g.state(), 0, Live{}); len(his) != MaxSheet {
 		t.Errorf("Pantoliano's sheet with Foster showing has %d movies, want %d", len(his), MaxSheet)

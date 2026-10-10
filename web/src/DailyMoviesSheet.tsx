@@ -11,61 +11,54 @@ import {
   type Ref,
 } from 'react';
 import { ApiError, fetchDailyMovies, type DailyGame, type DailyMovie } from './api';
-import { toneStyle } from './daily';
+import { rangesKey, toneStyle } from './daily';
 import {
   MOVIES_LOADING,
-  NO_PICKS,
   SHEET_CARD_PAD,
   SHEET_POSTER_W,
   moviesFailed,
-  moviesKey,
   phoneSheetHeight,
   sheetLayout,
   sheetView,
   tabWrap,
-  togglePick,
   widenReach,
   type SheetCard,
-  type SheetChip,
-  type SheetPicks,
   type SheetView,
 } from './dailyMovies';
+import { useLiveScreen } from './dailyScreen';
 import { warmSpan, warmTop } from './grid';
-import { wheelSideways } from './PeopleChips';
 import { PersonFace } from './PersonFace';
 import { PosterImage } from './PosterImage';
 import { posterFallback } from './poster';
-import { useScreen } from './screen';
 import { useDrag, useEscape, useFocusTrapped } from './sheet';
 import type { Theme } from './theme';
 
 // The Movies sheet: one showing person's movies on a small Cinedikt map,
 // with the reader's bought facts drawn on it and today's movie among the
-// cards, unmarked. Its rules — what is lit, the title, the legend, the
-// footer, the metrics — are daily.ts's (the Movies sheet section), put
-// together for the sheet in dailyMovies.ts. This file asks the server for
-// the movies, keeps what the reader has switched on and tapped, and draws
-// it (MoviesSheetView, which takes everything as it stands, so it can be
-// rendered without a DOM).
+// cards, unmarked. Titles show only inside the ranges bought: the server
+// sends every other movie as a blank tile, a year and a place on the
+// rating axis, so there is nothing here to read off it and no names to
+// combine. Its rules — the copy, the metrics — are daily.ts's (the Movies
+// sheet section), put together for the sheet in dailyMovies.ts. This file
+// asks the server for the movies, again once a range is bought, keeps
+// what the reader has tapped, and draws it (MoviesSheetView, which takes
+// everything as it stands, so it can be rendered without a DOM).
 //
 // A side panel held 12px in from the right, top and bottom from 640px up;
 // below that a bottom sheet 90% of the visual viewport tall, with a
-// grabber, closed by dragging its top edge down past 90px. The scrim, the
-// close button and Escape close it on every size.
+// grabber, closed by dragging its top edge down past 90px. Which of the
+// two, and how tall, follow the window as it is now (dailyScreen.ts). The
+// scrim, the close button and Escape close it on every size.
 
 export interface MoviesSheetProps {
   /** The puzzle's number, for GET /daily/{no}/movies. */
   no: number;
-  /** The person the sheet opens on, by IMDb name id: always selected, and
-   *  never switched off. */
+  /** The person the sheet opens on, by IMDb name id. */
   person: string;
   /** The game as it stands: the showing slots, the facts bought, the
-   *  overlaps owned, the wrong guesses, the points and the next wrong
-   *  guess's price. */
+   *  wrong guesses, and the next wrong guess's price. */
   game: DailyGame;
   theme: 'light' | 'dark';
-  /** Buys a showing person's overlap; true once it is theirs. */
-  onOverlap(person: string): Promise<boolean>;
   /** Guess it: the page closes the sheet and guesses this movie, by IMDb
    *  id, as usual. */
   onGuess(id: string): void;
@@ -82,42 +75,29 @@ type Load =
   | { state: 'failed'; text: string };
 
 /** Everything in the sheet that takes the focus, in the order Tab visits
- *  it. A disabled button does not. */
+ *  it. A disabled button does not: a blank card is never a stop. */
 const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
-  const { no, person, game, theme, onOverlap, onGuess, onClose } = props;
-  const { phone } = useScreen();
-  const viewH = useViewHeight();
+  const { no, person, game, theme, onGuess, onClose } = props;
+  const { phone, viewH } = useLiveScreen();
   const ref = useRef<HTMLDivElement>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const [load, setLoad] = useState<Load>({ state: 'wait' });
   const [attempt, setAttempt] = useState(0);
-  const [picks, setPicks] = useState<SheetPicks>(NO_PICKS);
   const [pick, setPick] = useState<string | null>(null);
-  const [buying, setBuying] = useState<string | null>(null);
   const [width, setWidth] = useState(0);
   const [reach, setReach] = useState<{ top: number; bottom: number } | null>(null);
   const drag = useDrag(phone, onClose);
   useEscape(onClose);
   useFocusTrapped(ref);
 
-  // An overlap answered after the sheet has gone changes nothing here.
-  // Set on the way in as well as cleared on the way out: StrictMode
-  // mounts the sheet twice in development, and a flag only ever cleared
-  // would leave a name held still for good after its first purchase.
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-
-  // Asked once for the person, again on Try again, and again should the
-  // showing names or Director change underneath it (moviesKey). A second
-  // ask for the same person keeps the map it has until the answer comes.
-  const key = moviesKey(game);
+  // Asked once for the person, again on Try again, and again whenever a
+  // range is bought (rangesKey), which is what turns blank cards into
+  // titles. A second ask for the same person keeps the map it has until
+  // the answer comes; a card picked that the answer leaves blank is let
+  // go by sheetView, which only offers a readable one.
+  const key = rangesKey(game.facts);
   useEffect(() => {
     const ctl = new AbortController();
     setLoad((was) => (was.state === 'ok' && was.person === person ? was : { state: 'wait' }));
@@ -153,12 +133,11 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
     () => (movies && width > 0 ? sheetLayout(movies, width, phone) : null),
     [movies, width, phone],
   );
-  const view = sheetView({ game, person, movies, layout, picks, pick, buying, reach, theme });
+  const view = sheetView({ game, person, movies, layout, pick, reach, theme });
 
-  // It opens scrolled to the first lit movie, once, as soon as there is a
-  // map to scroll: a later change of who is switched on leaves the reader
-  // where they are. Instant whatever the motion setting: nothing has been
-  // drawn anywhere else yet to travel from.
+  // It opens scrolled to the first readable movie, once, as soon as there
+  // is a map to scroll. Instant whatever the motion setting: nothing has
+  // been drawn anywhere else yet to travel from.
   const opened = useRef(false);
   const scrollTo = view.scrollTo;
   useLayoutEffect(() => {
@@ -174,32 +153,6 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
     if (!el || !opened.current) return;
     const band = bandAt(el);
     setReach((was) => widenReach(was, band));
-  };
-
-  const pressChip = (chip: SheetChip) => {
-    if (!chip.can) return;
-    if (chip.act === 'toggle') {
-      setPicks((was) => togglePick(was, chip.key));
-      setPick(null);
-      return;
-    }
-    if (chip.act !== 'buy') return;
-    // Held still until the server answers, so one tap is one purchase.
-    // Once it is theirs it is switched on, which is what it was bought
-    // for; a refusal the page has already said leaves it as it was.
-    setBuying(chip.key);
-    onOverlap(chip.key).then(
-      (ok) => {
-        if (!alive.current) return;
-        setBuying(null);
-        if (!ok) return;
-        setPicks((was) => (was.others.includes(chip.key) ? was : togglePick(was, chip.key)));
-        setPick(null);
-      },
-      () => {
-        if (alive.current) setBuying(null);
-      },
-    );
   };
 
   const guess = () => {
@@ -237,7 +190,6 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
       mapRef={mapRef}
       on={{
         close: onClose,
-        chip: pressChip,
         card: setPick,
         guess,
         retry: () => setAttempt((n) => n + 1),
@@ -257,33 +209,8 @@ function bandAt(el: HTMLElement): { top: number; bottom: number } {
   return warmSpan(warmTop(el.scrollTop, 0), el.clientHeight || window.innerHeight);
 }
 
-/** The visual viewport's height, which on iOS shrinks for the keyboard
- *  and the toolbars where the layout viewport does not. The window's
- *  inner height where there is no visual viewport. */
-function viewHeight(): number {
-  if (typeof window === 'undefined') return 0;
-  return window.visualViewport?.height ?? window.innerHeight;
-}
-
-function useViewHeight(): number {
-  const [h, setH] = useState(viewHeight);
-  useEffect(() => {
-    const vv = window.visualViewport;
-    const read = () => setH(viewHeight());
-    read();
-    vv?.addEventListener('resize', read);
-    window.addEventListener('resize', read);
-    return () => {
-      vv?.removeEventListener('resize', read);
-      window.removeEventListener('resize', read);
-    };
-  }, []);
-  return h;
-}
-
 export interface SheetHandlers {
   close(): void;
-  chip(chip: SheetChip): void;
   card(id: string): void;
   guess(): void;
   retry(): void;
@@ -360,8 +287,8 @@ export function MoviesSheetView({
             {view.person && <PersonFace photo={view.person.photo} code={view.code} size="chip" square={false} />}
             <div className="cd-msheet-heading">
               <h2 className="cd-msheet-title">{view.title}</h2>
-              {/* Said again as names are switched on and off: how much of
-                  the map is still lit is what a switch is for. */}
+              {/* Said again when a range bought turns blank cards into
+                  titles: how much of the map can be read. */}
               <p className="cd-msheet-sub" aria-live="polite">
                 {view.sub}
               </p>
@@ -382,29 +309,6 @@ export function MoviesSheetView({
               </svg>
             </button>
           </div>
-        </div>
-
-        {/* Its scrollbar is hidden, so a mouse wheel is what moves it
-            sideways on a desktop, as the map's own chip row does. */}
-        <div className="cd-msheet-chips" onWheel={(e) => wheelSideways(e, e.currentTarget)}>
-          {view.chips.map((c) => (
-            <button
-              key={c.key}
-              type="button"
-              className={`cd-msheet-chip${c.on ? ' cd-msheet-chip-on' : ''}${c.faint ? ' cd-msheet-chip-faint' : ''}`}
-              style={toneStyle(c.tone)}
-              // A name for sale is bought, not switched, so it says what
-              // it costs rather than whether it is pressed.
-              aria-pressed={c.act === 'buy' ? undefined : c.on}
-              aria-label={c.aria || undefined}
-              disabled={!c.can}
-              onClick={() => on.chip(c)}
-            >
-              <PersonFace photo={c.person.photo} code={c.code} size="chip" square={c.director} />
-              {c.label}
-              {c.price && <span className="cd-msheet-price">{c.price}</span>}
-            </button>
-          ))}
         </div>
 
         <p className="cd-msheet-legend">{view.legend}</p>
@@ -459,7 +363,7 @@ export function MoviesSheetView({
               ))}
               {view.cards.map((c) => (
                 <SheetCardButton
-                  key={c.id}
+                  key={c.key}
                   card={c}
                   width={view.cardW}
                   height={view.cardH}
@@ -493,11 +397,14 @@ export function MoviesSheetView({
   );
 }
 
-/** One movie on the map. Today's is drawn by this same rule from what
- *  every card carries — its stand-in in its own title's hue, or a poster
- *  as every card has one — so nothing about it stands out. A card's
- *  poster loads once the reader has been near it; until then, and when
- *  there is none, the stand-in shows. */
+/** One movie on the map. A readable one is its poster, its title and its
+ *  rating, and can be tapped; today's is drawn by this same rule from
+ *  what every card carries — its stand-in in its own title's hue, or a
+ *  poster as every readable card has one — so nothing about it stands
+ *  out. A card's poster loads once the reader has been near it; until
+ *  then, and when there is none, the stand-in shows. A blank one is the
+ *  same tile with an empty poster and nothing written on it, faded, and
+ *  cannot be pressed: there is nothing to guess. */
 function SheetCardButton({
   card,
   width,
@@ -511,13 +418,21 @@ function SheetCardButton({
   theme: Theme;
   onPick: (id: string) => void;
 }) {
+  const place = { left: card.left, top: card.top, width, height, opacity: card.opacity };
+  if (card.kind === 'blank') {
+    return (
+      <button type="button" className="cd-msheet-card cd-msheet-card-blank" style={place} aria-label={card.aria} disabled>
+        <span className="cd-msheet-poster" aria-hidden="true" />
+      </button>
+    );
+  }
   const fill = { ['--poster-fill' as string]: posterFallback(card.title, theme) };
   const posterH = height - 2 * SHEET_CARD_PAD;
   return (
     <button
       type="button"
       className={`cd-msheet-card${card.picked ? ' cd-msheet-card-picked' : ''}`}
-      style={{ left: card.left, top: card.top, width, height, opacity: card.opacity }}
+      style={place}
       aria-label={card.aria}
       aria-pressed={card.picked}
       onClick={() => onPick(card.id)}

@@ -199,7 +199,6 @@ func (d *dailyRoutes) register(mux *http.ServeMux) {
 	route("POST /daily/{no}/play", d.play)
 	route("POST /daily/{no}/next", d.next)
 	route("POST /daily/{no}/buy", d.buy)
-	route("POST /daily/{no}/overlap", d.overlap)
 	route("POST /daily/{no}/guess", d.guess)
 	route("POST /daily/{no}/reveal", d.reveal)
 	route("GET /daily/{no}/movies", d.movies)
@@ -791,30 +790,23 @@ func (d *dailyRoutes) addr(r *http.Request) string {
 var dailyKey = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
 // dailyMove is a move's body: the key and seq every move has, and the
-// fact a buy is for, the person an overlap adds, or the movie a guess
-// names.
+// fact a buy is for or the movie a guess names.
 type dailyMove struct {
-	Key    string `json:"key"`
-	Seq    *int   `json:"seq"`
-	Kind   string `json:"kind"`
-	Person string `json:"person"`
-	Film   string `json:"film"`
+	Key  string `json:"key"`
+	Seq  *int   `json:"seq"`
+	Kind string `json:"kind"`
+	Film string `json:"film"`
 }
 
 func (d *dailyRoutes) next(w http.ResponseWriter, r *http.Request) {
 	d.act(w, r, func(dailyMove) (string, string, bool) { return daily.KindNext, "", true })
 }
 
-// buy sells the facts daily.IsFact names. The old game's clues, and any
-// kind that never was, are refused as bad.
+// buy sells the facts daily.IsFact names. The old game's clues, the
+// overlap Name Drop first sold at an address of its own, and any kind
+// that never was, are refused as bad.
 func (d *dailyRoutes) buy(w http.ResponseWriter, r *http.Request) {
 	d.act(w, r, func(m dailyMove) (string, string, bool) { return m.Kind, "", daily.IsFact(m.Kind) })
-}
-
-func (d *dailyRoutes) overlap(w http.ResponseWriter, r *http.Request) {
-	d.act(w, r, func(m dailyMove) (string, string, bool) {
-		return daily.KindOverlap, m.Person, imdbid.Name(m.Person)
-	})
 }
 
 func (d *dailyRoutes) guess(w http.ResponseWriter, r *http.Request) {
@@ -881,17 +873,24 @@ func (d *dailyRoutes) act(w http.ResponseWriter, r *http.Request, what func(dail
 	writeJSON(w, http.StatusOK, map[string]any{"game": g})
 }
 
-// dailySheet is GET /daily/{no}/movies: whose sheet it is, and their
-// movies.
+// dailySheet is GET /daily/{no}/movies: whose sheet it is, how many
+// movies are on it, and its cards, readable or blank
+// (daily.SheetCard). Total counts the blank cards too, which are every
+// card without an id.
 type dailySheet struct {
-	Person string             `json:"person"`
-	Movies []daily.SheetMovie `json:"movies"`
+	Person string            `json:"person"`
+	Total  int               `json:"total"`
+	Movies []daily.SheetCard `json:"movies"`
 }
 
 // movies is GET /daily/{no}/movies?person=nm…: the Movies sheet of one of
 // the six showing in the reader's game, from the puzzle as it was picked
 // (daily.Puzzle.SheetOf), with today's movie among the cards and nothing
-// marking it out. In order, it is refused:
+// marking it out. A card is readable only inside the ranges the reader
+// has bought, and every other is blank, its year and its rating to the
+// half point; once the game is over every card is readable. Posters are
+// read only for the readable cards (SheetWants), so a sheet before any
+// range reads none. In order, it is refused:
 //
 //   - "bad" for a person that is no IMDb name id;
 //   - "cookie" without a player;
@@ -950,13 +949,13 @@ func (d *dailyRoutes) movies(w http.ResponseWriter, r *http.Request) {
 		dailyRefuse(w, http.StatusBadRequest, "bad", "that person is not showing in this game")
 		return
 	}
-	live, err := d.store.DailyLive(ctx, p.SheetWants(slot), nil)
+	live, err := d.store.DailyLive(ctx, p.SheetWants(s, slot), nil)
 	if err != nil {
 		d.fail(w, r, err)
 		return
 	}
-	movies, _ := p.SheetOf(s, slot, live)
-	writeJSON(w, http.StatusOK, dailySheet{Person: person, Movies: movies})
+	cards, _ := p.SheetOf(s, slot, live)
+	writeJSON(w, http.StatusOK, dailySheet{Person: person, Total: len(cards), Movies: cards})
 }
 
 // board is GET /daily/{no}/board?tab=today|week: the players around the

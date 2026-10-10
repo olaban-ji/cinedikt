@@ -382,7 +382,10 @@ func TestEachOfTheSixHasTheirFourHundredMostVoted(t *testing.T) {
 		fmt.Sscanf(id, "tt97%05d", &n)
 		return n
 	}
-	star := p.SheetWants(5)
+	// Once a game is over every card on a sheet is readable, and its
+	// poster read: the whole sheet.
+	done := daily.Replay(p, []daily.Move{{Seq: 1, Key: "k", Kind: daily.KindReveal}})
+	star := p.SheetWants(done, 5)
 	extras := 0
 	for _, id := range star {
 		if n := extra(id); n > 0 {
@@ -400,7 +403,7 @@ func TestEachOfTheSixHasTheirFourHundredMostVoted(t *testing.T) {
 	}
 	// His: the answer, the nine other candidates, his seven fillers and
 	// the ten he shares with her.
-	ed := p.SheetWants(1)
+	ed := p.SheetWants(done, 1)
 	for n := 1; n <= 10; n++ {
 		if !slices.Contains(ed, fmt.Sprintf("tt97%05d", n)) {
 			t.Errorf("Extra %d, which the fifth-billed is on, is not on his sheet", n)
@@ -420,7 +423,6 @@ func TestEachOfTheSixHasTheirFourHundredMostVoted(t *testing.T) {
 	}
 	// Played as the API serves it: the sheet at the end, everyone
 	// showing, holds no more than MaxSheet.
-	done := daily.Replay(p, []daily.Move{{Seq: 1, Key: "k", Kind: daily.KindReveal}})
 	if movies, ok := p.SheetOf(done, 5, daily.Live{}); !ok || len(movies) != daily.MaxSheet {
 		t.Errorf("the star's sheet once it is over: %d movies, %v", len(movies), ok)
 	}
@@ -467,8 +469,12 @@ func TestEachOfTheSixNeedsMoviesBesideTheAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, -1))
-	if err != nil || p.Answer.ID != "tt9900104" || p.Cast[0].ID != "nm9900009" || len(p.SheetWants(0)) != daily.MinSheet+1 {
-		t.Errorf("with %d movies of the newcomer's: %+v, %v", daily.MinSheet, p, err)
+	if err != nil {
+		t.Fatalf("with %d movies of the newcomer's: %v", daily.MinSheet, err)
+	}
+	done := daily.Replay(p, []daily.Move{{Seq: 1, Key: "k", Kind: daily.KindReveal}})
+	if p.Answer.ID != "tt9900104" || p.Cast[0].ID != "nm9900009" || len(p.SheetWants(done, 0)) != daily.MinSheet+1 {
+		t.Errorf("with %d movies of the newcomer's: %+v", daily.MinSheet, p)
 	}
 }
 

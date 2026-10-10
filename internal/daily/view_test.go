@@ -151,14 +151,14 @@ func secretsKept(t *testing.T, p *Puzzle, s *State, game Game, when string) {
 // rendered as names the answer or says its year, rating, length, poster
 // or genres, names a director before they are bought, or anyone in the
 // cast still hidden, and every fact not bought is absent. Three games
-// between them make every kind of move: one buys every fact, one adds
-// overlaps and asks for names, and one guesses movies from the answer's
-// decade and genre, which say their own years.
+// between them make every kind of move: one buys every fact, one asks
+// for names, and one guesses movies from the answer's decade and genre,
+// which say their own years.
 func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 	p := matrix()
 	for _, moves := range [][]struct{ kind, arg string }{
 		{{KindLength, ""}, {KindRating, ""}, {KindGenre, ""}, {KindDecade, ""}, {KindYears, ""}, {KindDirector, ""}},
-		{{KindOverlap, "nm0001592"}, {KindNext, ""}, {KindOverlap, "nm0287825"}, {KindNext, ""}, {KindNext, ""}},
+		{{KindNext, ""}, {KindNext, ""}, {KindNext, ""}, {KindNext, ""}, {KindNext, ""}},
 		{{KindGuess, "tt0120601"}, {KindGuess, "tt0115736"}, {KindGuess, "tt9000002"}, {KindGuess, "tt0209144"}},
 	} {
 		g := play(t, p)
@@ -222,11 +222,11 @@ func TestTheLogHasAnEntryPerMove(t *testing.T) {
 	g := play(t, p)
 	g.do(KindNext, "")
 	g.do(KindDecade, "")
-	g.do(KindOverlap, "nm0287825")
 	g.do(KindGuess, "tt0111257")
 	g.do(KindDirector, "")
 	g.do(KindGuess, "tt0034583")
 	g.do(KindGuess, "tt0076759")
+	g.do(KindGuess, "tt0120601")
 	game := Render(p, g.record(), live)
 	var lines []string
 	for _, e := range game.Log {
@@ -235,11 +235,11 @@ func TestTheLogHasAnEntryPerMove(t *testing.T) {
 	want := []string{
 		`{"type":"next","cost":100,"slot":1}`,
 		`{"type":"fact","kind":"decade","cost":100}`,
-		`{"type":"overlap","person":"nm0287825","cost":250}`,
 		`{"type":"guess","cost":100,"guess":{"id":"tt0111257","title":"Speed","year":1994,"cost":100,"shared":[5],"sameDecade":true,"sharesGenre":true,"warmth":2}}`,
 		`{"type":"fact","kind":"director","cost":250}`,
 		`{"type":"guess","cost":150,"guess":{"id":"tt0034583","title":"Casablanca","year":1942,"cost":150,"shared":[],"sameDecade":false,"sharesGenre":false,"warmth":0}}`,
 		`{"type":"guess","cost":200,"guess":{"id":"tt0076759","title":"Star Wars","year":1977,"cost":200,"shared":[],"sameDecade":false,"sharesGenre":true,"warmth":1}}`,
+		`{"type":"guess","cost":250,"guess":{"id":"tt0120601","title":"Being John Malkovich","year":1999,"cost":250,"shared":[],"sameDecade":true,"sharesGenre":false,"warmth":1}}`,
 		`{"type":"out"}`,
 	}
 	if !slices.Equal(lines, want) {
@@ -327,13 +327,13 @@ func TestTheEndShowsEverything(t *testing.T) {
 
 	playing := Render(p, play(t, p).record(), live)
 	body := rendered(t, playing)
-	for _, want := range []string{`"end":null`, `"finishedAt":null`, `"overlaps":[]`, `"log":[]`, `"facts":{}`, `"nextCost":100`, `"phase":"play"`} {
+	for _, want := range []string{`"end":null`, `"finishedAt":null`, `"log":[]`, `"facts":{}`, `"nextCost":100`, `"phase":"play"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("a game in play lacks %s: %s", want, body)
 		}
 	}
-	if strings.Contains(body, "secs") {
-		t.Errorf("a game has a clock: %s", body)
+	if strings.Contains(body, "secs") || strings.Contains(body, "overlaps") {
+		t.Errorf("a game has a clock or overlaps: %s", body)
 	}
 }
 
@@ -382,126 +382,371 @@ func TestWantsAreWhatTheGameShows(t *testing.T) {
 }
 
 // sheetJSON is a sheet as the API sends it.
-func sheetJSON(t *testing.T, movies []SheetMovie) []map[string]any {
+func sheetJSON(t *testing.T, cards []SheetCard) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	if err := json.Unmarshal([]byte(rendered(t, movies)), &out); err != nil {
+	if err := json.Unmarshal([]byte(rendered(t, cards)), &out); err != nil {
 		t.Fatal(err)
 	}
 	return out
 }
 
-// TestASheetShowsOnlyWhatTheGameShows: only a slot showing has one; each
-// movie lists the slots showing it credits, never one still hidden; a
-// director is marked only once Director is bought; and the answer is a
-// card like the rest, with the same fields.
-func TestASheetShowsOnlyWhatTheGameShows(t *testing.T) {
+// readableIDs are the ids of a sheet's readable cards, in its order.
+func readableIDs(cards []SheetCard) []string {
+	var out []string
+	for _, c := range cards {
+		if c.Readable {
+			out = append(out, c.ID)
+		}
+	}
+	return out
+}
+
+// everyone is a game in play with all six showing, every sheet open.
+func everyone(t *testing.T, p *Puzzle) *player {
+	t.Helper()
+	g := play(t, p)
+	for range Slots - 1 {
+		g.do(KindNext, "")
+	}
+	return g
+}
+
+// TestASheetIsOnlyForSomeoneShowing: only a slot showing has one, and
+// once it is over anyone in the cast does.
+func TestASheetIsOnlyForSomeoneShowing(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
 	for _, slot := range []int{1, 5, -1, 6} {
 		if _, ok := p.SheetOf(g.state(), slot, live); ok {
 			t.Errorf("slot %d, not showing, has a sheet", slot)
 		}
-	}
-	joe, ok := p.SheetOf(g.state(), 0, live)
-	if !ok {
-		t.Fatal("the sixth-billed has no sheet")
-	}
-	var got []string
-	for _, m := range joe {
-		got = append(got, fmt.Sprintf("%s %v %v", m.ID, m.On, m.Dir))
-	}
-	// Memento credits Moss too, and the answer everyone, but only
-	// Pantoliano is showing; Bound's directors are not bought.
-	if want := []string{"tt0106977 [0] false", "tt0115736 [0] false", "tt0133093 [0] false", "tt0209144 [0] false"}; !slices.Equal(got, want) {
-		t.Errorf("Pantoliano's sheet = %v, want %v", got, want)
-	}
-	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), " ") }
-	cards := sheetJSON(t, joe)
-	for _, c := range cards {
-		if keys(c) != keys(cards[0]) {
-			t.Errorf("%v has fields %s, %v has %s", c["id"], keys(c), cards[0]["id"], keys(cards[0]))
-		}
-		if _, dir := c["dir"]; dir {
-			t.Errorf("%v says dir before Director is bought", c["id"])
+		if got := p.SheetWants(g.state(), slot); got != nil {
+			t.Errorf("slot %d, not showing, wants %v", slot, got)
 		}
 	}
-
-	g.do(KindGuess, "tt0209144")
-	g.do(KindDirector, "")
-	joe, _ = p.SheetOf(g.state(), 0, live)
-	got = nil
-	for _, m := range joe {
-		got = append(got, fmt.Sprintf("%s %v %v", m.ID, m.On, m.Dir))
+	if joe, ok := p.SheetOf(g.state(), 0, live); !ok || len(joe) != 4 {
+		t.Errorf("the sixth-billed's sheet: %d cards, %v", len(joe), ok)
 	}
-	if want := []string{"tt0106977 [0] false", "tt0115736 [0] true", "tt0133093 [0 1 3] true", "tt0209144 [0 3] false"}; !slices.Equal(got, want) {
-		t.Errorf("Pantoliano's sheet after Memento and Director = %v, want %v", got, want)
-	}
-	if moss, ok := p.SheetOf(g.state(), 3, live); !ok || len(moss) != 4 {
-		t.Errorf("Moss, filled in, has %d movies, %v", len(moss), ok)
-	}
-
-	// Once it is over, anyone in the cast has one, crediting everyone.
 	g.do(KindReveal, "")
-	keanu, ok := p.SheetOf(g.state(), 5, live)
-	if !ok || len(keanu) != 4 || !slices.Equal(keanu[1].On, []int{0, 1, 2, 3, 4, 5}) || keanu[1].ID != "tt0133093" {
-		t.Errorf("Keanu's sheet at the end = %+v, %v", keanu, ok)
+	if keanu, ok := p.SheetOf(g.state(), 5, live); !ok || len(keanu) != 4 {
+		t.Errorf("Keanu's sheet once it is over: %d cards, %v", len(keanu), ok)
 	}
 }
 
-// TestASheetHasEveryPosterOrNone: the answer always has a poster, so a
-// sheet where only some cards had theirs would mark it out. Pantoliano's
-// four all have one in live, and are sent with them; Keanu's do not,
-// and none is sent, the answer's included.
-func TestASheetHasEveryPosterOrNone(t *testing.T) {
+// TestBeforeAnyRangeEveryCardIsBlank: with no decade, years, rating or
+// genre bought, a sheet is only where its movies sit: each card exactly
+// {year, at}, with no id, title, exact rating, genres or poster, today's
+// movie like the rest. Length and the director are no ranges, and a
+// movie guessed is no more readable for it.
+func TestBeforeAnyRangeEveryCardIsBlank(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
+	want := `[{"year":1993,"at":8},{"year":1996,"at":7.5},{"year":1999,"at":8.5},{"year":2000,"at":8.5}]`
+	for _, move := range []struct{ kind, arg string }{{"", ""}, {KindLength, ""}, {KindDirector, ""}, {KindGuess, "tt0209144"}} {
+		if move.kind != "" {
+			g.do(move.kind, move.arg)
+		}
+		joe, _ := p.SheetOf(g.state(), 0, live)
+		body := rendered(t, joe)
+		if body != want {
+			t.Errorf("after %s, Pantoliano's sheet = %s\nwant %s", move.kind, body, want)
+		}
+		secrets := []string{`"rating"`, `"genres"`, `"poster"`, `"id"`, `"title"`, "tt"}
+		for _, m := range p.Movies {
+			secrets = append(secrets, m.Title)
+		}
+		for _, secret := range secrets {
+			if strings.Contains(body, secret) {
+				t.Errorf("after %s, Pantoliano's sheet says %s: %s", move.kind, secret, body)
+			}
+		}
+		if got := p.SheetWants(g.state(), 0); len(got) != 0 {
+			t.Errorf("after %s, Pantoliano's sheet wants posters for %v", move.kind, got)
+		}
+	}
+	// Moss, filled in by Memento, has a sheet of blanks too.
+	if moss, ok := p.SheetOf(g.state(), 3, live); !ok || len(readableIDs(moss)) != 0 || len(moss) != 4 {
+		t.Errorf("Moss's sheet = %+v, %v", moss, ok)
+	}
+}
+
+// TestACardIsReadableOnlyInsideEveryRangeBought: the decade, the five
+// years, the rating band and the genre each narrow what the sheets
+// read, together as much as the tightest; the length and the director
+// never do. Across all six sheets, with everyone showing.
+func TestACardIsReadableOnlyInsideEveryRangeBought(t *testing.T) {
+	p := matrix()
+	for _, c := range []struct {
+		facts []string
+		want  []string
+	}{
+		{nil, nil},
+		{[]string{KindLength, KindDirector}, nil},
+		// The Fugitive, Speed, Bound and The Matrix are the 1990s'.
+		{[]string{KindDecade}, []string{"tt0106977", "tt0111257", "tt0115736", "tt0133093"}},
+		{[]string{KindDecade, KindYears}, []string{"tt0115736", "tt0133093"}},
+		// 8.0 or higher: Apocalypse Now, The Matrix, Memento, The Lord of
+		// the Rings and V for Vendetta.
+		{[]string{KindRating}, []string{"tt0078788", "tt0133093", "tt0209144", "tt0120737", "tt0434409"}},
+		// Action and Sci-Fi both: The Matrix and its sequel, never V for
+		// Vendetta or Cloud Atlas, which have one each.
+		{[]string{KindGenre}, []string{"tt0133093", "tt0234215"}},
+		{[]string{KindDecade, KindRating}, []string{"tt0133093"}},
+		{[]string{KindRating, KindGenre}, []string{"tt0133093"}},
+		{[]string{KindLength, KindGenre, KindDirector}, []string{"tt0133093", "tt0234215"}},
+	} {
+		g := everyone(t, p)
+		for _, kind := range c.facts {
+			g.do(kind, "")
+		}
+		s := g.state()
+		var got []string
+		for slot := range Slots {
+			cards, ok := p.SheetOf(s, slot, live)
+			if !ok {
+				t.Fatalf("%v: slot %d has no sheet", c.facts, slot)
+			}
+			for _, id := range readableIDs(cards) {
+				if !slices.Contains(got, id) {
+					got = append(got, id)
+				}
+			}
+			if wants := p.SheetWants(s, slot); !slices.Equal(slices.Sorted(slices.Values(wants)), slices.Sorted(slices.Values(readableIDs(cards)))) {
+				t.Errorf("%v: slot %d wants %v and reads %v", c.facts, slot, wants, readableIDs(cards))
+			}
+			if len(cards) != len(p.sheet(slot)) {
+				t.Errorf("%v: slot %d has %d cards for %d movies", c.facts, slot, len(cards), len(p.sheet(slot)))
+			}
+		}
+		slices.Sort(got)
+		want := slices.Sorted(slices.Values(c.want))
+		if !slices.Equal(got, want) {
+			t.Errorf("with %v bought, the sheets read %v, want %v", c.facts, got, want)
+		}
+	}
+
+	// Once it is over, everything is readable, whatever was bought.
+	g := play(t, p)
 	g.do(KindReveal, "")
-	if !slices.Equal(p.SheetWants(0), []string{"tt0106977", "tt0115736", "tt0133093", "tt0209144"}) {
-		t.Errorf("Pantoliano's sheet wants %v", p.SheetWants(0))
-	}
-	joe, _ := p.SheetOf(g.state(), 0, live)
-	for _, m := range joe {
-		if m.Poster == "" || m.Poster != live.Posters[m.ID] {
-			t.Errorf("%s has poster %q with every poster there", m.ID, m.Poster)
+	for slot := range Slots {
+		cards, _ := p.SheetOf(g.state(), slot, live)
+		if len(readableIDs(cards)) != len(cards) {
+			t.Errorf("at the end, slot %d's sheet has blank cards: %+v", slot, cards)
 		}
 	}
-	keanu, _ := p.SheetOf(g.state(), 5, live)
-	for _, m := range keanu {
-		if m.Poster != "" {
-			t.Errorf("%s has poster %q though John Wick has none", m.ID, m.Poster)
+}
+
+// TestARangeHoldsFromItsFloorToBelowItsCeiling, as the page draws it: the
+// five years and the decade take their first and last years, the rating
+// band its floor and not its ceiling, compared in tenths so a 7.0 kept as
+// 6.9999 is still 7.0, and the genre a movie with every one of the
+// answer's and more.
+func TestARangeHoldsFromItsFloorToBelowItsCeiling(t *testing.T) {
+	p := matrix()
+	p.Answer.Rating = 7.5
+	g := play(t, p)
+	for _, kind := range []string{KindDecade, KindYears, KindRating, KindGenre} {
+		g.do(kind, "")
+	}
+	s := g.state()
+	in := Movie{Year: 1997, Rating: 7.5, Genres: []string{"Action", "Sci-Fi"}}
+	for _, c := range []struct {
+		name string
+		edit func(m *Movie)
+		want bool
+	}{
+		{"inside them all", func(*Movie) {}, true},
+		{"the first of the five years", func(m *Movie) { m.Year = 1995 }, true},
+		{"the last of them", func(m *Movie) { m.Year = 1999 }, true},
+		{"the year before them", func(m *Movie) { m.Year = 1994 }, false},
+		{"the year after them", func(m *Movie) { m.Year = 2000 }, false},
+		{"the band's floor", func(m *Movie) { m.Rating = 7.0 }, true},
+		{"its floor a hair under", func(m *Movie) { m.Rating = 0.1 + 0.2 + 6.7 }, true},
+		{"its top", func(m *Movie) { m.Rating = 7.9 }, true},
+		{"its ceiling", func(m *Movie) { m.Rating = 8.0 }, false},
+		{"below its floor", func(m *Movie) { m.Rating = 6.9 }, false},
+		{"one more genre", func(m *Movie) { m.Genres = []string{"Action", "Adventure", "Sci-Fi"} }, true},
+		{"one genre of the two", func(m *Movie) { m.Genres = []string{"Action", "Thriller"} }, false},
+		{"no genres", func(m *Movie) { m.Genres = nil }, false},
+	} {
+		m := in
+		m.Genres = slices.Clone(in.Genres)
+		c.edit(&m)
+		if got := p.readable(s, m); got != c.want {
+			t.Errorf("%s (%+v): readable %v, want %v", c.name, m, got, c.want)
 		}
+	}
+	// The decade alone holds its first and last years.
+	decade := play(t, p)
+	decade.do(KindDecade, "")
+	for year, want := range map[int]bool{1989: false, 1990: true, 1999: true, 2000: false} {
+		if got := p.readable(decade.state(), Movie{Year: year, Rating: 1}); got != want {
+			t.Errorf("%d in the 1990s: readable %v, want %v", year, got, want)
+		}
+	}
+}
+
+// TestABlankCardIsPlacedToTheHalfPoint, and no finer: two sheets' blank
+// cards can no longer be matched by year and exact rating.
+func TestABlankCardIsPlacedToTheHalfPoint(t *testing.T) {
+	for _, c := range []struct{ rating, want float64 }{
+		{5.5, 5.5}, {7.2, 7}, {7.3, 7.5}, {7.7, 7.5}, {7.8, 8}, {8.4, 8.5}, {8.7, 8.5}, {8.8, 9}, {0.1 + 0.2 + 6.7, 7}, {10, 10},
+	} {
+		if got := halfPoint(c.rating); got != c.want {
+			t.Errorf("halfPoint(%v) = %v, want %v", c.rating, got, c.want)
+		}
+	}
+}
+
+// TestTheAnswersCardIsLikeEveryOther: blank, it carries exactly {year,
+// at}, as every blank card does; readable, it has the fields every
+// readable card has and no more. Nothing in a sheet says which card is
+// today's.
+func TestTheAnswersCardIsLikeEveryOther(t *testing.T) {
+	p := matrix()
+	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), " ") }
+	for _, facts := range [][]string{nil, {KindLength}, {KindDecade}, {KindRating}, {KindGenre}, {KindDecade, KindYears, KindRating, KindGenre}} {
+		g := everyone(t, p)
+		for _, kind := range facts {
+			g.do(kind, "")
+		}
+		for slot := range Slots {
+			cards, _ := p.SheetOf(g.state(), slot, live)
+			readable := ""
+			for i, c := range sheetJSON(t, cards) {
+				_, id := c["id"]
+				if id != cards[i].Readable {
+					t.Errorf("%v: slot %d's card %d is readable %v and says id %v", facts, slot, i, cards[i].Readable, id)
+				}
+				if !id {
+					if keys(c) != "at year" {
+						t.Errorf("%v: slot %d's blank card %d says %s", facts, slot, i, keys(c))
+					}
+					continue
+				}
+				if readable == "" {
+					readable = keys(c)
+				}
+				if keys(c) != readable {
+					t.Errorf("%v: slot %d has a readable card with %s and one with %s", facts, slot, readable, keys(c))
+				}
+			}
+			if r := strings.Replace(readable, " poster", "", 1); readable != "" && r != "genres id rating title year" {
+				t.Errorf("%v: slot %d's readable cards say %s", facts, slot, readable)
+			}
+		}
+	}
+}
+
+// TestACardsPlaceSaysNothingItsFaceDoesNot: cards are listed by year,
+// then by where they sit on the rating axis, readable before blank, so a
+// blank card's place among the rest says nothing of its id. Chocolat and
+// Memento, both of 2000 on Moss's sheet, come lower rated first, and
+// giving every movie a new id changes nothing a blank sheet says.
+func TestACardsPlaceSaysNothingItsFaceDoesNot(t *testing.T) {
+	p := matrix()
+	g := everyone(t, p)
+	moss, _ := p.SheetOf(g.state(), 3, live)
+	before := rendered(t, moss)
+	if want := `[{"year":1999,"at":8.5},{"year":2000,"at":7},{"year":2000,"at":8.5},{"year":2003,"at":7}]`; before != want {
+		t.Errorf("Moss's sheet = %s\nwant %s", before, want)
+	}
+	renamed := matrix()
+	for i := range renamed.Movies {
+		renamed.Movies[i].ID = fmt.Sprintf("tt%07d", 9999999-i)
+	}
+	renamed.Answer.ID = renamed.Movies[slices.IndexFunc(p.Movies, func(m Movie) bool { return m.ID == p.Answer.ID })].ID
+	for slot := range Slots {
+		was, _ := p.SheetOf(g.state(), slot, live)
+		now, _ := renamed.SheetOf(Replay(renamed, g.moves), slot, Live{})
+		if rendered(t, was) != rendered(t, now) {
+			t.Errorf("slot %d's blank sheet changed with the ids: %s, then %s", slot, rendered(t, was), rendered(t, now))
+		}
+	}
+	// Readable, a year's cards come by where they sit, then by id.
+	g.do(KindGenre, "")
+	g.do(KindRating, "")
+	g.do(KindReveal, "")
+	moss, _ = p.SheetOf(g.state(), 3, live)
+	var order []string
+	for _, c := range moss {
+		order = append(order, c.Title)
+	}
+	if want := []string{"The Matrix", "Chocolat", "Memento", "The Matrix Reloaded"}; !slices.Equal(order, want) {
+		t.Errorf("Moss's sheet at the end is in the order %v, want %v", order, want)
+	}
+}
+
+// TestASheetHasEveryReadablePosterOrNone: the answer always has a poster,
+// so a sheet where only some readable cards had theirs would mark it out.
+// Pantoliano's three 1990s movies all have one in live, and are sent
+// them, while Memento, blank, is not; Keanu's two readable with Genre,
+// The Matrix and its sequel, do not both, and neither is sent one, the
+// answer included. A blank card never has one, and no poster is read for
+// it.
+func TestASheetHasEveryReadablePosterOrNone(t *testing.T) {
+	p := matrix()
+	g := everyone(t, p)
+	g.do(KindDecade, "")
+	s := g.state()
+	if got := p.SheetWants(s, 0); !slices.Equal(got, []string{"tt0106977", "tt0115736", "tt0133093"}) {
+		t.Errorf("Pantoliano's sheet wants %v", got)
+	}
+	joe, _ := p.SheetOf(s, 0, live)
+	for _, c := range joe {
+		if c.Readable && (c.Poster == "" || c.Poster != live.Posters[c.ID]) {
+			t.Errorf("%s has poster %q with every readable poster there", c.ID, c.Poster)
+		}
+		if !c.Readable && c.Poster != "" {
+			t.Errorf("a blank card has poster %q", c.Poster)
+		}
+	}
+	if body := rendered(t, joe); strings.Count(body, `"poster"`) != 3 || strings.Contains(body, "memento.jpg") {
+		t.Errorf("Pantoliano's sheet with the 1990s = %s", body)
+	}
+
+	genre := everyone(t, p)
+	genre.do(KindGenre, "")
+	keanu, _ := p.SheetOf(genre.state(), 5, live)
+	if ids := readableIDs(keanu); !slices.Equal(ids, []string{"tt0133093", "tt0234215"}) {
+		t.Fatalf("Keanu's readable with Genre: %v", ids)
 	}
 	if body := rendered(t, keanu); strings.Contains(body, "poster") || strings.Contains(body, "matrix.jpg") {
-		t.Errorf("Keanu's sheet says %s", body)
+		t.Errorf("Keanu's sheet with Genre says %s", body)
+	}
+
+	// At the end everything is readable: Pantoliano's all have one, and
+	// Keanu's do not.
+	g.do(KindReveal, "")
+	joe, _ = p.SheetOf(g.state(), 0, live)
+	if body := rendered(t, joe); strings.Count(body, `"poster"`) != 4 {
+		t.Errorf("Pantoliano's sheet at the end = %s", body)
+	}
+	keanu, _ = p.SheetOf(g.state(), 5, live)
+	if body := rendered(t, keanu); strings.Contains(body, "poster") {
+		t.Errorf("Keanu's sheet at the end = %s", body)
 	}
 }
 
 // TestASheetIsOnlyTheMoviesOnIt: Memento, on Moss's sheet but below
-// Pantoliano's cap, is on hers and lights him there once both show, and
-// is not on his. A puzzle kept before sheets were, with none, has every
-// movie crediting a slot on that slot's sheet, as it did then.
+// Pantoliano's cap, is on hers and not on his. A puzzle kept before
+// sheets were, with none, has every movie crediting a slot on that
+// slot's sheet, as it did then.
 func TestASheetIsOnlyTheMoviesOnIt(t *testing.T) {
 	p := matrix()
 	memento := slices.IndexFunc(p.Movies, func(m Movie) bool { return m.ID == "tt0209144" })
 	p.Movies[memento].Sheets = []int{3}
 	g := play(t, p)
-	g.do(KindGuess, "tt0209144")
-	ids := func(movies []SheetMovie) []string {
-		var out []string
-		for _, m := range movies {
-			out = append(out, m.ID)
-		}
-		return out
+	g.do(KindReveal, "")
+	over := g.state()
+	joe, _ := p.SheetOf(over, 0, live)
+	if want := []string{"tt0106977", "tt0115736", "tt0133093"}; !slices.Equal(readableIDs(joe), want) || !slices.Equal(p.SheetWants(over, 0), want) {
+		t.Errorf("Pantoliano's sheet = %v, wants %v; want %v", readableIDs(joe), p.SheetWants(over, 0), want)
 	}
-	joe, _ := p.SheetOf(g.state(), 0, live)
-	if want := []string{"tt0106977", "tt0115736", "tt0133093"}; !slices.Equal(ids(joe), want) || !slices.Equal(p.SheetWants(0), want) {
-		t.Errorf("Pantoliano's sheet = %v, wants %v; want %v", ids(joe), p.SheetWants(0), want)
-	}
-	moss, ok := p.SheetOf(g.state(), 3, live)
-	i := slices.IndexFunc(moss, func(m SheetMovie) bool { return m.ID == "tt0209144" })
-	if !ok || i < 0 || !slices.Equal(moss[i].On, []int{0, 3}) {
-		t.Errorf("Moss's sheet = %+v, %v; want Memento lighting [0 3]", moss, ok)
+	moss, ok := p.SheetOf(over, 3, live)
+	if !ok || !slices.Contains(readableIDs(moss), "tt0209144") {
+		t.Errorf("Moss's sheet = %+v, %v; want Memento on it", moss, ok)
 	}
 
 	var kept []Movie
@@ -511,11 +756,11 @@ func TestASheetIsOnlyTheMoviesOnIt(t *testing.T) {
 	}
 	p.Movies = kept
 	for _, slot := range []int{0, 3} {
-		if got := p.SheetWants(slot); !slices.Equal(got, []string{"tt0209144"}) {
+		if got := p.SheetWants(over, slot); !slices.Equal(got, []string{"tt0209144"}) {
 			t.Errorf("kept before sheets were, slot %d's sheet wants %v", slot, got)
 		}
 	}
-	if got := p.SheetWants(1); len(got) != 0 {
+	if got := p.SheetWants(over, 1); len(got) != 0 {
 		t.Errorf("kept before sheets were, Foster's sheet wants %v", got)
 	}
 }

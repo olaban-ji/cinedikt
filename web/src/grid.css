@@ -6077,13 +6077,18 @@ button {
    being worked out again for it. */
 
 /* The hidden card's sheen, its edge and its "?", over the poster colour:
-   white light whatever the theme, as on a poster. Custom properties, as
-   every literal colour here has to be. */
+   white light whatever the theme, as on a poster; and the bands of light
+   that cross the title screen's card (0.3) and Play (0.4). Custom
+   properties, as every literal colour here has to be. The card's glow is
+   the day's poster colour, worked out in script and set inline as --glow
+   (daily.ts's posterGlow). */
 .cd-daily {
   --nd-sheen: linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 55%);
   --nd-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
   --nd-q: rgba(255, 255, 255, 0.9);
   --nd-glow: 0 1px 8px rgba(0, 0, 0, 0.5);
+  --nd-card-shine: rgba(255, 255, 255, 0.3);
+  --nd-play-shine: rgba(255, 255, 255, 0.4);
 }
 
 /* While the Daily is up the app is sized to the visual viewport, which
@@ -6192,16 +6197,27 @@ button {
   gap: 18px;
 }
 
+/* The card, 88 by 132, tilted. Everything that moves on the title screen
+   is played from script (DailyTitle.tsx, daily.ts's TITLE_LOOPS) and
+   rests here: the card tilted at −4°, its sheen off to the left, the
+   dropping rows out of sight, and Play's shine off to the side. That
+   resting state is the whole screen for a reader who has asked for
+   stillness. */
 .cd-nd-title-card {
-  width: 84px;
-  height: 126px;
+  position: relative;
+  width: 88px;
+  height: 132px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  overflow: hidden;
+  border-radius: 13px;
   background: var(--nd-sheen), var(--tone);
-  box-shadow: var(--nd-edge), var(--sh);
+  box-shadow:
+    var(--nd-edge),
+    var(--sh),
+    0 0 38px var(--glow, transparent);
   rotate: -4deg;
   font-family: 'Young Serif', serif;
   font-weight: 400;
@@ -6210,11 +6226,28 @@ button {
   color: var(--nd-q);
 }
 
+.cd-nd-title-q {
+  display: block;
+}
+
+/* A band of white, 45% of the card wide and tilted 12°, that crosses it. */
+.cd-nd-title-sheen {
+  position: absolute;
+  top: -25%;
+  bottom: -25%;
+  left: 0;
+  width: 45%;
+  background: linear-gradient(100deg, transparent, var(--nd-card-shine), transparent);
+  translate: -160% 0;
+  rotate: 12deg;
+  pointer-events: none;
+}
+
 .cd-nd-title-rows {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  width: 156px;
+  gap: 8px;
+  width: 164px;
 }
 
 .cd-nd-title-row {
@@ -6232,6 +6265,13 @@ button {
   box-shadow: inset 0 0 0 1px var(--ln2);
 }
 
+/* The next row and the hidden one are empty, dashed boxes, each with a
+   filled row laid over it that drops in (.cd-nd-title-drop). */
+.cd-nd-title-row-next,
+.cd-nd-title-row-hidden {
+  position: relative;
+}
+
 .cd-nd-title-row-next {
   border: 1.5px dashed var(--acc);
   background: var(--accWash);
@@ -6241,21 +6281,17 @@ button {
   border: 1.5px dashed var(--ln3);
 }
 
+.cd-nd-title-drop {
+  position: absolute;
+  inset: -1.5px;
+  opacity: 0;
+}
+
 .cd-nd-title-face {
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  box-sizing: border-box;
   border-radius: 50%;
-  border: 1.5px dashed var(--ln3);
-}
-
-.cd-nd-title-row-next .cd-nd-title-face {
-  border-color: var(--acc);
-}
-
-.cd-nd-title-row-shown .cd-nd-title-face {
-  border: 0;
   background: color-mix(in oklch, var(--tone) 30%, var(--s));
   box-shadow:
     0 0 0 2px var(--s),
@@ -6263,23 +6299,21 @@ button {
 }
 
 .cd-nd-title-bar {
+  flex: 1;
   height: 8px;
   border-radius: 4px;
-  background: var(--skel);
-}
-
-.cd-nd-title-row-shown .cd-nd-title-bar {
-  flex: 1;
   background: var(--t3);
   opacity: 0.5;
 }
 
 .cd-nd-title-row-next .cd-nd-title-bar {
-  width: 60%;
+  flex: none;
+  width: 72%;
 }
 
 .cd-nd-title-row-hidden .cd-nd-title-bar {
-  width: 45%;
+  flex: none;
+  width: 58%;
 }
 
 .cd-nd-title-meta {
@@ -6356,6 +6390,8 @@ button {
 }
 
 .cd-nd-play {
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6399,6 +6435,18 @@ button {
   outline-offset: 3px;
 }
 
+/* Play's shine: 40% of the button wide, as the start-screen banner's. */
+.cd-nd-play-shine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(100deg, transparent, var(--nd-play-shine), transparent);
+  translate: -120% 0;
+  pointer-events: none;
+}
+
 .cd-nd-title-played {
   margin: 0;
   font-size: 12.5px;
@@ -6421,13 +6469,17 @@ button {
 }
 
 /* The hidden card, which turns over to the poster at the end. Its back is
-   only put down then: the page is not told the poster before. */
+   only put down then: the page is not told the poster before. Rounded as
+   its faces are, so the glow that breathes round it while the game is on,
+   and the ripple a new name sends out of it, are the card's shape: both
+   are played from script on this box (DailyPage.tsx's HiddenCard). */
 .cd-nd-card {
   position: relative;
   flex-shrink: 0;
   width: clamp(64px, 18vw, 104px);
   aspect-ratio: 2 / 3;
   perspective: 1000px;
+  border-radius: 14px;
 }
 
 .cd-nd-card-in {
@@ -6646,25 +6698,77 @@ button.cd-nd-tried-chip::before {
 
 /* ---- the facts ---- */
 
+/* The facts panel, right under the card while the game is on: a head row,
+   "Buy a fact" with its note beside it, over one row of facts. Once three
+   names are showing with nothing bought its ring turns the accent and the
+   note asks (.cd-nd-facts-nudge); the three pulses that come with it, once,
+   are script's. At the end it is About the movie. */
 .cd-nd-facts {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 6px;
+  padding: 9px 12px 10px;
+  box-sizing: border-box;
+  border-radius: 14px;
+  background: var(--s);
+  box-shadow: inset 0 0 0 1px var(--ln2);
+  transition: box-shadow 0.3s ease;
+}
+
+.cd-nd-facts-nudge {
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+
+.cd-nd-facts-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 10px;
 }
 
 .cd-nd-facts-head {
   margin: 0;
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 700;
-  color: var(--t2);
+  color: var(--t);
 }
 
+.cd-nd-facts-note {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--t3);
+}
+
+.cd-nd-facts-nudge .cd-nd-facts-note {
+  color: var(--accText);
+}
+
+/* One row that scrolls sideways, its scrollbar hidden, out to the panel's
+   edges. Its 5px above and below, given back by the margin, keep each
+   fact's hit area and focus ring inside the scroller, which would clip
+   them. Nothing in it shrinks or wraps. */
 .cd-nd-fact-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+  margin: -5px -12px;
+  padding: 5px 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 
+.cd-nd-fact-list::-webkit-scrollbar {
+  display: none;
+}
+
+.cd-nd-fact-list > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* For sale: on the page's ground, so it reads as a button on the panel. */
 .cd-nd-fact {
   position: relative;
   display: flex;
@@ -6674,7 +6778,7 @@ button.cd-nd-tried-chip::before {
   padding: 0 11px;
   border: 0;
   border-radius: 10px;
-  background: var(--s);
+  background: var(--g);
   box-shadow: inset 0 0 0 1px var(--ln3);
   color: var(--t);
   font-size: 13px;
@@ -6696,7 +6800,7 @@ button.cd-nd-tried-chip::before {
 
 .cd-nd-fact-got {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
   gap: 0 6px;
   min-height: 34px;
@@ -7174,59 +7278,6 @@ button.cd-nd-tried-chip::before {
   color: var(--t2);
 }
 
-.cd-nd-bar-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 36px;
-}
-
-.cd-nd-points {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.3;
-  color: var(--t2);
-}
-
-.cd-nd-points-n {
-  font-weight: 700;
-  color: var(--t);
-  font-variant-numeric: tabular-nums;
-}
-
-.cd-nd-nextbtn {
-  position: relative;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 36px;
-  padding: 0 12px 0 14px;
-  border: 0;
-  border-radius: 11px;
-  background: var(--s);
-  box-shadow: inset 0 0 0 1px var(--ln3);
-  color: var(--t);
-  font-size: 13.5px;
-  font-weight: 700;
-  white-space: nowrap;
-  transition:
-    box-shadow 0.15s ease,
-    opacity 0.15s ease;
-}
-
-.cd-nd-nextbtn::before {
-  content: '';
-  position: absolute;
-  inset: -4px 0;
-}
-
-.cd-nd-nextbtn:disabled {
-  opacity: 0.5;
-}
-
 .cd-nd-ask {
   display: flex;
   gap: 8px;
@@ -7258,10 +7309,12 @@ button.cd-nd-tried-chip::before {
   opacity: 1;
 }
 
+/* "Guess · 1,000": the points getting it now would score. */
 .cd-nd-guess {
   flex-shrink: 0;
   height: 48px;
   padding: 0 20px;
+  white-space: nowrap;
   border: 0;
   border-radius: 14px;
   background: var(--acc);
@@ -7309,7 +7362,7 @@ button.cd-nd-tried-chip::before {
   justify-content: flex-end;
 }
 
-.cd-nd-land :is(.cd-nd-msgwrap, .cd-nd-bar-row, .cd-nd-ask) {
+.cd-nd-land :is(.cd-nd-msgwrap, .cd-nd-ask) {
   flex-shrink: 0;
 }
 
@@ -7393,8 +7446,7 @@ button.cd-nd-tried-chip::before {
 }
 
 @media (hover: hover) {
-  .cd-nd-fact:hover:not(:disabled),
-  .cd-nd-nextbtn:hover:not(:disabled) {
+  .cd-nd-fact:hover:not(:disabled) {
     box-shadow: inset 0 0 0 1px var(--acc);
   }
 
@@ -8021,11 +8073,11 @@ button.cd-nd-tried-chip::before {
 @media (forced-colors: active) {
   .cd-nd-step,
   .cd-nd-tried-chip,
+  .cd-nd-facts,
   .cd-nd-fact,
   .cd-nd-fact-got,
   .cd-nd-movies,
   .cd-nd-msg,
-  .cd-nd-nextbtn,
   .cd-nd-input,
   .cd-nd-hits,
   .cd-nd-res,
@@ -8039,9 +8091,10 @@ button.cd-nd-tried-chip::before {
 }
 
 /* With stillness asked for nothing moves: names appear at once, the card
-   does not turn, the preview simply shows, and nothing rises under the
-   pointer. The score's count and the scrolls are script's, which asks
-   for itself. */
+   does not turn, the preview simply shows, the facts panel's ring simply
+   changes, and nothing rises under the pointer. The title screen's
+   motion, the card's glow and ripples, the nudge's pulses, the score's
+   count and the scrolls are script's, which asks for itself. */
 @media (prefers-reduced-motion: reduce) {
   .cd-nd-card-in,
   .cd-nd-row,
@@ -8053,10 +8106,10 @@ button.cd-nd-tried-chip::before {
   .cd-nd-tried-chip,
   .cd-nd-giveup,
   .cd-nd-again,
+  .cd-nd-facts,
   .cd-nd-fact,
   .cd-nd-movies,
   .cd-nd-row-go,
-  .cd-nd-nextbtn,
   .cd-nd-input,
   .cd-nd-guess,
   .cd-nd-play,
@@ -8162,11 +8215,12 @@ button.cd-nd-tried-chip::before {
 /* ---- daily: Movies sheet ---- */
 
 /* The Movies sheet (DailyMoviesSheet.tsx): one showing name's movies on a
-   small Cinedikt map, with the facts the reader has bought drawn on it.
-   A side panel 12px in from the right, top and bottom; on a phone
-   (.cd-msheet-phone, from the screen class in script, so the grabber,
-   the drag and the height all agree with it) a bottom sheet whose height
-   is set inline from the visual viewport. Over the header and the
+   small Cinedikt map, with the facts the reader has bought drawn on it,
+   titles only inside the ranges bought and blank tiles elsewhere. A side
+   panel 12px in from the right, top and bottom; on a phone
+   (.cd-msheet-phone, from the window's width read live in script, so the
+   grabber, the drag and the height all agree with it) a bottom sheet
+   whose height is set inline from the visual viewport. Over the header and the
    floating buttons and under the toast, as the film sheet is.
 
    The scrim is the one colour here that is not the theme's: black at
@@ -8315,82 +8369,6 @@ button.cd-nd-tried-chip::before {
   transition: color 0.15s ease;
 }
 
-/* One line that scrolls sideways, its scrollbar hidden. */
-.cd-msheet-chips {
-  flex-shrink: 0;
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding: 0 14px 9px;
-}
-
-.cd-msheet-chips::-webkit-scrollbar {
-  display: none;
-}
-
-.cd-msheet-chip {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  box-sizing: border-box;
-  height: 34px;
-  padding: 0 11px 0 4px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--s);
-  box-shadow: inset 0 0 0 1.5px var(--ln3);
-  color: var(--t);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  transition:
-    background-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-.cd-msheet-chip-on {
-  background: color-mix(in oklch, var(--tone) 16%, var(--s));
-  box-shadow: inset 0 0 0 1.5px var(--tone);
-}
-
-/* A name the points cannot buy. The person the sheet opened on is
-   disabled too, since nobody can switch them off, and stays at full
-   strength. */
-.cd-msheet-chip-faint {
-  opacity: 0.5;
-}
-
-.cd-msheet-chip:disabled {
-  cursor: default;
-}
-
-.cd-msheet-chip .cd-face {
-  --face: 26px;
-  --face-inset: 0px;
-  --face-r: 7px;
-  font-size: 9.5px;
-  background: color-mix(in oklch, var(--tone) 24%, var(--s));
-}
-
-.cd-msheet-price {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t3);
-  font-variant-numeric: tabular-nums;
-}
-
-/* A finger's size wherever a finger may be — a phone either way up, a
-   tablet, a touch screen — rather than only on the bottom sheet: the row
-   they scroll in would clip a hit area drawn round them, so they are
-   made 40px outright. */
-@media (max-width: 1023.98px), (max-height: 499.98px), (pointer: coarse) {
-  .cd-msheet-chip {
-    height: 40px;
-  }
-}
-
 .cd-msheet-legend {
   flex-shrink: 0;
   margin: 0;
@@ -8491,9 +8469,9 @@ button.cd-nd-tried-chip::before {
   pointer-events: none;
 }
 
-/* A card: lit at full strength, a guessed one at 0.55, the rest faded to
-   0.14 (set inline from dailyMovies.ts's cardOpacity). Today's movie is
-   one of them, drawn the same. */
+/* A card: readable at full strength, a guessed one at 0.55, and a blank
+   tile at 0.3 (set inline from dailyMovies.ts's cardOpacity). Today's
+   movie is one of them, drawn by the same rule. */
 .cd-msheet-card {
   position: absolute;
   display: flex;
@@ -8513,6 +8491,16 @@ button.cd-nd-tried-chip::before {
 
 .cd-msheet-card-picked {
   box-shadow: inset 0 0 0 2px var(--acc), var(--sh);
+}
+
+/* A movie outside the ranges bought: the tile and an empty poster, with
+   nothing written on it, and nothing to press. */
+.cd-msheet-card-blank:disabled {
+  cursor: default;
+}
+
+.cd-msheet-card-blank .cd-msheet-poster {
+  background: var(--skel);
 }
 
 .cd-msheet-poster {
@@ -8683,33 +8671,24 @@ button.cd-nd-tried-chip::before {
   outline-offset: 2px;
 }
 
-/* Inside the row, which scrolls and so clips a ring outside the chip. */
-.cd-msheet-chip:focus-visible {
-  outline: 2px solid var(--acc);
-  outline-offset: -2px;
-}
-
-/* Forced colours drop box-shadow, which would leave the chips and cards
-   as bare text, so there the rings come back as system-colour borders. */
+/* Forced colours drop box-shadow, which would leave the cards as bare
+   text, so there the rings come back as system-colour borders. */
 @media (forced-colors: active) {
   .cd-msheet,
-  .cd-msheet-chip,
   .cd-msheet-card {
     border: 1px solid ButtonText;
   }
 
-  .cd-msheet-chip-on,
   .cd-msheet-card-picked {
     border-width: 2px;
   }
 }
 
-/* A sheet let go short of closing is back at once, and nothing fades or
-   slides as names are switched or cards picked. */
+/* A sheet let go short of closing is back at once, and nothing fades as
+   cards are picked or a range bought turns blank tiles into titles. */
 @media (prefers-reduced-motion: reduce) {
   .cd-msheet-phone,
   .cd-msheet-close,
-  .cd-msheet-chip,
   .cd-msheet-card,
   .cd-msheet-guess {
     transition: none;

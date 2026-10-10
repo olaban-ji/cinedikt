@@ -5,7 +5,6 @@ import type {
   DailyFacts,
   DailyGame,
   DailyGuess,
-  DailyMovie,
   DailyPerson,
   DailySlot,
 } from './api';
@@ -13,6 +12,7 @@ import {
   AGAIN_FAILED,
   BAR_WIDTHS,
   BOARD_TABS,
+  CARD_BOB,
   CARD_TURN_EASE,
   CARD_TURN_MS,
   CAST_HEADING,
@@ -21,19 +21,28 @@ import {
   CHART_LABELS,
   DAILY_START,
   DAY_OVER,
+  DROP_AFTER_MS,
+  DROP_FROM_PX,
+  DROP_GONE_AT,
+  DROP_HOLD_TO,
+  DROP_LANDS,
+  DROP_LOOP_MS,
+  DROP_OVER_PX,
   END_REVEAL_FIRST_MS,
   END_REVEAL_STEP_MS,
   FACE_GROW_EASE,
   FACE_GROW_FROM,
   FACE_GROW_MS,
   FACTS,
+  FACTS_NOTE,
   FACT_COST,
   FACT_ORDER,
   GAME_NAME,
-  GUESS_PLACEHOLDER,
+  GLOW_LIGHTEN,
+  GUESS_FIELD,
   HIT_INSETS,
   HOW_IT_WORKS,
-  LANDSCAPE_QUERY,
+  LANDSCAPE_MAX_H,
   LENGTH_BANDS,
   LIST_CLOSE_MS,
   MESSAGE_FACES,
@@ -42,10 +51,16 @@ import {
   NAME_OUT_MS,
   NAME_RISE_PX,
   NEXT_COST,
+  NEXT_IN_VIEW_GAP,
+  NEXT_IN_VIEW_MS,
   NEXT_MOVIE_IN,
   NEXT_ROW_LABEL,
   NOT_READY,
-  OVERLAP_COST,
+  NUDGE_NAMES,
+  NUDGE_NOTE,
+  NUDGE_PULSES,
+  NUDGE_PULSE_MS,
+  NUDGE_PULSE_PX,
   PEEK_EASE,
   PEEK_FADE_MS,
   PEEK_GROW_FROM,
@@ -56,21 +71,34 @@ import {
   PLAY_HEADING,
   PLAY_HIDE_MS,
   PLAY_LINE,
+  PLAY_SHINE_KEYFRAMES,
   RATING_BANDS,
+  RESULT_AFTER_MS,
+  RESULT_GAP_PX,
   REVEAL_CONFIRM_MS,
+  RIPPLE_EASE,
+  RIPPLE_MS,
+  RIPPLE_PX,
+  RISE_EASE,
+  RISE_FIRST_MS,
+  RISE_MS,
+  RISE_PX,
+  RISE_STEP_MS,
+  SCORE_COUNT_AFTER_MS,
   SCORE_COUNT_MS,
   SEARCH_MIN_CHARS,
   SEARCH_WAIT_MS,
-  SHEET_CHIP_PHONE_H,
   SHEET_CLOSE_PX,
-  SHEET_LIT_TOP,
   SHEET_METRICS,
   SHEET_PHONE_SHARE,
   SHEET_SPRING_EASE,
   SHEET_SPRING_MS,
   SHOW_ANSWER,
+  SHEET_READ_TOP,
   SHOW_ANSWER_SURE,
-  TITLE_HUE,
+  TITLE_GLOW_ALPHA,
+  TITLE_HUES,
+  TITLE_LOOPS,
   TITLE_SCREEN,
   TOASTS,
   UNREACHABLE,
@@ -79,16 +107,20 @@ import {
   WRONG_BASE,
   WRONG_STEP,
   aboutItems,
+  accentGlow,
   affords,
   andList,
   bannerLabel,
   bannerLine,
   betterLine,
+  blankCardLabel,
   boardNote,
   boardRows,
   boardsWanted,
   canNext,
   cardColour,
+  cardGlow,
+  cardRipple,
   castLine,
   castRows,
   chartBars,
@@ -100,15 +132,19 @@ import {
   dailyDayText,
   decadeText,
   dropFailed,
+  dropKeyframes,
   earlyRefusal,
   endRevealDelay,
   factItems,
+  factNudge,
   factValue,
   factsHeading,
   fmtN,
   guessById,
+  guessLabel,
   guessMessage,
   guessOptions,
+  guessPlaceholder,
   guessedIds,
   guessesOf,
   hasFact,
@@ -117,19 +153,19 @@ import {
   isLandscapePhone,
   lastGuess,
   lengthBandText,
+  liveScreen,
   midnightText,
   moveSig,
-  movieLit,
   moviesLabel,
   namesLine,
   newKey,
   newWrongGuess,
   newestGuess,
-  nextButton,
+  nextInView,
   nextSlot,
+  nudgePulse,
   openingRows,
   ord,
-  overlapChip,
   pageHeading,
   pageLine,
   pageSections,
@@ -138,14 +174,19 @@ import {
   pickLine,
   placeText,
   playedText,
-  pointsLine,
+  posterGlow,
+  rangeBought,
+  rangesKey,
   ratingBandText,
   ratingSpan,
   refusalText,
   resultFaces,
   resultKicker,
+  resultScroll,
   resultsMax,
   revealDelays,
+  rippleSlot,
+  scoreAt,
   seenSlots,
   shareMarks,
   shareText,
@@ -160,6 +201,7 @@ import {
   standingText,
   streakAfter,
   streakPill,
+  titleRise,
   todaysPeople,
   toneStyle,
   triedChips,
@@ -265,7 +307,6 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
     nextCost: 100,
     slots: slotsOf({ 0: { via: 'start' } }),
     facts: {},
-    overlaps: [],
     log: [],
     end: null,
     ...over,
@@ -308,7 +349,6 @@ describe('the rules’ prices', () => {
     expect(DAILY_START).toBe(1000);
     expect(CAST_SIZE).toBe(6);
     expect(NEXT_COST).toBe(100);
-    expect(OVERLAP_COST).toBe(250);
     expect(FACT_COST).toEqual({ length: 50, rating: 50, genre: 100, decade: 100, years: 100, director: 250 });
   });
 
@@ -361,7 +401,8 @@ describe('colours', () => {
   it('make a person’s colour from their hue, softer on the dark ground and stronger on paper', () => {
     expect(hueColour(232, 'dark')).toBe('oklch(0.76 0.13 232)');
     expect(hueColour(232, 'light')).toBe('oklch(0.56 0.16 232)');
-    expect(hueColour(TITLE_HUE, 'dark')).toBe('oklch(0.76 0.13 118)');
+    expect(TITLE_HUES).toEqual([118, 205, 345]);
+    expect(hueColour(TITLE_HUES[0], 'dark')).toBe('oklch(0.76 0.13 118)');
   });
 
   it('call a wrong guess cold, warm or hot, in the handoff’s colours for each theme', () => {
@@ -381,6 +422,21 @@ describe('colours', () => {
     for (const bad of ['red', '#2638', 'url(x)', '#26382d; background: url(x)', '', null, undefined]) {
       expect(cardColour(bad)).toBe('var(--c)');
     }
+  });
+
+  it('glow round the hidden card in the poster colour lightened 45% towards white, and nothing else', () => {
+    // #26382d is (38, 56, 45): each channel 45% of the way to 255.
+    expect(GLOW_LIGHTEN).toBe(0.45);
+    expect(posterGlow('#26382d', 0.3)).toBe('rgba(136, 146, 140, 0.3)');
+    expect(posterGlow('#000000', 1)).toBe('rgba(115, 115, 115, 1)');
+    expect(posterGlow('#ffffff', 0.12)).toBe('rgba(255, 255, 255, 0.12)');
+    for (const bad of ['red', '#2638', 'var(--c)', '', null, undefined]) expect(posterGlow(bad, 0.3)).toBeNull();
+    expect(TITLE_GLOW_ALPHA).toBe(0.3);
+  });
+
+  it('draw the accent’s glows in the design’s own rgba, only ever from script', () => {
+    expect(accentGlow(0.2)).toBe('rgba(170, 140, 255, 0.2)');
+    expect(accentGlow(0)).toBe('rgba(170, 140, 255, 0)');
   });
 
   it('give each face without a photo the map’s initials, unique among today’s people', () => {
@@ -489,8 +545,25 @@ describe('the facts', () => {
       'Year 1999',
       'Director Lana Wachowski and Lilly Wachowski',
     ]);
-    expect(factsHeading(false)).toBe('Buy a fact. Each one also marks the map');
+    expect(factsHeading(false)).toBe('Buy a fact');
     expect(factsHeading(true)).toBe('About the movie');
+    expect(FACTS_NOTE).toBe('Each one also marks the map');
+  });
+
+  it('nudge the reader once three names are showing and not one fact has been bought', () => {
+    expect(NUDGE_NAMES).toBe(3);
+    expect(NUDGE_NOTE).toBe('Stuck? A fact narrows it down.');
+    const three = slotsOf({ 0: { via: 'start' }, 1: { via: 'next' }, 2: { via: 'next' } });
+    expect(factNudge(gameOf({ slots: three }))).toBe(true);
+    // Two names are not yet stuck.
+    expect(factNudge(gameOf({ slots: slotsOf({ 0: { via: 'start' }, 1: { via: 'next' } }) }))).toBe(false);
+    // Any fact bought, a length or a director as much as a range, and
+    // the reader has found the facts.
+    expect(factNudge(gameOf({ slots: three, facts: { length: 0 } }))).toBe(false);
+    expect(factNudge(gameOf({ slots: three, facts: { director: [LANA] } }))).toBe(false);
+    expect(factNudge(PLAYING)).toBe(false);
+    // Never once it is over.
+    expect(factNudge(gameOf({ slots: ALL_SHOWN, phase: 'done' }))).toBe(false);
   });
 
   it('leave out what the catalog has nothing for, rather than draw it empty', () => {
@@ -561,7 +634,7 @@ describe('the cast list', () => {
     expect(json).not.toContain('Keanu Reeves');
   });
 
-  it('offers no next row when Next name cannot be pressed', () => {
+  it('offers no next row when the next name cannot be asked for', () => {
     const poor = { ...PLAYING, pts: 100 };
     expect(castRows(poor).map((r) => r.state)).toEqual(['shown', 'shown', 'shown', 'shown', 'hidden', 'hidden']);
     expect(nextSlot(poor)).toBeNull();
@@ -592,15 +665,37 @@ describe('the cast list', () => {
   });
 });
 
-describe('Next name', () => {
-  it('says its price, and says so once everyone is showing', () => {
-    expect(nextButton(PLAYING)).toEqual({ label: 'Next name', price: '−100', can: true });
-    expect(nextButton(gameOf({ slots: ALL_SHOWN }))).toEqual({ label: 'Everyone’s showing', price: '', can: false });
+describe('a name appearing', () => {
+  it('ripples out of the card in the colour of whoever has just joined', () => {
+    const one = gameOf();
+    const two = gameOf({ slots: slotsOf({ 0: { via: 'start' }, 1: { via: 'next' } }), log: [{ type: 'next', cost: 100, slot: 1 }] });
+    expect(rippleSlot(one, two)).toBe(1);
+    // Nothing new, nothing ripples.
+    expect(rippleSlot(two, two)).toBeNull();
   });
 
-  it('cannot be pressed when it would leave no points', () => {
-    expect(nextButton(gameOf({ pts: 100 })).can).toBe(false);
-    expect(nextButton(gameOf({ pts: 101 })).can).toBe(true);
+  it('ripples for the name a wrong guess showed next, not for those it filled in', () => {
+    // Speed fills in the star, slot 5, and then shows slot 1.
+    const after = gameOf({
+      slots: slotsOf({ 0: { via: 'start' }, 1: { via: 'guess' }, 5: { via: 'guess', from: { id: SPEED.guess.id, title: 'Speed' } } }),
+      log: [SPEED],
+    });
+    expect(rippleSlot(gameOf(), after)).toBe(1);
+    // With no one hidden left to show, the last it filled in.
+    const allButStar = slotsOf({ 0: { via: 'start' }, 1: { via: 'next' }, 2: { via: 'next' }, 3: { via: 'next' }, 4: { via: 'next' } });
+    expect(rippleSlot(gameOf({ slots: allButStar }), gameOf({ slots: ALL_SHOWN, log: [SPEED] }))).toBe(5);
+  });
+
+  it('never ripples as the page opens on a game, nor at the end', () => {
+    expect(rippleSlot(null, PLAYING)).toBeNull();
+    expect(rippleSlot(PLAYING, SOLVED)).toBeNull();
+  });
+
+  it('keeps the next row in sight above the guess bar, once the name has settled, with 34px to spare', () => {
+    expect([NEXT_IN_VIEW_MS, NEXT_IN_VIEW_GAP]).toEqual([650, 34]);
+    expect(nextInView(700, 600)).toBe(134);
+    expect(nextInView(566, 600)).toBe(0);
+    expect(nextInView(200, 600)).toBe(0);
   });
 });
 
@@ -640,20 +735,22 @@ describe('a wrong guess', () => {
   });
 });
 
-describe('the points line', () => {
-  it('says what getting it now scores and what the next wrong guess costs', () => {
-    expect(pointsLine(PLAYING)).toEqual({
-      lead: 'Get it now for ',
-      pts: '600',
-      tail: ' points · wrong guess −150',
-      text: 'Get it now for 600 points · wrong guess −150',
-    });
-    expect(pointsLine({ pts: 1000, nextCost: 100 }).text).toBe('Get it now for 1,000 points · wrong guess −100');
+describe('the guess bar', () => {
+  it('says in the field what a miss costs, rising as the misses do', () => {
+    expect(guessPlaceholder({ pts: 1000, nextCost: 100 })).toBe('Name the movie · a miss costs 100');
+    expect(guessPlaceholder(PLAYING)).toBe('Name the movie · a miss costs 150');
+    expect(guessPlaceholder({ pts: 5000, nextCost: 1200 })).toBe('Name the movie · a miss costs 1,200');
   });
 
-  it('says it is the last guess when that guess would end it', () => {
-    expect(pointsLine({ pts: 100, nextCost: 150 }).text).toBe('Last guess, for 100 points');
-    expect(pointsLine({ pts: 150, nextCost: 150 }).text).toBe('Last guess, for 150 points');
+  it('says it is the last guess when the next miss would end the game', () => {
+    expect(guessPlaceholder({ pts: 100, nextCost: 150 })).toBe('Name the movie · last guess');
+    expect(guessPlaceholder({ pts: 150, nextCost: 150 })).toBe('Name the movie · last guess');
+    expect(guessPlaceholder({ pts: 151, nextCost: 150 })).toBe('Name the movie · a miss costs 150');
+  });
+
+  it('puts the points getting it now would score on Guess', () => {
+    expect(guessLabel({ pts: 1000 })).toBe('Guess · 1,000');
+    expect(guessLabel(PLAYING)).toBe('Guess · 600');
   });
 });
 
@@ -723,27 +820,19 @@ describe('the result', () => {
     expect(namesLine(ended([THIRTEENTH, { type: 'out' }], { pts: 0 }))).toBe('You saw 2 of the 6 names');
   });
 
-  it('lists what was paid for: each fact in the row’s order, then the overlaps and the wrong guesses', () => {
+  it('lists what was paid for: each fact in the row’s order, then the wrong guesses', () => {
     const log: DailyEntry[] = [
       { type: 'fact', kind: 'years', cost: 100 },
       { type: 'fact', kind: 'decade', cost: 100 },
-      { type: 'overlap', person: GLORIA.id, cost: 250 },
       THIRTEENTH,
       { ...SPEED, cost: 150 },
     ];
     expect(paidFor(log)).toEqual([
       { label: 'Decade', price: '−100' },
       { label: 'Five-year range', price: '−100' },
-      { label: '1 overlap', price: '−250' },
       { label: '2 wrong guesses', price: '−250' },
     ]);
     expect(paidFor([{ type: 'next', cost: 100, slot: 1 }, { type: 'win' }])).toEqual([]);
-    expect(
-      paidFor([
-        { type: 'overlap', person: GLORIA.id, cost: 250 },
-        { type: 'overlap', person: HUGO.id, cost: 250 },
-      ]),
-    ).toEqual([{ label: '2 overlaps', price: '−500' }]);
     expect(FACT_ORDER.map((k) => FACTS[k].paid)).toEqual(['Length', 'Rating', 'Genre', 'Decade', 'Five-year range', 'Director']);
   });
 
@@ -801,13 +890,11 @@ describe('sharing a result', () => {
         log: [
           { type: 'fact', kind: 'director', cost: 250 },
           { type: 'fact', kind: 'length', cost: 50 },
-          { type: 'overlap', person: GLORIA.id, cost: 250 },
-          { type: 'overlap', person: HUGO.id, cost: 250 },
           THIRTEENTH,
           SPEED,
         ],
       }),
-    ).toBe('4 names, the length range, the director, 2 overlaps and 2 wrong guesses');
+    ).toBe('4 names, the length range, the director and 2 wrong guesses');
   });
 
   it('says a loss as missed or given up, with the squares of the names seen', () => {
@@ -911,10 +998,10 @@ describe('the words', () => {
     expect(HOW_IT_WORKS.heading).toBe('How it works');
     expect(HOW_IT_WORKS.items).toEqual([
       'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
-      'Guess whenever you like. Each wrong guess, or each tap on Next name, shows another person, working up to the star.',
+      'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
       'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
       'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade and then a five-year range, or the director.',
-      'Tap Movies on any name to see their movies on a Cinedikt map. Facts you buy mark the map, and for 250 you can add another name to light only the movies they share.',
+      'Tap Movies on any name to see their movies on a Cinedikt map. Titles only show inside the ranges you’ve bought.',
       'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
     ]);
     expect(HOW_IT_WORKS.then).toBe(
@@ -934,7 +1021,7 @@ describe('the words', () => {
   });
 
   it('for the field, Show the answer, the toasts and the countdown are the handoff’s', () => {
-    expect(GUESS_PLACEHOLDER).toBe('Name the movie');
+    expect(GUESS_FIELD).toBe('Name the movie');
     expect([SHOW_ANSWER, SHOW_ANSWER_SURE]).toEqual(['Show the answer', 'Sure? Show it']);
     expect(TOASTS).toEqual({
       tried: 'You’ve already tried that one',
@@ -968,94 +1055,88 @@ describe('the banner’s line', () => {
 });
 
 describe('the Movies sheet', () => {
-  const movie = (over: Partial<DailyMovie> = {}): DailyMovie => ({
-    id: 'tt0106977',
-    title: 'The Fugitive',
-    year: 1993,
-    rating: 7.8,
-    genres: ['Action', 'Crime', 'Drama'],
-    on: [0],
-    ...over,
-  });
-  const JOE_ONLY = { slots: [0], director: false };
-
-  it('lights the years bought, the five years over the decade', () => {
+  it('takes in the years bought, the five years over the decade', () => {
     expect(yearSpan({})).toBeNull();
     expect(yearSpan({ decade: 1990 })).toEqual([1990, 1999]);
     expect(yearSpan({ decade: 1990, years: 1995 })).toEqual([1995, 1999]);
   });
 
-  it('lights the rating band bought, up to but not including its ceiling', () => {
+  it('takes in the rating band bought, up to but not including its ceiling', () => {
     expect(ratingSpan({})).toBeNull();
     expect(ratingSpan({ rating: 1 })).toEqual([6, 7]);
     expect(ratingSpan({ rating: 3 })).toEqual([8, Infinity]);
-    expect(movieLit(movie({ rating: 6.9 }), JOE_ONLY, { rating: 1 })).toBe(true);
-    expect(movieLit(movie({ rating: 7.0 }), JOE_ONLY, { rating: 1 })).toBe(false);
-    expect(movieLit(movie({ rating: 9.3 }), JOE_ONLY, { rating: 3 })).toBe(true);
   });
 
-  it('lights a card every selected person is on, and a director on it once the chip is on', () => {
-    expect(movieLit(movie(), JOE_ONLY, {})).toBe(true);
-    expect(movieLit(movie(), { slots: [0, 1], director: false }, {})).toBe(false);
-    expect(movieLit(movie({ on: [0, 1] }), { slots: [0, 1], director: false }, {})).toBe(true);
-    expect(movieLit(movie(), { slots: [0], director: true }, {})).toBe(false);
-    expect(movieLit(movie({ dir: true }), { slots: [0], director: true }, {})).toBe(true);
+  it('counts the decade, the years, a rating band and the genre as ranges, and never the length or the director', () => {
+    expect(rangeBought({})).toBe(false);
+    expect(rangeBought({ length: 2, director: [LANA] })).toBe(false);
+    for (const facts of [{ decade: 1990 }, { decade: 1990, years: 1995 }, { rating: 0 }, { genre: [] }]) {
+      expect(rangeBought(facts), JSON.stringify(facts)).toBe(true);
+    }
   });
 
-  it('lights only cards inside the years, and with every one of the answer’s genres', () => {
-    expect(movieLit(movie(), JOE_ONLY, { decade: 1990 })).toBe(true);
-    expect(movieLit(movie(), JOE_ONLY, { decade: 1990, years: 1995 })).toBe(false);
-    expect(movieLit(movie(), JOE_ONLY, { genre: ['Action', 'Sci-Fi'] })).toBe(false);
-    expect(movieLit(movie({ genres: ['Sci-Fi', 'Action'] }), JOE_ONLY, { genre: ['Action', 'Sci-Fi'] })).toBe(true);
+  it('asks for the movies again whenever a range is bought, and not for anything else', () => {
+    const none = rangesKey({});
+    expect(rangesKey({ length: 2, director: [LANA] })).toBe(none);
+    const keys = [none, rangesKey({ decade: 1990 }), rangesKey({ decade: 1990, years: 1995 }), rangesKey({ rating: 0 }), rangesKey({ genre: [] })];
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('is titled for its person, or for everyone selected', () => {
-    expect(sheetTitle(['Joe Pantoliano'])).toBe('Joe Pantoliano’s movies');
-    expect(sheetTitle(['Joe Pantoliano', 'Gloria Foster'])).toBe('Movies with Joe Pantoliano and Gloria Foster');
-    expect(sheetSub(6, 14)).toBe('6 of 14 movies lit · on Cinedikt');
-    expect(sheetSub(1, 1)).toBe('1 of 1 movie lit · on Cinedikt');
+  it('is titled for its person', () => {
+    expect(sheetTitle('Joe Pantoliano')).toBe('Joe Pantoliano’s movies');
   });
 
-  it('says which facts are on the map, or what buying them would do, and that today’s movie is unmarked', () => {
-    expect(sheetLegend({ decade: 1990, rating: 3, genre: ['Action', 'Sci-Fi'] })).toBe(
-      'Your facts are on the map: 1990s · rated 8.0 or higher · Action, Sci-Fi. Today’s movie is one of these cards, but it isn’t marked.',
+  it('counts its movies, and once a range is bought how many of them can be read', () => {
+    expect(sheetSub(0, 13, false)).toBe('13 movies · on Cinedikt');
+    expect(sheetSub(5, 13, true)).toBe('5 of 13 movies readable · on Cinedikt');
+    expect(sheetSub(1, 1, true)).toBe('1 of 1 movie readable · on Cinedikt');
+    expect(sheetSub(0, 1, false)).toBe('1 movie · on Cinedikt');
+  });
+
+  it('says where titles show, and once ranges are bought which, and that today’s movie is unmarked', () => {
+    expect(sheetLegend({})).toBe(
+      'Titles only show inside the ranges you buy: the decade, the years, a rating range or the genre. Today’s movie is one of these cards.',
     );
-    expect(sheetLegend({ decade: 1990, years: 1995, length: 2 })).toBe(
-      'Your facts are on the map: 1995–1999. Today’s movie is one of these cards, but it isn’t marked.',
+    // A length or a director is not a range: nothing more can be read.
+    expect(sheetLegend({ length: 2, director: [LANA] })).toBe(sheetLegend({}));
+    expect(sheetLegend({ decade: 1990, rating: 3 })).toBe(
+      'Titles show inside your ranges: 1990s · rated 8.0 or higher. Today’s movie is one of these cards, but it isn’t marked.',
     );
-    expect(sheetLegend({ length: 2 })).toBe(
-      'Facts you buy mark this map. Add another name to light only the movies they share. Today’s movie is one of these cards, but it isn’t marked.',
+    expect(sheetLegend({ decade: 1990, years: 1995, genre: ['Action', 'Sci-Fi'] })).toBe(
+      'Titles show inside your ranges: 1995–1999 · Action, Sci-Fi. Today’s movie is one of these cards, but it isn’t marked.',
     );
   });
 
   it('writes the lowest rating band in lower case inside the legend’s sentence, and as a heading in the facts row', () => {
     expect(sheetLegend({ rating: 0 })).toBe(
-      'Your facts are on the map: rated below 6.0. Today’s movie is one of these cards, but it isn’t marked.',
+      'Titles show inside your ranges: rated below 6.0. Today’s movie is one of these cards, but it isn’t marked.',
     );
-    expect(sheetLegend({ decade: 1980, rating: 0 })).not.toContain('Below');
     expect(factValue('rating', { rating: 0 })).toBe('Below 6.0');
   });
 
-  it('says how to guess from it, and what a picked card is', () => {
-    expect(sheetHint(150)).toBe('Tap a movie to guess it. A wrong guess costs 150.');
-    expect(pickLine({ year: 1993, rating: 7.8 })).toBe('1993 · IMDb 7.8');
+  it('says how to guess from it once there is something to read, and before that where the ranges are', () => {
+    expect(sheetHint(150, true)).toBe('Tap a movie to guess it. A wrong guess costs 150.');
+    expect(sheetHint(1200, true)).toBe('Tap a movie to guess it. A wrong guess costs 1,200.');
+    expect(sheetHint(150, false)).toBe('Buy a range to read this map. The facts are under the card.');
+  });
+
+  it('names a readable card for a screen reader, and a blank one by its year alone', () => {
+    const fugitive = { title: 'The Fugitive', year: 1993, rating: 7.8 };
+    expect(pickLine(fugitive)).toBe('1993 · IMDb 7.8');
     expect(pickLine({ year: 0, rating: 7 })).toBe('IMDb 7.0');
-    expect(sheetCardLabel(movie(), true, false)).toBe('The Fugitive, 1993, rated 7.8');
-    expect(sheetCardLabel(movie(), false, true)).toBe('The Fugitive, 1993, rated 7.8, already tried, dimmed');
+    expect(sheetCardLabel(fugitive, false)).toBe('The Fugitive, 1993, rated 7.8');
+    expect(sheetCardLabel(fugitive, true)).toBe('The Fugitive, 1993, rated 7.8, already tried');
+    expect(blankCardLabel(1985, false)).toBe('A movie from 1985. Buy a range to read it');
+    expect(blankCardLabel(1985, true)).toBe('A movie from 1985, outside your ranges');
   });
 
-  it('sells another name’s overlap, and makes it theirs to switch after', () => {
-    expect(overlapChip('Gloria Foster', false)).toEqual({ label: '+ Gloria Foster', price: '−250' });
-    expect(overlapChip('Gloria Foster', true)).toEqual({ label: 'Gloria Foster', price: '' });
-  });
-
-  it('lays its map out at the handoff’s small metrics', () => {
+  it('lays its map out at the handoff’s small metrics, and opens on the first readable card', () => {
     expect(SHEET_METRICS.desktop).toEqual({ cardW: 112, cardH: 42, railW: 44 });
     expect(SHEET_METRICS.phone).toEqual({ cardW: 100, cardH: 42, railW: 40 });
     expect([SHEET_METRICS.gap, SHEET_METRICS.padTop, SHEET_METRICS.padBottom, SHEET_METRICS.gapMark]).toEqual([4, 3, 3, 4]);
     expect(SHEET_METRICS.axisH).toBe(26);
     expect(SHEET_METRICS.labels).toEqual([4, 5, 6, 7, 8, 9]);
-    expect(SHEET_LIT_TOP).toBe(36);
+    expect(SHEET_READ_TOP).toBe(36);
   });
 });
 
@@ -1181,7 +1262,6 @@ describe('a move', () => {
     expect(moveSig({ kind: 'next' }, 3)).not.toBe(moveSig({ kind: 'next' }, 4));
     expect(moveSig({ kind: 'buy', fact: 'decade' }, 3)).toBe('3:buy:decade');
     expect(moveSig({ kind: 'buy', fact: 'decade' }, 3)).not.toBe(moveSig({ kind: 'buy', fact: 'years' }, 3));
-    expect(moveSig({ kind: 'overlap', person: GLORIA.id }, 3)).toBe('3:overlap:nm0287825');
     expect(moveSig({ kind: 'guess', film: 'tt1' }, 3)).toBe('3:guess:tt1');
     expect(moveSig({ kind: 'reveal' }, 5)).toBe('5:reveal:');
   });
@@ -1193,9 +1273,8 @@ describe('a refused move', () => {
     expect(refusalText('known', 'guess')).toBe('You’ve already tried that one');
     expect(refusalText('known', 'buy')).toBe('You already have that fact.');
     expect(refusalText('known', 'next')).toBe('Everyone’s showing.');
-    expect(refusalText('known', 'overlap')).toBe('You’ve already added them.');
     expect(refusalText('bad', 'buy')).toBe('Buy the decade first.');
-    expect(refusalText('bad', 'overlap')).toBe('That name isn’t showing yet.');
+    expect(refusalText('bad', 'movies')).toBe('That name isn’t showing yet.');
     expect(refusalText('day', 'guess')).toBe(DAY_OVER);
   });
 
@@ -1227,7 +1306,8 @@ describe('the Daily’s motion', () => {
     expect([PEEK_REST_MS, PEEK_FADE_MS, PEEK_GROW_MS, PEEK_GROW_FROM, PEEK_LEFT]).toEqual([160, 160, 220, 0.92, 54]);
     expect(PEEK_EASE).toBe('cubic-bezier(0.2, 0.9, 0.3, 1.2)');
     expect([CARD_TURN_MS, CARD_TURN_EASE]).toEqual([800, 'cubic-bezier(0.4, 0, 0.2, 1)']);
-    expect(SCORE_COUNT_MS).toBe(1100);
+    expect([RESULT_AFTER_MS, RESULT_GAP_PX]).toEqual([1400, 12]);
+    expect([SCORE_COUNT_AFTER_MS, SCORE_COUNT_MS]).toEqual([1500, 1100]);
     expect(REVEAL_CONFIRM_MS).toBe(3500);
     expect([SHEET_PHONE_SHARE, SHEET_CLOSE_PX, SHEET_SPRING_MS]).toEqual([0.9, 90, 250]);
     expect(SHEET_SPRING_EASE).toBe('cubic-bezier(0.2, 0.9, 0.3, 1)');
@@ -1240,6 +1320,143 @@ describe('the Daily’s motion', () => {
     expect(countUp(600, SCORE_COUNT_MS)).toBe(600);
     expect(countUp(600, 5000)).toBe(600);
   });
+
+  it('holds the score at nought while the card turns and the page reaches the result, then counts', () => {
+    expect(scoreAt(600, 0)).toBe(0);
+    expect(scoreAt(600, 1499)).toBe(0);
+    expect(scoreAt(600, 1500)).toBe(0);
+    expect(scoreAt(600, 1500 + 550)).toBe(525);
+    expect(scoreAt(600, 1500 + 1100)).toBe(600);
+    expect(scoreAt(600, 60_000)).toBe(600);
+  });
+
+  it('brings the result up 12px under the page’s top, and never above the top', () => {
+    // The result 900px down a page scrolled 0, the page starting 64px
+    // down the window.
+    expect(resultScroll(0, 964, 64)).toBe(888);
+    expect(resultScroll(300, 664, 64)).toBe(888);
+    expect(resultScroll(0, 70, 64)).toBe(0);
+  });
+});
+
+describe('the title screen’s motion', () => {
+  it('rises each part in turn: 14px over 560ms on the settle curve, 80ms in and 90ms apart, held out of sight until then', () => {
+    expect([RISE_PX, RISE_MS, RISE_EASE, RISE_FIRST_MS, RISE_STEP_MS]).toEqual([14, 560, 'cubic-bezier(0.16, 1, 0.3, 1)', 80, 90]);
+    expect([0, 1, 6].map((i) => titleRise(i).options.delay)).toEqual([80, 170, 620]);
+    expect(titleRise(0).keyframes).toEqual([
+      { opacity: 0, translate: '0 14px' },
+      { opacity: 1, translate: '0 0' },
+    ]);
+    expect(titleRise(3).options).toMatchObject({ duration: 560, easing: RISE_EASE, fill: 'backwards' });
+  });
+
+  it('floats the card 7px, turning it from −4° to −2°, 3.2s each way, and bobs its “?” 4px, 1.6s each way', () => {
+    expect(TITLE_LOOPS.float.keyframes).toEqual([
+      { translate: '0 0', rotate: '-4deg' },
+      { translate: '0 -7px', rotate: '-2deg' },
+    ]);
+    expect(TITLE_LOOPS.float.options).toEqual({ duration: 3200, direction: 'alternate', iterations: Infinity, easing: 'ease-in-out' });
+    expect(TITLE_LOOPS.bob.keyframes).toEqual([{ translate: '0 0' }, { translate: '0 -4px' }]);
+    expect(TITLE_LOOPS.bob.options).toMatchObject({ duration: 1600, direction: 'alternate', iterations: Infinity });
+  });
+
+  it('crosses the card with a shine every 4.2s from 900ms, and Play with the banner’s every 3.6s from 1.4s', () => {
+    expect(TITLE_LOOPS.sheen.options).toEqual({ duration: 4200, delay: 900, iterations: Infinity, easing: 'ease-in-out' });
+    expect(TITLE_LOOPS.sheen.keyframes.map((k) => k.offset)).toEqual([0, 0.3, 1]);
+    expect(TITLE_LOOPS.shine.options).toEqual({ duration: 3600, delay: 1400, iterations: Infinity, easing: 'ease-in-out' });
+    expect(TITLE_LOOPS.shine.keyframes).toBe(PLAY_SHINE_KEYFRAMES);
+    expect(PLAY_SHINE_KEYFRAMES.map((k) => [k.translate, k.offset])).toEqual([
+      ['-120% 0', 0],
+      ['320% 0', 0.28],
+      ['320% 0', 1],
+    ]);
+  });
+
+  it('pulses the next row in a 5px ring of the accent, 1.1s each way', () => {
+    expect(TITLE_LOOPS.pulse.keyframes).toEqual([
+      { boxShadow: '0 0 0 0 rgba(170, 140, 255, 0)' },
+      { boxShadow: '0 0 0 5px rgba(170, 140, 255, 0.2)' },
+    ]);
+    expect(TITLE_LOOPS.pulse.options).toMatchObject({ duration: 1100, direction: 'alternate', iterations: Infinity });
+  });
+
+  it('drops a filled row into the next and hidden rows on a 6s loop from 700ms, landing at 24% and 52%', () => {
+    expect([DROP_LOOP_MS, DROP_AFTER_MS, DROP_FROM_PX, DROP_OVER_PX]).toEqual([6000, 700, 28, 3]);
+    expect([...DROP_LANDS]).toEqual([0.24, 0.52]);
+    expect([DROP_HOLD_TO, DROP_GONE_AT]).toEqual([0.84, 0.94]);
+    for (const [name, land] of [['drop1', 0.24], ['drop2', 0.52]] as const) {
+      expect(TITLE_LOOPS[name].keyframes).toEqual(dropKeyframes(land));
+      expect(TITLE_LOOPS[name].options).toEqual({ duration: 6000, delay: 700, iterations: Infinity, easing: 'ease-out' });
+    }
+    const frames = dropKeyframes(0.24);
+    // Out of sight 28px up until just before it lands; 3px past; settled;
+    // held to 84%; gone by 94%.
+    expect(frames.map((k) => [k.opacity, k.translate])).toEqual([
+      [0, '0 -28px'],
+      [0, '0 -28px'],
+      [1, '0 3px'],
+      [1, '0 0'],
+      [1, '0 0'],
+      [0, '0 0'],
+      [0, '0 0'],
+    ]);
+    expect(frames.map((k) => k.offset)).toEqual([0, 0.14, 0.24, 0.28, 0.84, 0.94, 1]);
+    expect(dropKeyframes(0.52).map((k) => k.offset)).toEqual([0, 0.42, 0.52, 0.56, 0.84, 0.94, 1]);
+  });
+});
+
+describe('the hidden card’s motion', () => {
+  it('breathes a glow in the lightened poster colour, 16px at 12% to 34px at 42%, 2.6s each way', () => {
+    const glow = cardGlow('#26382d')!;
+    expect(glow.keyframes).toEqual([
+      { boxShadow: '0 0 16px 1px rgba(136, 146, 140, 0.12)' },
+      { boxShadow: '0 0 34px 8px rgba(136, 146, 140, 0.42)' },
+    ]);
+    expect(glow.options).toEqual({ duration: 2600, direction: 'alternate', iterations: Infinity, easing: 'ease-in-out' });
+    expect(cardGlow('not a colour')).toBeNull();
+  });
+
+  it('bobs its “?” 4px, 1.8s each way', () => {
+    expect(CARD_BOB.keyframes).toEqual([{ translate: '0 0' }, { translate: '0 -4px' }]);
+    expect(CARD_BOB.options).toMatchObject({ duration: 1800, direction: 'alternate', iterations: Infinity });
+  });
+
+  it('sends a ripple of a new name’s colour 22px out over 850ms', () => {
+    expect([RIPPLE_MS, RIPPLE_PX, RIPPLE_EASE]).toEqual([850, 22, 'cubic-bezier(0.2, 0.8, 0.2, 1)']);
+    expect(cardRipple('oklch(0.76 0.13 205)')).toEqual({
+      keyframes: [{ boxShadow: '0 0 0 0 oklch(0.76 0.13 205)' }, { boxShadow: '0 0 0 22px transparent' }],
+      options: { duration: 850, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+    });
+  });
+
+  it('pulses the facts panel three times, 900ms each, a 12px ring of the accent fading as it spreads', () => {
+    expect([NUDGE_PULSE_MS, NUDGE_PULSES, NUDGE_PULSE_PX]).toEqual([900, 3, 12]);
+    expect(nudgePulse('oklch(0.74 0.15 295)')).toEqual({
+      keyframes: [
+        { boxShadow: 'inset 0 0 0 1px oklch(0.74 0.15 295), 0 0 0 0 rgba(170, 140, 255, 0.45)' },
+        { boxShadow: 'inset 0 0 0 1px oklch(0.74 0.15 295), 0 0 0 12px rgba(170, 140, 255, 0)' },
+      ],
+      options: { duration: 900, iterations: 3, easing: 'ease-out' },
+    });
+  });
+
+  it('keeps the panel’s edge in the theme’s own accent through the pulses, the light theme’s darker one too', () => {
+    const light = nudgePulse('oklch(0.5 0.2 295)');
+    // Only the ring spreading out is the glow's lavender, whatever the theme.
+    const edge = 'inset 0 0 0 1px oklch(0.5 0.2 295), ';
+    expect(light.keyframes.map((f) => f.boxShadow)).toEqual([
+      `${edge}0 0 0 0 ${accentGlow(0.45)}`,
+      `${edge}0 0 0 12px ${accentGlow(0)}`,
+    ]);
+    expect(light.options).toEqual({ duration: 900, iterations: 3, easing: 'ease-out' });
+  });
+
+  it('draws the edge in the glow’s colour when the accent cannot be read', () => {
+    expect(nudgePulse('').keyframes.map((f) => f.boxShadow)).toEqual([
+      'inset 0 0 0 1px rgba(170, 140, 255, 1), 0 0 0 0 rgba(170, 140, 255, 0.45)',
+      'inset 0 0 0 1px rgba(170, 140, 255, 1), 0 0 0 12px rgba(170, 140, 255, 0)',
+    ]);
+  });
 });
 
 describe('touch', () => {
@@ -1249,17 +1466,34 @@ describe('touch', () => {
       showAnswer: '-6px 0',
       fact: '-5px -3px',
       movies: '-5px -2px',
-      next: '-4px 0',
       tab: '-7px 0',
     });
-    expect(SHEET_CHIP_PHONE_H).toBe(40);
   });
 
   it('takes a landscape phone as under 520px tall and wider than tall', () => {
+    expect(LANDSCAPE_MAX_H).toBe(520);
     expect(isLandscapePhone(844, 390)).toBe(true);
     expect(isLandscapePhone(390, 844)).toBe(false);
     expect(isLandscapePhone(1280, 600)).toBe(false);
-    expect(LANDSCAPE_QUERY).toBe('(max-height: 519.98px) and (orientation: landscape)');
+  });
+});
+
+describe('the screen, read live', () => {
+  it('is a phone under 640px wide, whatever its height', () => {
+    expect(liveScreen(375, 540).phone).toBe(true);
+    expect(liveScreen(639, 1000).phone).toBe(true);
+    expect(liveScreen(640, 400).phone).toBe(false);
+  });
+
+  it('is a landscape phone under 520px tall and wider than tall, and says so as the phone turns', () => {
+    expect(liveScreen(844, 390)).toMatchObject({ phone: false, land: true });
+    expect(liveScreen(390, 844)).toMatchObject({ phone: true, land: false });
+  });
+
+  it('carries the visual viewport’s height for the phone sheet, the window’s where there is none', () => {
+    expect(liveScreen(375, 667, 420).viewH).toBe(420);
+    expect(liveScreen(375, 667).viewH).toBe(667);
+    expect(liveScreen(375, 667, 0).viewH).toBe(667);
   });
 });
 
@@ -1280,8 +1514,11 @@ describe('the Daily’s words', () => {
       NEXT_ROW_LABEL,
       moviesLabel('Joe Pantoliano'),
       ...guessMessage(THIRTEENTH.guess, PLAYING).chips,
-      pointsLine(PLAYING).text,
-      pointsLine({ pts: 100, nextCost: 150 }).text,
+      guessPlaceholder(PLAYING),
+      guessPlaceholder({ pts: 100, nextCost: 150 }),
+      guessLabel(PLAYING),
+      FACTS_NOTE,
+      NUDGE_NOTE,
       resultKicker(SOLVED),
       resultKicker(lost),
       namesLine(SOLVED),
@@ -1293,8 +1530,12 @@ describe('the Daily’s words', () => {
       boardNote('week', 2),
       sheetLegend({}),
       sheetLegend({ decade: 1990 }),
-      sheetSub(1, 2),
-      sheetHint(150),
+      sheetSub(1, 2, true),
+      sheetSub(1, 2, false),
+      sheetHint(150, true),
+      sheetHint(150, false),
+      blankCardLabel(1993, true),
+      blankCardLabel(1993, false),
       bannerLabel(143, null),
       bannerLabel(143, SOLVED),
       ...['points', 'known', 'bad', 'unknown', 'day', 'done', 'cookie', 'busy', 'not-ready', null].map((r) =>
@@ -1313,8 +1554,8 @@ describe('the Daily’s words', () => {
 });
 
 describe('the game page', () => {
-  it('puts the cast before the facts while the game is on, and the result, the leaderboard and a heading before it once over', () => {
-    expect(pageSections(false)).toEqual(['top', 'cast', 'facts']);
+  it('puts the facts right under the card while the game is on, and the result, the leaderboard and a heading before the cast once over', () => {
+    expect(pageSections(false)).toEqual(['top', 'facts', 'cast']);
     expect(pageSections(true)).toEqual(['top', 'about', 'result', 'board', 'castHead', 'cast']);
   });
 
@@ -1386,11 +1627,6 @@ describe('a move the server would refuse', () => {
     expect(earlyRefusal(PLAYING, { kind: 'buy', fact: 'decade' })).toBe('You already have that fact.');
     expect(earlyRefusal(gameOf(), { kind: 'buy', fact: 'years' })).toBe('Buy the decade first.');
     expect(earlyRefusal(gameOf({ pts: 250 }), { kind: 'buy', fact: 'director' })).toBe('Not enough points for that.');
-    expect(earlyRefusal(gameOf({ overlaps: [JOE.id] }), { kind: 'overlap', person: JOE.id })).toBe(
-      'You’ve already added them.',
-    );
-    expect(earlyRefusal(gameOf(), { kind: 'overlap', person: KEANU.id })).toBe('That name isn’t showing yet.');
-    expect(earlyRefusal(gameOf({ pts: 250 }), { kind: 'overlap', person: JOE.id })).toBe('Not enough points for that.');
     expect(earlyRefusal(PLAYING, { kind: 'guess', film: THIRTEENTH.guess.id })).toBe('You’ve already tried that one');
   });
 
@@ -1398,7 +1634,6 @@ describe('a move the server would refuse', () => {
     expect(earlyRefusal(gameOf(), { kind: 'next' })).toBe('');
     expect(earlyRefusal(PLAYING, { kind: 'buy', fact: 'years' })).toBe('');
     expect(earlyRefusal(gameOf({ pts: 51 }), { kind: 'buy', fact: 'length' })).toBe('');
-    expect(earlyRefusal(gameOf(), { kind: 'overlap', person: JOE.id })).toBe('');
     expect(earlyRefusal(PLAYING, { kind: 'guess', film: MATRIX.id })).toBe('');
     // A wrong guess is never refused for its price: one the points cannot
     // cover ends the game instead. Nor is giving up.

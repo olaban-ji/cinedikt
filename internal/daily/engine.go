@@ -15,7 +15,6 @@ const (
 	KindDecade   = "decade"
 	KindYears    = "years"
 	KindDirector = "director"
-	KindOverlap  = "overlap"
 	KindGuess    = "guess"
 	KindReveal   = "reveal"
 )
@@ -59,7 +58,7 @@ type Move struct {
 	Seq  int
 	Key  string
 	Kind string
-	// Arg is the person an overlap adds, or the movie guessed.
+	// Arg is the movie guessed.
 	Arg  string
 	Cost int
 	// Guess is what a wrong guess learned, worked out when it was made,
@@ -130,9 +129,6 @@ type State struct {
 	Pts int
 	// Facts are the facts bought, by kind.
 	Facts map[string]bool
-	// Overlaps are the people added to the Movies sheets, by id, in the
-	// order bought.
-	Overlaps []string
 	// Wrong is how many wrong guesses there have been.
 	Wrong int
 	// Done is a game that has ended, Won by naming the answer, GaveUp by
@@ -178,9 +174,6 @@ func (s *State) Step(p *Puzzle, m Move) {
 	case IsFact(m.Kind):
 		s.Pts -= m.Cost
 		s.Facts[m.Kind] = true
-	case m.Kind == KindOverlap:
-		s.Pts -= m.Cost
-		s.Overlaps = append(s.Overlaps, m.Arg)
 	case m.Kind == KindGuess:
 		s.guessed[m.Arg] = true
 		if m.Arg == p.Answer.ID {
@@ -216,8 +209,11 @@ func (s *State) Step(p *Puzzle, m Move) {
 		// nothing, shows nothing and has no line in the log. The game
 		// still replays, and the move still counts in seq, so the page
 		// can go on from it. None should ever be met: Apply refuses
-		// them, the moves table's check refuses them, and the old game's
-		// moves went with its tables when meta.sql dropped them.
+		// them, the moves table's check refuses them, the old game's
+		// moves went with its tables when meta.sql dropped them, and the
+		// test games that bought an overlap, Name Drop's first way of
+		// combining two names, went when meta.sql took it out of the
+		// check.
 		return
 	}
 	if s.Done && !s.Won {
@@ -256,9 +252,6 @@ func (s *State) Seen() int {
 // Guessed is whether a movie has been guessed.
 func (s *State) Guessed(tconst string) bool { return s.guessed[tconst] }
 
-// Overlapped is whether a person has been added to the Movies sheets.
-func (s *State) Overlapped(nconst string) bool { return slices.Contains(s.Overlaps, nconst) }
-
 // NextCost is what the next wrong guess costs.
 func (s *State) NextCost() int { return NextWrong(s.Wrong) }
 
@@ -291,14 +284,6 @@ func Apply(p *Puzzle, s *State, r Request, looked *Looked) (Move, error) {
 			return Move{}, ErrBad
 		}
 		m.Cost = factCost[r.Kind]
-	case r.Kind == KindOverlap:
-		if !s.Shown(p.SlotOf(r.Arg)) {
-			return Move{}, ErrBad
-		}
-		if s.Overlapped(r.Arg) {
-			return Move{}, ErrKnown
-		}
-		m.Cost = OverlapCost
 	case r.Kind == KindGuess:
 		if s.guessed[r.Arg] {
 			return Move{}, ErrKnown

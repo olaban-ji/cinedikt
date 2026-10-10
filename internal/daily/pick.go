@@ -220,9 +220,9 @@ func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []
 	// reads every one's top MaxSheet together, so a movie of someone's
 	// that is below their own cap can be there because another of the
 	// six is on it and their cap let it in: it goes on that one's sheet
-	// only. On the first's, with only them showing on its card, it would
-	// say that someone hidden is in it, and a sheet run past MaxSheet
-	// would say that such cards were there to find.
+	// only. On the first's it would be there only because someone else of
+	// the six is in it, and a sheet run past MaxSheet would say that such
+	// cards were there to find.
 	first := func(i int) int {
 		if movies[i].ID == a.ID {
 			return 0

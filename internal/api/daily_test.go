@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"net/http/cookiejar"
@@ -649,9 +650,6 @@ func TestChangesNeedJSONAndTheCookie(t *testing.T) {
 		"no seq":                  {"next", map[string]any{"key": "abcdefgh-1"}},
 		"a negative seq":          {"next", map[string]any{"key": "abcdefgh-2", "seq": -1}},
 		"no kind":                 {"buy", map[string]any{"key": "abcdefgh-3", "seq": 0}},
-		"no person":               {"overlap", map[string]any{"key": "abcdefgh-4", "seq": 0}},
-		"a person by name":        {"overlap", map[string]any{"key": "abcdefgh-5", "seq": 0, "person": "Joe Pantoliano"}},
-		"a person by a title id":  {"overlap", map[string]any{"key": "abcdefgh-6", "seq": 0, "person": "tt0133093"}},
 		"a movie by a TMDb id":    {"guess", map[string]any{"key": "abcdefgh-7", "seq": 0, "film": "603"}},
 		"a movie by a person id":  {"guess", map[string]any{"key": "abcdefgh-8", "seq": 0, "film": "nm0001592"}},
 		"a buy of a trailer":      {"buy", map[string]any{"key": "abcdefgh-9", "seq": 0, "kind": "trailer"}},
@@ -667,6 +665,10 @@ func TestChangesNeedJSONAndTheCookie(t *testing.T) {
 	}
 	if r := b.post("/daily/142/flip", map[string]any{"key": "abcdefgh-f", "seq": 0, "card": "c4"}); r.status != http.StatusNotFound {
 		t.Errorf("the old game's flip: %d %s", r.status, r.raw)
+	}
+	// The overlap had an address of its own, which is gone as the flip's is.
+	if r := b.post("/daily/142/overlap", map[string]any{"key": "abcdefgh-g", "seq": 0, "person": "nm0001592"}); r.status != http.StatusNotFound {
+		t.Errorf("the overlap: %d %s", r.status, r.raw)
 	}
 	big := b.do(http.MethodPost, "/daily/142/guess", "application/json",
 		[]byte(`{"key":"abcdefgh","seq":0,"film":"`+strings.Repeat("t", dailyBody)+`"}`))
@@ -716,8 +718,8 @@ func TestAMoveIsMadeOnceAndOnlyFromTheGameAsItStands(t *testing.T) {
 }
 
 // TestEveryMoveAnswersWithTheGame, each at its own address: Next name, a
-// fact, an overlap, a wrong guess that fills in the cast it shares, and
-// showing the answer, which ends it with everything.
+// fact, a wrong guess that fills in the cast it shares, and showing the
+// answer, which ends it with everything. No game says overlaps.
 func TestEveryMoveAnswersWithTheGame(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, _ := dailyServer(t, f)
@@ -731,13 +733,15 @@ func TestEveryMoveAnswersWithTheGame(t *testing.T) {
 	}{
 		{"next", nil, 900, `"slots":[{"slot":0,"shown":true,`},
 		{"buy", map[string]any{"kind": "decade"}, 800, `"facts":{"decade":1990}`},
-		{"overlap", map[string]any{"person": "nm0287825"}, 550, `"overlaps":["nm0287825"]`},
-		{"guess", map[string]any{"film": "tt0209144"}, 450, `"from":{"id":"tt0209144","title":"Memento"}`},
+		{"guess", map[string]any{"film": "tt0209144"}, 700, `"from":{"id":"tt0209144","title":"Memento"}`},
 		{"reveal", nil, 0, `"end":{"answer":{"id":"tt0133093"`},
 	} {
 		r := b.move(c.verb, i, c.body)
 		if r.status != http.StatusOK || ptsOf(t, r) != c.pts || seqOf(t, r) != i+1 || !strings.Contains(r.raw, c.want) {
 			t.Errorf("%s: %d, %d points, want %d and %s in %s", c.verb, r.status, ptsOf(t, r), c.pts, c.want, r.raw)
+		}
+		if strings.Contains(r.raw, "overlap") {
+			t.Errorf("%s answers with overlaps: %s", c.verb, r.raw)
 		}
 		if keys := slices.Sorted(maps.Keys(r.body)); !slices.Equal(keys, []string{"game"}) {
 			t.Errorf("%s answers with %v", c.verb, keys)
@@ -759,8 +763,7 @@ func TestEachRefusalSaysWhy(t *testing.T) {
 	}
 	expect(b.move("guess", 0, map[string]any{"film": "tt9999999"}), http.StatusNotFound, "unknown")
 	expect(b.move("buy", 0, map[string]any{"kind": "years"}), http.StatusBadRequest, "bad")
-	expect(b.move("overlap", 0, map[string]any{"person": "nm0000206"}), http.StatusBadRequest, "bad")
-	expect(b.move("overlap", 0, map[string]any{"person": "nm0905154"}), http.StatusBadRequest, "bad")
+	expect(b.move("buy", 0, map[string]any{"kind": "overlap", "person": "nm0001592"}), http.StatusBadRequest, "bad")
 	seq := 0
 	for _, body := range []map[string]any{
 		{"kind": "director"}, {"kind": "decade"}, {"kind": "years"}, {"kind": "genre"}, {"kind": "length"}, {"kind": "rating"},
@@ -770,13 +773,14 @@ func TestEachRefusalSaysWhy(t *testing.T) {
 		}
 		seq++
 	}
-	if r := b.move("overlap", seq, map[string]any{"person": "nm0001592"}); r.status != http.StatusOK {
-		t.Fatalf("an overlap: %d %s", r.status, r.raw)
+	for range 3 {
+		if r := b.move("next", seq, nil); r.status != http.StatusOK {
+			t.Fatalf("a next name: %d %s", r.status, r.raw)
+		}
+		seq++
 	}
-	seq++
-	// A hundred points left, which no purchase may spend.
+	// Fifty points left, which no purchase may spend.
 	expect(b.move("buy", seq, map[string]any{"kind": "decade"}), http.StatusConflict, "known")
-	expect(b.move("overlap", seq, map[string]any{"person": "nm0001592"}), http.StatusConflict, "known")
 	expect(b.move("next", seq, nil), http.StatusPaymentRequired, "points")
 	expect(b.move("guess", seq, map[string]any{"film": "tt0111257"}), http.StatusOK, "")
 	seq++
@@ -851,10 +855,14 @@ func said(raw string, value any, ownYear bool) []string {
 // year, rating, length, poster or genres, nor names a director before
 // Director is bought, nor anyone in the cast the player has not been
 // shown, nor a fact not bought. The sheets carry the answer as one card
-// among the rest, which is the point of them: there it must look like
-// every other card, with the same fields, a poster for every card or
-// none, the slots showing and never a hidden one, and no director until
-// Director. The end names everything.
+// among the rest, which is the point of them, but read only inside the
+// ranges bought: before any, every card is blank, its year and its
+// rating to the half point and nothing else, so no id, title or rating
+// is sent; after each range, the movies inside every one bought are
+// readable and only those, the answer among them like every other
+// readable card, a poster for every readable card or none, and nothing
+// saying who else is on a card or that a director is. The end names
+// everything.
 func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 	p := matrixPuzzle()
 	f := newFakeDaily(p)
@@ -904,11 +912,38 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 			}
 		}
 	}
+	// inside is whether a movie is readable as the contract puts it: some
+	// range bought (the decade, the five years, the rating band, the
+	// genre), and the movie inside every one, the band's ceiling left
+	// out. Length and the director are no ranges.
+	inside := func(m daily.Movie) bool {
+		a, ranged, in := p.Answer, false, true
+		if bought["decade"] {
+			ranged, in = true, in && m.Year/10 == a.Year/10
+		}
+		if bought["years"] {
+			ranged, in = true, in && m.Year/5 == a.Year/5
+		}
+		if bought["rating"] {
+			band := [][2]float64{{0, 6}, {6, 7}, {7, 8}, {8, 99}}[daily.RatingBand(a.Rating)]
+			ranged, in = true, in && m.Rating >= band[0] && m.Rating < band[1]
+		}
+		if bought["genre"] {
+			ranged = true
+			for _, g := range a.Genres {
+				in = in && slices.Contains(m.Genres, g)
+			}
+		}
+		return ranged && in
+	}
 	// sheets checks every showing person's Movies sheet: what any
-	// response must keep, and that the answer's card is like the rest.
+	// response must keep, that only the movies inside every range bought
+	// are readable, that every other card is exactly its year and its
+	// rating to the half point, and that the answer's card is like the
+	// rest of its kind.
 	sheets := func(when string) {
 		t.Helper()
-		for _, c := range p.Cast {
+		for slot, c := range p.Cast {
 			r := b.sheet(c.ID)
 			if !shown[c.ID] {
 				if r.status != http.StatusBadRequest || r.body["reason"] != "bad" {
@@ -919,37 +954,71 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 			if r.status != http.StatusOK || r.body["person"] != c.ID {
 				t.Fatalf("%s: %s's sheet: %d %s", when, c.Name, r.status, r.raw)
 			}
+			if keys := strings.Join(slices.Sorted(maps.Keys(r.body)), " "); keys != "movies person total" {
+				t.Errorf("%s: %s's sheet says %s", when, c.Name, keys)
+			}
+			var readable, blanks, wantBlanks []string
+			var want []string
+			for _, m := range p.Movies {
+				if !slices.Contains(m.Sheets, slot) {
+					continue
+				}
+				if inside(m) {
+					want = append(want, m.ID)
+				} else {
+					wantBlanks = append(wantBlanks, fmt.Sprintf("%d %v", m.Year, math.Round(m.Rating*2)/2))
+				}
+			}
 			movies := r.body["movies"].([]any)
-			fields := ""
-			posters := 0
+			if r.body["total"] != float64(len(movies)) || len(movies) != len(want)+len(wantBlanks) {
+				t.Errorf("%s: %s's sheet has %v as its total, %d cards, for %d movies", when, c.Name, r.body["total"], len(movies), len(want)+len(wantBlanks))
+			}
+			fields, posters := "", 0
 			for _, m := range movies {
 				card := m.(map[string]any)
-				// Director's own mark aside, which lights every card a
-				// director is on, the answer's among them.
-				keys := strings.Join(slices.DeleteFunc(slices.Sorted(maps.Keys(card)), func(k string) bool { return k == "dir" }), " ")
-				if fields == "" {
-					fields = keys
+				keys := strings.Join(slices.Sorted(maps.Keys(card)), " ")
+				id, ok := card["id"].(string)
+				if !ok {
+					if keys != "at year" {
+						t.Errorf("%s: %s's sheet has a blank card with %s", when, c.Name, keys)
+					}
+					at := card["at"].(float64)
+					if at*2 != math.Round(at*2) {
+						t.Errorf("%s: %s's sheet places a blank card at %v, finer than a half point", when, c.Name, at)
+					}
+					blanks = append(blanks, fmt.Sprintf("%v %v", card["year"], at))
+					continue
 				}
-				if keys != fields {
-					t.Errorf("%s: %s's sheet has a card with %s and one with %s", when, c.Name, fields, keys)
-				}
+				readable = append(readable, id)
 				if _, ok := card["poster"]; ok {
 					posters++
 				}
-				if _, ok := card["dir"]; ok && !bought["director"] {
-					t.Errorf("%s: %s's sheet marks a director before Director: %v", when, c.Name, card)
+				if fields == "" {
+					fields = keys
 				}
-				for _, on := range card["on"].([]any) {
-					if !shown[p.Cast[int(on.(float64))].ID] {
-						t.Errorf("%s: %s's sheet lists hidden slot %v on %v", when, c.Name, on, card["id"])
+				if keys != fields || strings.Replace(keys, " poster", "", 1) != "genres id rating title year" {
+					t.Errorf("%s: %s's sheet has a readable card with %s and one with %s", when, c.Name, fields, keys)
+				}
+			}
+			slices.Sort(readable)
+			slices.Sort(want)
+			if !slices.Equal(readable, want) {
+				t.Errorf("%s: %s's sheet reads %v, want %v", when, c.Name, readable, want)
+			}
+			slices.Sort(blanks)
+			slices.Sort(wantBlanks)
+			if !slices.Equal(blanks, wantBlanks) {
+				t.Errorf("%s: %s's sheet's blank cards are %v, want %v", when, c.Name, blanks, wantBlanks)
+			}
+			if posters != 0 && posters != len(readable) {
+				t.Errorf("%s: %s's sheet has %d posters for %d readable cards", when, c.Name, posters, len(readable))
+			}
+			if len(want) == 0 {
+				for _, m := range p.Movies {
+					if strings.Contains(r.raw, m.ID) || strings.Contains(r.raw, `"`+m.Title+`"`) || strings.Contains(r.raw, `"rating"`) {
+						t.Errorf("%s: %s's sheet, with no range bought, says %s or its rating: %s", when, c.Name, m.Title, r.raw)
 					}
 				}
-			}
-			if posters != 0 && posters != len(movies) {
-				t.Errorf("%s: %s's sheet has %d posters for %d cards", when, c.Name, posters, len(movies))
-			}
-			if !slices.ContainsFunc(movies, func(m any) bool { return m.(map[string]any)["id"] == p.Answer.ID }) {
-				t.Errorf("%s: %s's sheet lacks today's movie", when, c.Name)
 			}
 			// Other movies have genres and years of their own, so the
 			// rest is held only to what no sheet may say: the answer
@@ -985,12 +1054,16 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 		buys  string
 	}{
 		{"next", nil, []string{"nm0287825"}, ""},
-		{"overlap", map[string]any{"person": "nm0287825"}, nil, ""},
 		// Memento fills in Moss through it, and then shows Weaving.
 		{"guess", map[string]any{"film": "tt0209144"}, []string{"nm0005251", "nm0915989"}, ""},
 		// A movie from the answer's year says its own year.
 		{"guess", map[string]any{"film": "tt0120601"}, []string{"nm0000401"}, ""},
+		// Each range in turn: each sheet reads only what is inside every
+		// one bought so far.
+		{"buy", map[string]any{"kind": "rating"}, nil, "rating"},
 		{"buy", map[string]any{"kind": "genre"}, nil, "genre"},
+		{"buy", map[string]any{"kind": "decade"}, nil, "decade"},
+		{"buy", map[string]any{"kind": "years"}, nil, "years"},
 	} {
 		for _, id := range m.shows {
 			shown[id] = true
@@ -1000,10 +1073,10 @@ func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 		}
 		r := b.move(m.verb, seq, m.body)
 		check(r, fmt.Sprintf("%s %v", m.verb, m.body))
+		sheets(fmt.Sprintf("after %s %v", m.verb, m.body))
 		seq++
 	}
 	check(b.get("/daily"), "reading the game again")
-	sheets("before Director")
 	stale := b.move("buy", 0, map[string]any{"kind": "length"})
 	if stale.status != http.StatusConflict {
 		t.Fatalf("stale = %d", stale.status)
@@ -1203,8 +1276,9 @@ func TestTheBoardIsReadForTheReader(t *testing.T) {
 // TestTheMoviesSheetIsOnlyForSomeoneShowing in the reader's own game:
 // refused without a player, before Play, for anyone hidden, a director
 // or someone not in the cast at all, and for a puzzle that is no longer
-// anybody's or a game past its own midnight; once the game is over, it
-// is there for anyone in the cast. It never writes.
+// anybody's or a game past its own midnight; read only inside the ranges
+// bought, and once the game is over, there for anyone in the cast with
+// every card readable. It never writes.
 func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, clk := dailyAt(t, f, todayAt)
@@ -1233,41 +1307,59 @@ func TestTheMoviesSheetIsOnlyForSomeoneShowing(t *testing.T) {
 	expect(b.get("/daily/x/movies?person=nm0001592"), http.StatusBadRequest, "bad")
 	expect(b.get("/daily/9/movies?person=nm0001592"), http.StatusConflict, "day")
 
+	// Before any range, every card is blank: where it sits, and nothing
+	// that says which movie it is.
 	r := b.sheet("nm0001592")
 	if r.status != http.StatusOK || r.body["person"] != "nm0001592" || r.header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("Pantoliano's sheet: %d %s", r.status, r.raw)
 	}
-	want := `{"person":"nm0001592","movies":[` +
-		`{"id":"tt0106977","title":"The Fugitive","year":1993,"rating":7.8,"genres":["Action","Crime"],"poster":"https://img.example/fugitive.jpg","on":[0]},` +
-		`{"id":"tt0115736","title":"Bound","year":1996,"rating":7.3,"genres":["Crime","Thriller"],"poster":"https://img.example/bound.jpg","on":[0]},` +
-		`{"id":"tt0133093","title":"The Matrix","year":1999,"rating":8.7,"genres":["Action","Sci-Fi"],"poster":"https://img.example/matrix.jpg","on":[0]},` +
-		`{"id":"tt0209144","title":"Memento","year":2000,"rating":8.4,"genres":["Mystery","Thriller"],"poster":"https://img.example/memento.jpg","on":[0]}]}` + "\n"
-	if r.raw != want {
-		t.Errorf("Pantoliano's sheet =\n%s\nwant\n%s", r.raw, want)
+	blank := `{"person":"nm0001592","total":4,"movies":[{"year":1993,"at":8},{"year":1996,"at":7.5},{"year":1999,"at":8.5},{"year":2000,"at":8.5}]}` + "\n"
+	if r.raw != blank {
+		t.Errorf("Pantoliano's sheet =\n%s\nwant\n%s", r.raw, blank)
 	}
-	// Keanu's movies do not all have posters, so none of them is sent one.
-	b.move("guess", 0, map[string]any{"film": "tt0111257"})
-	if keanu := b.sheet("nm0000206"); keanu.status != http.StatusOK || strings.Contains(keanu.raw, "poster") {
-		t.Errorf("Keanu's sheet: %d %s", keanu.status, keanu.raw)
+	// With the 1990s bought, the three of his inside them are readable,
+	// each with its poster, since all three have one; Memento is not.
+	b.move("buy", 0, map[string]any{"kind": "decade"})
+	nineties := `{"person":"nm0001592","total":4,"movies":[` +
+		`{"id":"tt0106977","title":"The Fugitive","year":1993,"rating":7.8,"genres":["Action","Crime"],"poster":"https://img.example/fugitive.jpg"},` +
+		`{"id":"tt0115736","title":"Bound","year":1996,"rating":7.3,"genres":["Crime","Thriller"],"poster":"https://img.example/bound.jpg"},` +
+		`{"id":"tt0133093","title":"The Matrix","year":1999,"rating":8.7,"genres":["Action","Sci-Fi"],"poster":"https://img.example/matrix.jpg"},` +
+		`{"year":2000,"at":8.5}]}` + "\n"
+	if joe := b.sheet("nm0001592"); joe.raw != nineties {
+		t.Errorf("Pantoliano's sheet with the 1990s =\n%s\nwant\n%s", joe.raw, nineties)
 	}
-	b.move("buy", 1, map[string]any{"kind": "director"})
-	if joe := b.sheet("nm0001592"); !strings.Contains(joe.raw, `"on":[0],"dir":true}`) || strings.Count(joe.raw, `"dir":true`) != 2 {
-		t.Errorf("Pantoliano's sheet after Director: %s", joe.raw)
+	b.move("guess", 1, map[string]any{"film": "tt0111257"})
+	keanu := `{"person":"nm0000206","total":4,"movies":[` +
+		`{"id":"tt0111257","title":"Speed","year":1994,"rating":7.3,"genres":["Action","Thriller"],"poster":"https://img.example/speed.jpg"},` +
+		`{"id":"tt0133093","title":"The Matrix","year":1999,"rating":8.7,"genres":["Action","Sci-Fi"],"poster":"https://img.example/matrix.jpg"},` +
+		`{"year":2003,"at":7},{"year":2014,"at":7.5}]}` + "\n"
+	if r := b.sheet("nm0000206"); r.raw != keanu {
+		t.Errorf("Keanu's sheet with the 1990s =\n%s\nwant\n%s", r.raw, keanu)
+	}
+	// The director is no range, and no card says a director is on it.
+	b.move("buy", 2, map[string]any{"kind": "director"})
+	if joe := b.sheet("nm0001592"); joe.raw != nineties {
+		t.Errorf("Pantoliano's sheet after Director =\n%s\nwant\n%s", joe.raw, nineties)
 	}
 	// Past its own midnight an unfinished game's sheet is gone, as its
 	// moves are; finished, the game's sheets are anyone's in the cast
-	// for as long as the puzzle is somebody's.
+	// for as long as the puzzle is somebody's, every card readable.
+	// Fishburne's do not all have posters, so none of them is sent one.
 	clk.set(time.Date(2026, 10, 9, 0, 30, 0, 0, time.UTC))
 	expect(b.sheet("nm0001592"), http.StatusConflict, "day")
 	clk.set(todayAt)
-	b.move("reveal", 2, nil)
+	b.move("reveal", 3, nil)
 	clk.set(time.Date(2026, 10, 9, 0, 30, 0, 0, time.UTC))
-	if r := b.sheet("nm0000401"); r.status != http.StatusOK || !strings.Contains(r.raw, `"on":[1,2,3,4,5]`) {
-		t.Errorf("Fishburne's sheet once it is over: %d %s", r.status, r.raw)
+	fishburne := `{"person":"nm0000401","total":3,"movies":[` +
+		`{"id":"tt0078788","title":"Apocalypse Now","year":1979,"rating":8.4,"genres":["Drama","War"]},` +
+		`{"id":"tt0133093","title":"The Matrix","year":1999,"rating":8.7,"genres":["Action","Sci-Fi"]},` +
+		`{"id":"tt0234215","title":"The Matrix Reloaded","year":2003,"rating":7.2,"genres":["Action","Sci-Fi"]}]}` + "\n"
+	if r := b.sheet("nm0000401"); r.status != http.StatusOK || r.raw != fishburne {
+		t.Errorf("Fishburne's sheet once it is over: %d\n%s\nwant\n%s", r.status, r.raw, fishburne)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if rec := f.games[[2]int64{1, 142}]; rec == nil || len(rec.Moves) != 3 {
+	if rec := f.games[[2]int64{1, 142}]; rec == nil || len(rec.Moves) != 4 {
 		t.Errorf("the sheets moved the game: %+v", rec)
 	}
 }

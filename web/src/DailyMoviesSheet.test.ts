@@ -1,9 +1,9 @@
-import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react';
+import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { DailyGame, DailyGuess, DailyMovie, DailyPerson, DailySlot } from './api';
 import { DailyMoviesSheet, MoviesSheetView, type MoviesSheetViewProps, type SheetHandlers } from './DailyMoviesSheet';
-import { NO_PICKS, sheetLayout, sheetView, type SheetState } from './dailyMovies';
+import { sheetLayout, sheetView, type SheetState } from './dailyMovies';
 
 // The sheet as it is drawn, rendered without a DOM: no effect runs, so the
 // sheet itself is seen as it opens, before its movies come, and every
@@ -13,7 +13,6 @@ const person = (id: string, name: string, hue: number, photo?: string): DailyPer
 const JOE = person('nm0001592', 'Joe Pantoliano', 205, 'https://image.tmdb.org/t/p/w185/joe.jpg');
 const GLORIA = person('nm0287825', 'Gloria Foster', 78);
 const HUGO = person('nm0915989', 'Hugo Weaving', 150);
-const LANA = person('nm0905154', 'Lana Wachowski', 118);
 
 const shown = (slot: number, p: DailyPerson): DailySlot => ({ slot, shown: true, person: p, via: slot ? 'next' : 'start' });
 const hidden = (slot: number): DailySlot => ({ slot, shown: false });
@@ -41,7 +40,6 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
     nextCost: 150,
     slots: [shown(0, JOE), shown(1, GLORIA), shown(2, HUGO), hidden(3), hidden(4), hidden(5)],
     facts: { decade: 1990 },
-    overlaps: [],
     log: [
       { type: 'next', cost: 100, slot: 1 },
       { type: 'fact', kind: 'decade', cost: 100 },
@@ -52,36 +50,39 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
   };
 }
 
-const movie = (id: string, title: string, year: number, rating: number, over: Partial<DailyMovie> = {}): DailyMovie => ({
-  id,
-  title,
-  year,
-  rating,
-  genres: ['Drama'],
-  on: [0],
-  ...over,
-});
+const read = (id: string, title: string, year: number, rating: number): DailyMovie => ({ id, title, year, rating, genres: ['Drama'] });
 
+// With the 1990s bought: the three inside readable, today's among them,
+// and the rest blank, as the server sends them.
 const MOVIES: DailyMovie[] = [
-  movie('tt0086200', 'Risky Business', 1983, 6.8),
-  movie('tt0089218', 'The Goonies', 1985, 7.7),
-  movie('tt0106977', 'The Fugitive', 1993, 7.8),
-  movie('tt0115736', 'Bound', 1996, 7.3),
-  movie('tt0133093', 'The Matrix', 1999, 8.7, { on: [0, 1, 2] }),
-  movie('tt0209144', 'Memento', 2000, 8.4),
+  { year: 1983, at: 7 },
+  { year: 1985, at: 7.5 },
+  read('tt0106977', 'The Fugitive', 1993, 7.8),
+  read('tt0115736', 'Bound', 1996, 7.3),
+  read('tt0133093', 'The Matrix', 1999, 8.7),
+  { year: 2000, at: 8.5 },
 ];
 
-const none: SheetHandlers = { close() {}, chip() {}, card() {}, guess() {}, retry() {} };
+// Before any range: every one of them blank.
+const BLANKS: DailyMovie[] = [
+  { year: 1983, at: 7 },
+  { year: 1985, at: 7.5 },
+  { year: 1993, at: 8 },
+  { year: 1996, at: 7.5 },
+  { year: 1999, at: 8.5 },
+  { year: 2000, at: 8.5 },
+];
+
+const none: SheetHandlers = { close() {}, card() {}, guess() {}, retry() {} };
 
 function stateOf(over: Partial<SheetState> = {}): SheetState {
+  const movies = over.movies === undefined ? MOVIES : over.movies;
   return {
     game: gameOf(),
     person: JOE.id,
-    movies: MOVIES,
-    layout: sheetLayout(MOVIES, 540, false),
-    picks: NO_PICKS,
+    movies,
+    layout: movies ? sheetLayout(movies, 540, false) : null,
     pick: null,
-    buying: null,
     reach: null,
     theme: 'dark',
     ...over,
@@ -112,7 +113,6 @@ describe('the sheet as it opens', () => {
       person: JOE.id,
       game: gameOf(),
       theme: 'dark',
-      onOverlap: () => Promise.resolve(true),
       onGuess: () => {},
       onClose: () => {},
     }),
@@ -125,12 +125,13 @@ describe('the sheet as it opens', () => {
     expect(html).toContain('aria-label="Close"');
   });
 
-  it('shows the chips, the legend and how to guess while the movies are on their way', () => {
-    expect(html).toContain('+ Gloria Foster');
-    expect(html).toContain('Your facts are on the map: 1990s. Today’s movie is one of these cards, but it isn’t marked.');
+  it('shows the legend and how to guess while the movies are on their way, and no chips to combine names', () => {
+    expect(html).toContain('Titles show inside your ranges: 1990s. Today’s movie is one of these cards, but it isn’t marked.');
     expect(html).toContain('Tap a movie to guess it. A wrong guess costs 150.');
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toContain('cd-msheet-card');
+    expect(html).not.toContain('cd-msheet-chip');
+    expect(html).not.toContain('Gloria Foster');
   });
 
   it('says the movies are coming in the map’s place, rather than leave it blank', () => {
@@ -161,84 +162,48 @@ describe('the sheet on a phone', () => {
   });
 });
 
-describe('the header and the chips', () => {
+describe('the header', () => {
   const html = draw();
 
   it('rings the face in the person’s colour, set inline as --tone', () => {
     expect(html).toContain('class="cd-msheet-head" style="--tone:oklch(0.76 0.13 205)"');
   });
 
-  it('says how much is lit as a polite live region', () => {
-    expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">3 of 6 movies lit · on Cinedikt</p>');
+  it('says how much can be read as a polite live region', () => {
+    expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">3 of 6 movies readable · on Cinedikt</p>');
   });
 
-  it('keeps the person it opened on switched on, and not to be switched off', () => {
-    expect(html).toMatch(/class="cd-msheet-chip cd-msheet-chip-on" style="--tone:oklch\(0\.76 0\.13 205\)" aria-pressed="true" disabled=""/);
-  });
-
-  it('sells the other names by their price, saying what buying one does', () => {
-    expect(html).toContain(
-      'class="cd-msheet-chip" style="--tone:oklch(0.76 0.13 78)" aria-label="Add Gloria Foster to light only the movies they share. It costs 250 points."',
-    );
-    expect(html).toContain('+ Gloria Foster<span class="cd-msheet-price">−250</span>');
-    expect(count(html, '<button type="button" class="cd-msheet-chip')).toBe(3);
-  });
-
-  it('fades a name the points cannot buy', () => {
-    const poor = draw({ game: gameOf({ pts: 250 }) });
-    expect(count(poor, 'cd-msheet-chip-faint')).toBe(2);
-  });
-
-  it('draws a bought name as a switch, and the directors’ chip with a director’s square face', () => {
-    const html2 = draw({
-      game: gameOf({ overlaps: [GLORIA.id], facts: { director: [LANA] } }),
-      picks: { others: [GLORIA.id], director: false },
-    });
-    expect(html2).toMatch(/style="--tone:oklch\(0\.76 0\.13 78\)" aria-pressed="true">/);
-    expect(html2).toContain('Movies with Joe Pantoliano and Gloria Foster');
-    expect(html2).toMatch(/aria-pressed="false"><span class="cd-face cd-face-chip cd-face-square"[^]*?Lana Wachowski</);
-  });
-
-  it('moves the chips sideways under a mouse wheel, since the row hides its scrollbar', () => {
-    const tree = MoviesSheetView({
-      view: sheetView(stateOf()),
-      phone: false,
-      theme: 'dark',
-      height: null,
-      held: 0,
-      loading: false,
-      failed: null,
-      on: none,
-    });
-    const row = findByClass(tree, 'cd-msheet-chips');
-    expect(row).not.toBeNull();
-    const onWheel = (row!.props as { onWheel?: (e: unknown) => void }).onWheel;
-    expect(onWheel).toBeTypeOf('function');
-    // A row with room to its right, as the scroller hands it to the
-    // handler: a wheel down moves it along.
-    const el = { scrollWidth: 900, clientWidth: 532, scrollLeft: 0 };
-    onWheel!({ deltaX: 0, deltaY: 100, currentTarget: el, preventDefault() {} });
-    expect(el.scrollLeft).toBe(100);
+  it('goes straight from the header to the legend, with no row of names between', () => {
+    expect(html).toMatch(/<\/div><\/div><p class="cd-msheet-legend">/);
   });
 });
 
-/** The first element in a rendered tree with this class, walking into
- *  children but not into components, which are not called. */
-function findByClass(node: ReactNode, name: string): ReactElement | null {
-  if (Array.isArray(node)) {
-    for (const n of node) {
-      const hit = findByClass(n, name);
-      if (hit) return hit;
-    }
-    return null;
-  }
-  if (!isValidElement(node)) return null;
-  const props = node.props as { className?: string; children?: ReactNode };
-  if (props.className?.split(' ').includes(name)) return node;
-  return findByClass(props.children, name);
-}
+describe('before any range is bought', () => {
+  const html = draw({ game: gameOf({ facts: {} }), movies: BLANKS });
 
-describe('the map', () => {
+  it('counts the movies, and says titles only show inside the ranges bought', () => {
+    expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">6 movies · on Cinedikt</p>');
+    expect(html).toContain(
+      '<p class="cd-msheet-legend">Titles only show inside the ranges you buy: the decade, the years, a rating range or the genre. Today’s movie is one of these cards.</p>',
+    );
+  });
+
+  it('draws every card as a blank tile: an empty poster, no title, no rating, faded, and not to be pressed', () => {
+    expect(count(html, 'class="cd-msheet-card cd-msheet-card-blank"')).toBe(6);
+    expect(html).toMatch(
+      /<button type="button" class="cd-msheet-card cd-msheet-card-blank" style="left:\d+px;top:\d+px;width:112px;height:42px;opacity:0.3" aria-label="A movie from 1983. Buy a range to read it" disabled=""><span class="cd-msheet-poster" aria-hidden="true"><\/span><\/button>/,
+    );
+    expect(html).not.toContain('cd-msheet-card-title');
+    expect(html).not.toContain('cd-msheet-card-foot');
+    expect(html).not.toContain('aria-pressed');
+  });
+
+  it('points the reader at the facts under the card', () => {
+    expect(html).toContain('<span class="cd-msheet-hint">Buy a range to read this map. The facts are under the card.</span>');
+  });
+});
+
+describe('the map once a range is bought', () => {
   const html = draw({ game: gameOf({ facts: { decade: 1990, rating: 2 } }) });
 
   it('pins a rating axis, 4 to 9, over the years', () => {
@@ -255,22 +220,26 @@ describe('the map', () => {
     expect(draw()).not.toContain('cd-msheet-range');
   });
 
-  it('draws every card, the lit whole, the guessed at 0.55 and the rest faded', () => {
-    expect(count(html, 'class="cd-msheet-card"')).toBe(6);
-    // 1990s and rated 7.0 to 7.9: The Fugitive whole, Bound guessed.
-    expect(html).toMatch(/opacity:1" aria-label="The Fugitive, 1993, rated 7\.8"/);
-    expect(html).toMatch(/opacity:0\.55" aria-label="Bound, 1996, rated 7\.3, already tried"/);
-    expect(html).toMatch(/opacity:0\.14" aria-label="The Matrix, 1999, rated 8\.7, dimmed"/);
+  it('draws the readable cards whole, the guessed one at 0.55, and the rest blank at 0.3', () => {
+    const plain = draw();
+    expect(count(plain, 'class="cd-msheet-card"')).toBe(3);
+    expect(count(plain, 'cd-msheet-card-blank')).toBe(3);
+    expect(plain).toMatch(/opacity:1" aria-label="The Fugitive, 1993, rated 7\.8" aria-pressed="false"/);
+    expect(plain).toMatch(/opacity:0\.55" aria-label="Bound, 1996, rated 7\.3, already tried"/);
+    expect(plain).toMatch(/opacity:0\.3" aria-label="A movie from 2000, outside your ranges" disabled=""/);
+    expect(plain).toContain('<span class="cd-msheet-card-title">The Matrix</span><span class="cd-msheet-card-foot">8.7</span>');
   });
 
   it('crosses only the movie already guessed', () => {
-    expect(count(html, '<span class="cd-msheet-tried">✕</span>')).toBe(1);
-    expect(html).toContain('7.3<span class="cd-msheet-tried">✕</span>');
+    const plain = draw();
+    expect(count(plain, '<span class="cd-msheet-tried">✕</span>')).toBe(1);
+    expect(plain).toContain('7.3<span class="cd-msheet-tried">✕</span>');
   });
 
-  it('gives every card a stand-in poster in its own title’s hue, today’s as much as any', () => {
-    expect(count(html, '<span class="cd-msheet-poster" style="--poster-fill:linear-gradient(165deg, oklch(')).toBe(6);
-    expect(html).not.toContain('<img class="cd-msheet-poster"');
+  it('gives every readable card a stand-in poster in its own title’s hue, today’s as much as any', () => {
+    const plain = draw();
+    expect(count(plain, '<span class="cd-msheet-poster" style="--poster-fill:linear-gradient(165deg, oklch(')).toBe(3);
+    expect(plain).not.toContain('<img class="cd-msheet-poster"');
   });
 });
 
@@ -286,19 +255,13 @@ describe('the footer', () => {
   it('rings the card tapped and offers it, with Guess it', () => {
     const html = draw({ pick: 'tt0106977' });
     expect(html).toMatch(/class="cd-msheet-card cd-msheet-card-picked"[^>]*aria-pressed="true"/);
-    expect(count(html, 'aria-pressed="true"')).toBe(2);
+    expect(count(html, 'aria-pressed="true"')).toBe(1);
     expect(html).toContain('<span class="cd-msheet-pick-title">The Fugitive</span><span class="cd-msheet-pick-line">1993 · IMDb 7.8</span>');
     expect(html).toContain('<button type="button" class="cd-msheet-guess">Guess it</button>');
   });
 
   it('says Already tried, and cannot be pressed, for a movie guessed already', () => {
     expect(draw({ pick: 'tt0115736' })).toContain('<button type="button" class="cd-msheet-guess" disabled="">Already tried</button>');
-  });
-
-  it('holds Guess it while a name is being bought', () => {
-    expect(draw({ pick: 'tt0106977', buying: GLORIA.id })).toContain(
-      '<button type="button" class="cd-msheet-guess" disabled="">Guess it</button>',
-    );
   });
 });
 

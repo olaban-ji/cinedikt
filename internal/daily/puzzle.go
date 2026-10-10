@@ -16,7 +16,7 @@ type Puzzle struct {
 	// Answer is the hidden movie.
 	Answer Answer
 	// Directors are the answer's directors in IMDb's crew order: the
-	// Director fact, and the Movies sheet's director chip.
+	// Director fact.
 	Directors []Named
 	// Cast is the six billed cast the game shows, in reveal order:
 	// sixth-billed first, the star last. A cast member's slot is their
@@ -86,15 +86,18 @@ type Also struct {
 // Movie is one movie on the Movies sheets. Cast are the slots of the six
 // it credits, in slot order, and Dir is whether any of the answer's
 // directors is credited on it. The answer is one of them, and nothing
-// marks it out: it credits all six and a director, as a close relative
-// may.
+// marks it out. No sheet says either any more: a card that said whose
+// it was too, or that a director was on it, picked the answer out of
+// two people's sheets, the one card on both (view.go). They stay with
+// the puzzle as it was picked, which is what the pick worked the sheets
+// and the "Also in" movies out from.
 //
 // Sheets are the slots whose own sheet it is on, those it is among the
 // MaxSheet most voted of, in slot order. Cast can name more: a movie on
 // one's sheet may credit another of the six whose cap it fell below,
-// and once they show it lights for them too, but it is not on their
-// sheet. A puzzle kept before sheets were has none (nil), and its
-// sheets are every movie crediting the slot, as they were then.
+// and it is not on their sheet. A puzzle kept before sheets were has
+// none (nil), and its sheets are every movie crediting the slot, as
+// they were then.
 type Movie struct {
 	ID     string   `json:"id"`
 	Title  string   `json:"title"`

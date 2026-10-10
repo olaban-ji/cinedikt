@@ -655,7 +655,7 @@ func TestTodaysCountIsReadFromAnIndex(t *testing.T) {
 // TestEveryFactIsKeptAsAMove: the five years only after the decade, each
 // bought once at its price, on the row the boards read, and replayed cold
 // to the facts the page is shown; the old game's clues are no moves, and
-// neither is an overlap for someone not showing.
+// neither is the overlap, for anyone.
 func TestEveryFactIsKeptAsAMove(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -670,7 +670,7 @@ func TestEveryFactIsKeptAsAMove(t *testing.T) {
 	for _, r := range []daily.Request{
 		{Key: "the-years", Kind: daily.KindYears}, {Key: "the-story", Kind: "story"}, {Key: "the-year", Kind: "year"},
 		{Key: "a-flip", Kind: "flip", Arg: "c1"}, {Key: "an-actor", Kind: "actor"},
-		{Key: "an-overlap", Kind: daily.KindOverlap, Arg: p.Cast[5].ID},
+		{Key: "an-overlap", Kind: "overlap", Arg: p.Cast[0].ID}, {Key: "a-hidden-overlap", Kind: "overlap", Arg: p.Cast[5].ID},
 	} {
 		if _, err := s.DailyAct(ctx, player.ID, p, r, oct8); !errors.Is(err, daily.ErrBad) {
 			t.Errorf("%s %s: %v, want bad", r.Kind, r.Arg, err)
@@ -678,32 +678,38 @@ func TestEveryFactIsKeptAsAMove(t *testing.T) {
 	}
 	for i, r := range []daily.Request{
 		{Key: "the-decade", Kind: daily.KindDecade}, {Key: "the-years", Kind: daily.KindYears},
-		{Key: "an-overlap", Kind: daily.KindOverlap, Arg: p.Cast[0].ID}, {Key: "the-length", Kind: daily.KindLength},
+		{Key: "the-length", Kind: daily.KindLength},
 	} {
 		r.Seq = i
 		if _, err := s.DailyAct(ctx, player.ID, p, r, oct8.Add(time.Duration(i)*time.Minute)); err != nil {
 			t.Fatalf("%s: %v", r.Kind, err)
 		}
 	}
-	if _, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: "decade-again", Seq: 4, Kind: daily.KindDecade}, oct8.Add(time.Hour)); !errors.Is(err, daily.ErrKnown) {
+	if _, err := s.DailyAct(ctx, player.ID, p, daily.Request{Key: "decade-again", Seq: 3, Kind: daily.KindDecade}, oct8.Add(time.Hour)); !errors.Is(err, daily.ErrKnown) {
 		t.Errorf("the decade twice: %v, want known", err)
 	}
 	var pts int
-	if err := s.pool.QueryRow(ctx, `SELECT pts FROM meta.daily_games WHERE player = $1`, player.ID).Scan(&pts); err != nil || pts != 500 {
+	if err := s.pool.QueryRow(ctx, `SELECT pts FROM meta.daily_games WHERE player = $1`, player.ID).Scan(&pts); err != nil || pts != 750 {
 		t.Errorf("the row says %d points, %v", pts, err)
 	}
 	cold, err := s.DailyGame(ctx, player.ID, p.No)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := cold.Moves[2]; m.Kind != daily.KindOverlap || m.Arg != p.Cast[0].ID || m.Cost != 250 || m.Guess != nil {
-		t.Errorf("the overlap was kept as %+v", m)
+	var kinds []string
+	for _, m := range cold.Moves {
+		kinds = append(kinds, m.Kind)
+		if m.Arg != "" || m.Guess != nil {
+			t.Errorf("%s was kept as %+v", m.Kind, m)
+		}
+	}
+	if !slices.Equal(kinds, []string{daily.KindDecade, daily.KindYears, daily.KindLength}) {
+		t.Errorf("the moves kept are %v", kinds)
 	}
 	game := daily.Render(p, cold, daily.Live{})
 	f := game.Facts
 	if f.Decade == nil || *f.Decade != p.Answer.Year/10*10 || f.Years == nil || *f.Years != p.Answer.Year/5*5 ||
-		f.Length == nil || *f.Length != daily.LengthBand(p.Answer.Length) || f.Rating != nil || game.Pts != 500 ||
-		!slices.Equal(game.Overlaps, []string{p.Cast[0].ID}) {
+		f.Length == nil || *f.Length != daily.LengthBand(p.Answer.Length) || f.Rating != nil || game.Pts != 750 {
 		t.Errorf("read back, the game says %+v with %d points", f, game.Pts)
 	}
 }
@@ -788,13 +794,13 @@ func TestMetaBringsPointBlanksTablesToNameDrop(t *testing.T) {
 	exec(drop, metaSQL, metaSQL)
 	fresh := dailyShape(t, s)
 	for _, want := range []string{"daily_puzzles.billed jsonb", "daily_puzzles.movies jsonb", "daily_puzzles.colour character",
-		"daily_puzzles.length integer", "daily_puzzles.directors jsonb", "'next'", "'overlap'", "'years'", "(no, pts DESC)"} {
+		"daily_puzzles.length integer", "daily_puzzles.directors jsonb", "'next'", "'years'", "'guess'", "(no, pts DESC)"} {
 		if !strings.Contains(fresh, want) {
 			t.Errorf("a fresh database lacks %s: %s", want, fresh)
 		}
 	}
 	for _, gone := range []string{"daily_puzzles.cards", "daily_puzzles.start ", "daily_puzzles.people", "daily_games.ms ",
-		"'flip'", "'actor'", "'genres'", "'year'"} {
+		"'flip'", "'actor'", "'genres'", "'year'", "'overlap'"} {
 		if strings.Contains(fresh, gone) {
 			t.Errorf("a fresh database has %s: %s", gone, fresh)
 		}
@@ -834,6 +840,112 @@ func TestMetaBringsPointBlanksTablesToNameDrop(t *testing.T) {
 	}
 	if p, err := s.DailyPuzzleNo(ctx, 1); err != nil || p.Answer.Colour != "#26382d" || p.Answer.Length != 100 || p.Cast == nil || p.Movies == nil {
 		t.Errorf("the Name Drop puzzle read back: %+v, %v", p, err)
+	}
+}
+
+// The moves table as Name Drop's first meta.sql made it, its kind check
+// taking the overlap: the shape a database that ran it has, which
+// meta.sql must bring to the one without.
+const overlapMovesSQL = `
+	CREATE TABLE meta.daily_moves (
+	    game   bigint NOT NULL REFERENCES meta.daily_games (id) ON DELETE CASCADE,
+	    seq    int NOT NULL,
+	    key    text NOT NULL,
+	    kind   text NOT NULL CHECK (kind IN ('next', 'length', 'rating', 'genre', 'decade', 'years',
+	                                         'director', 'overlap', 'guess', 'reveal')),
+	    arg    text, cost int NOT NULL, detail jsonb, at timestamptz NOT NULL,
+	    PRIMARY KEY (game, seq), UNIQUE (game, key))`
+
+// TestMetaTakesTheOverlapOutOfTheKindCheck: meta.sql applied twice to a
+// database whose kind check still takes the overlap, with a game that
+// bought one, leaves the shape a fresh database has: a check that
+// refuses the overlap and takes every other move. The game that bought
+// one goes, its moves with it, since it cannot be replayed without it;
+// the other game, its moves and both players stay as they were.
+func TestMetaTakesTheOverlapOutOfTheKindCheck(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	exec := func(stmts ...string) {
+		t.Helper()
+		for _, stmt := range stmts {
+			if _, err := s.pool.Exec(ctx, stmt); err != nil {
+				t.Fatalf("%v\n%s", err, stmt)
+			}
+		}
+	}
+	count := func(sql string) int {
+		t.Helper()
+		var n int
+		if err := s.pool.QueryRow(ctx, sql).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	t.Cleanup(func() { resetDaily(t, s) })
+	drop := `DROP TABLE meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
+
+	exec(drop, metaSQL, metaSQL)
+	fresh := dailyShape(t, s)
+	exec(`DROP TABLE meta.daily_moves`, overlapMovesSQL)
+	if old := dailyShape(t, s); !strings.Contains(old, "'overlap'") {
+		t.Fatalf("the set-up did not make the moves table that takes the overlap: %s", old)
+	}
+	if kept, err := s.putDailyPuzzle(ctx, boardPuzzle(1, oct8)); err != nil || !kept {
+		t.Fatalf("a puzzle: %v, %v", kept, err)
+	}
+	var games [2]int64
+	for i, name := range []string{"Trinity Kimble", "Morpheus Vane"} {
+		player, err := s.CreateDailyPlayer(ctx, daily.TokenHash(daily.NewToken()), name, 205)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.pool.QueryRow(ctx, `
+			INSERT INTO meta.daily_games (player, no, pts, moves, started_at) VALUES ($1, 1, $2, $3, now())
+			RETURNING id`, player.ID, []int{600, 800}[i], []int{3, 2}[i]).Scan(&games[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	move := `INSERT INTO meta.daily_moves (game, seq, key, kind, arg, cost, at) VALUES ($1, $2, $3, $4, nullif($5, ''), $6, now())`
+	for _, m := range []struct {
+		game      int64
+		seq       int
+		kind, arg string
+		cost      int
+	}{
+		{games[0], 1, daily.KindNext, "", 100}, {games[0], 2, "overlap", "nm9900007", 250}, {games[0], 3, daily.KindLength, "", 50},
+		{games[1], 1, daily.KindNext, "", 100}, {games[1], 2, daily.KindDecade, "", 100},
+	} {
+		if _, err := s.pool.Exec(ctx, move, m.game, m.seq, fmt.Sprintf("key-%d-%d", m.game, m.seq), m.kind, m.arg, m.cost); err != nil {
+			t.Fatalf("%s: %v", m.kind, err)
+		}
+	}
+
+	exec(metaSQL, metaSQL)
+	if got := dailyShape(t, s); got != fresh {
+		t.Errorf("over the check that takes the overlap:\n%s\nwant\n%s", got, fresh)
+	}
+	if n := count(`SELECT count(*) FROM meta.daily_moves WHERE kind = 'overlap'`); n != 0 {
+		t.Errorf("%d overlap moves are left", n)
+	}
+	if n := count(`SELECT count(*) FROM meta.daily_games`); n != 1 || count(`SELECT count(*) FROM meta.daily_players`) != 2 ||
+		count(`SELECT count(*) FROM meta.daily_puzzles`) != 1 {
+		t.Errorf("%d games are left, want the one that bought no overlap", n)
+	}
+	var kept int64
+	var moves int
+	if err := s.pool.QueryRow(ctx, `SELECT g.id, (SELECT count(*) FROM meta.daily_moves m WHERE m.game = g.id) FROM meta.daily_games g`).
+		Scan(&kept, &moves); err != nil || kept != games[1] || moves != 2 {
+		t.Errorf("the game kept is %d with %d moves, %v; want %d with 2", kept, moves, err, games[1])
+	}
+	var pgErr *pgconn.PgError
+	if _, err := s.pool.Exec(ctx, move, games[1], 3, "an-overlap", "overlap", "nm9900007", 250); !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Errorf("an overlap: %v, want the check to refuse it", err)
+	}
+	for i, kind := range []string{daily.KindNext, daily.KindLength, daily.KindRating, daily.KindGenre, daily.KindYears,
+		daily.KindDirector, daily.KindGuess, daily.KindReveal} {
+		if _, err := s.pool.Exec(ctx, move, games[1], 3+i, "move-"+kind, kind, "", 0); err != nil {
+			t.Errorf("%s: %v", kind, err)
+		}
 	}
 }
 

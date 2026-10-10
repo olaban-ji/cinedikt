@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import css from './grid.css?raw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { faceCardController, type FaceCard, type FaceHold, type ImageLoad } from './faceCard';
-import { PeopleChips, chipEvents, chipName, filmCounts, wheelSideways } from './PeopleChips';
+import { PeopleChips, chipEvents, chipName, filmCounts, listenWheelSideways, wheelSideways } from './PeopleChips';
 import matrix from './fixtures/matrix-grid.json';
 import type { GridPayload, GridPerson, SpineTuple } from './grid';
 import type { PreviewClock } from './preview';
@@ -296,5 +296,53 @@ describe('a wheel over a row of chips', () => {
     wheelSideways(wheel(0, 120).e, fits);
     expect(fits.scrollLeft).toBe(0);
     expect(() => wheelSideways(wheel(0, 120).e, null)).not.toThrow();
+  });
+});
+
+describe('a wheel over a row of chips, heard by the row itself', () => {
+  /** A row with 50px of chips past its edge, scrolled to `left`, that
+   *  keeps what listens to it and how. */
+  function listenedRow(left: number) {
+    const added: { type: string; fn: (e: unknown) => void; options: unknown }[] = [];
+    const removed: { type: string; fn: unknown }[] = [];
+    const row = {
+      scrollWidth: 350,
+      clientWidth: 300,
+      scrollLeft: left,
+      addEventListener: (type: string, fn: (e: unknown) => void, options: unknown) => added.push({ type, fn, options }),
+      removeEventListener: (type: string, fn: unknown) => removed.push({ type, fn }),
+    };
+    return { row, added, removed, stop: listenWheelSideways(row as unknown as HTMLDivElement) };
+  }
+  const wheel = (deltaY: number) => ({ deltaX: 0, deltaY, preventDefault: vi.fn() });
+
+  it('listens for the wheel on the row, not passively, so the page holds still while the row moves', () => {
+    const { row, added } = listenedRow(0);
+    expect(added).toHaveLength(1);
+    expect(added[0].type).toBe('wheel');
+    expect(added[0].options).toEqual({ passive: false });
+    const tick = wheel(100);
+    added[0].fn(tick);
+    expect(row.scrollLeft).toBe(50);
+    expect(tick.preventDefault).toHaveBeenCalled();
+  });
+
+  it('lets the page scroll on once the row is at its end', () => {
+    const { row, added } = listenedRow(50);
+    const tick = wheel(100);
+    added[0].fn(tick);
+    expect(row.scrollLeft).toBe(50);
+    expect(tick.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('stops listening with the very handler it listened with', () => {
+    const { added, removed, stop } = listenedRow(0);
+    expect(removed).toEqual([]);
+    stop?.();
+    expect(removed).toEqual([{ type: 'wheel', fn: added[0].fn }]);
+  });
+
+  it('listens to nothing without a row', () => {
+    expect(listenWheelSideways(null)).toBeUndefined();
   });
 });

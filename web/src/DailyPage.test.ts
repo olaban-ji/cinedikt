@@ -21,6 +21,8 @@ import { DailyLeaderboard, DailyResult } from './DailyResult';
 import { DailyRules, nextStop } from './DailyRules';
 import {
   HIT_INSETS,
+  RISE_STEP_MS,
+  TITLE_LOOPS,
   castRows,
   codesOf,
   guessMessage,
@@ -113,7 +115,6 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
     nextCost: 100,
     slots: slotsOf({ 0: 'start' }),
     facts: {},
-    overlaps: [],
     log: [],
     end: null,
     ...over,
@@ -231,32 +232,80 @@ afterEach(() => {
 describe('the title screen', () => {
   it('draws the game in one picture, then the pill and day, the name, the lead, three steps, the fine print and Play', () => {
     const html = drawn(null);
-    // The card in today's poster colour, beside three rows: shown, next,
-    // hidden. For the eye only.
-    expect(html).toContain('<div class="cd-nd-title-pic" aria-hidden="true">');
-    expect(html).toContain('<span class="cd-nd-title-card" style="--tone:#26382d">?</span>');
-    for (const row of ['shown', 'next', 'hidden']) expect(html).toContain(`cd-nd-title-row-${row}`);
-    // The shown row's face is tinted in hue 118, in the theme drawn.
-    expect(html).toContain('<span class="cd-nd-title-face" style="--tone:oklch(0.76 0.13 118)"></span>');
+    // The card in today's poster colour, glowing in it lightened, beside
+    // three rows: one shown, then the next and the hidden one, each with a
+    // filled row waiting to drop into it. For the eye only.
+    expect(html).toContain('<div class="cd-nd-title-pic" aria-hidden="true" data-rise="">');
+    expect(html).toContain(
+      '<span class="cd-nd-title-card" style="--tone:#26382d;--glow:rgba(136, 146, 140, 0.3)" data-anim="float"><span class="cd-nd-title-q" data-anim="bob">?</span><span class="cd-nd-title-sheen" data-anim="sheen"></span></span>',
+    );
+    expect(html).toContain(
+      '<span class="cd-nd-title-row cd-nd-title-row-next" data-anim="pulse"><span class="cd-nd-title-drop" data-anim="drop1"><span class="cd-nd-title-row cd-nd-title-row-shown"><span class="cd-nd-title-face" style="--tone:oklch(0.76 0.13 205)"></span><span class="cd-nd-title-bar"></span></span></span></span>',
+    );
+    expect(html).toContain(
+      '<span class="cd-nd-title-row cd-nd-title-row-hidden"><span class="cd-nd-title-drop" data-anim="drop2"><span class="cd-nd-title-row cd-nd-title-row-shown"><span class="cd-nd-title-face" style="--tone:oklch(0.76 0.13 345)"></span>',
+    );
+    // The row always shown, its face tinted in hue 118, in the theme drawn.
+    expect(html).toContain(
+      '<span class="cd-nd-title-rows"><span class="cd-nd-title-row cd-nd-title-row-shown"><span class="cd-nd-title-face" style="--tone:oklch(0.76 0.13 118)"></span>',
+    );
     expect(html).toContain('<span class="cd-daily-pill">Cinedikt Daily</span><span class="cd-nd-title-day">Friday 9 October</span>');
     expect(html).toContain('<h1 class="cd-nd-title-heading">Name Drop</h1>');
     expect(html).toContain(
       'Today’s movie is hidden. Its cast shows up one name at a time, working up to the star. Name the movie in as few names as you can.',
     );
-    expect(html).toContain('<ol class="cd-nd-steps" aria-label="How to play">');
+    expect(html).toContain('<ol class="cd-nd-steps" aria-label="How to play" data-rise="">');
     for (const [i, step] of ['See who’s in it', 'Guess, or show the next name', 'Fewer names, more points'].entries()) {
       expect(html).toContain(`<span class="cd-nd-badge" aria-hidden="true">${i + 1}</span>${step}</li>`);
     }
     expect(html).toContain(
       'You start with 1,000 points. Extra names, facts and wrong guesses cost points. There’s no clock.',
     );
-    expect(html).toMatch(/<button type="button" class="cd-nd-play">Play<svg [^>]*aria-hidden="true">/);
+    expect(html).toMatch(
+      /<button type="button" class="cd-nd-play" data-rise=""><span class="cd-nd-play-shine" aria-hidden="true" data-anim="shine"><\/span>Play<svg [^>]*aria-hidden="true">/,
+    );
     expect(html).toContain('<span class="cd-nd-title-count">61,240</span> people have played today.');
     // The order the design gives them.
     const order = ['cd-nd-title-pic', 'cd-nd-title-meta', 'cd-nd-title-words', 'cd-nd-steps', 'cd-nd-title-fine', 'cd-nd-play', 'cd-nd-title-played'];
     const found = order.map((c) => at(html, c));
     expect(found.every((n) => n >= 0)).toBe(true);
     expect([...found].sort((a, b) => a - b)).toEqual(found);
+  });
+
+  it('rises its seven parts in the order they are drawn, the picture first and the players line last', () => {
+    const html = drawn(null);
+    const rising = [...html.matchAll(/class="([\w-]+)[^"]*"[^>]*data-rise=""/g)].map((m) => m[1]);
+    expect(rising).toEqual([
+      'cd-nd-title-pic',
+      'cd-nd-title-meta',
+      'cd-nd-title-words',
+      'cd-nd-steps',
+      'cd-nd-title-fine',
+      'cd-nd-play',
+      'cd-nd-title-played',
+    ]);
+    expect(RISE_STEP_MS).toBe(90);
+  });
+
+  it('marks a part for every loop it plays, and for nothing else', () => {
+    const html = drawn(null);
+    const marked = [...html.matchAll(/data-anim="(\w+)"/g)].map((m) => m[1]);
+    expect(marked.sort()).toEqual(Object.keys(TITLE_LOOPS).sort());
+  });
+
+  it('starts nothing moving on the server, and draws every part at rest', () => {
+    // Effects never run in a static render, as they never run for a
+    // reader who has asked for stillness: what is drawn is the screen at
+    // rest, the dropping rows and the shines left to the stylesheet.
+    const html = drawn(null);
+    expect(html).not.toMatch(/style="[^"]*(opacity|translate|rotate)/);
+  });
+
+  it('leaves the card without a glow on a colour the server could not have sent', () => {
+    const html = renderToStaticMarkup(
+      createElement(DailyGameView, { ...viewProps(null), today: { ...todayOf(null), colour: 'url(x)' } }),
+    );
+    expect(html).toContain('<span class="cd-nd-title-card" style="--tone:var(--c)" data-anim="float">');
   });
 
   it('leaves the players line out before anyone has played', () => {
@@ -288,9 +337,9 @@ describe('the game page while the game is on', () => {
     expect(html).not.toContain('cd-nd-card-over');
   });
 
-  it('puts the top block first, then the cast, then the facts, with the guess bar under them', () => {
+  it('puts the top block first, then the facts right under the card, then the cast, with the guess bar under them', () => {
     const html = drawn(PLAYING);
-    const order = ['cd-nd-top', 'cd-nd-cast', 'cd-nd-facts', 'cd-nd-bar'].map((c) => at(html, c));
+    const order = ['cd-nd-top', 'cd-nd-facts', 'cd-nd-cast', 'cd-nd-bar'].map((c) => at(html, c));
     expect(order.every((n) => n >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     // Nothing of the end.
@@ -353,9 +402,26 @@ describe('the game page while the game is on', () => {
     expect(html.match(/data-peek="1"/g)).toHaveLength(4);
   });
 
+  it('heads the facts panel “Buy a fact”, with a note beside it, over one row of facts', () => {
+    const html = drawn(PLAYING);
+    expect(html).toContain(
+      '<section class="cd-nd-facts" aria-labelledby="cd-nd-facts-head"><div class="cd-nd-facts-top"><h2 id="cd-nd-facts-head" class="cd-nd-facts-head">Buy a fact</h2><p class="cd-nd-facts-note" aria-live="polite">Each one also marks the map</p></div><div class="cd-nd-fact-list">',
+    );
+  });
+
+  it('asks a reader with three names showing and nothing bought, ringing the panel in the accent', () => {
+    const stuck = gameOf({ pts: 800, slots: slotsOf({ 0: 'start', 1: 'next', 2: 'next' }) });
+    const html = drawn(stuck);
+    expect(html).toContain(
+      '<section class="cd-nd-facts cd-nd-facts-nudge" aria-labelledby="cd-nd-facts-head"><div class="cd-nd-facts-top"><h2 id="cd-nd-facts-head" class="cd-nd-facts-head">Buy a fact</h2><p class="cd-nd-facts-note" aria-live="polite">Stuck? A fact narrows it down.</p>',
+    );
+    // Two names is not stuck, and a fact bought is not either.
+    expect(drawn(gameOf({ slots: slotsOf({ 0: 'start', 1: 'next' }) }))).not.toContain('cd-nd-facts-nudge');
+    expect(drawn(PLAYING)).not.toContain('cd-nd-facts-nudge');
+  });
+
   it('offers the facts in order, each with its price, what it shows and costs for a screen reader, and the decade bought', () => {
     const html = drawn(PLAYING);
-    expect(html).toContain('<h2 id="cd-nd-facts-head" class="cd-nd-facts-head">Buy a fact. Each one also marks the map</h2>');
     expect(html).toContain(
       '<button type="button" class="cd-nd-fact" aria-label="Show its genre. It costs 100 points.">Genre<span class="cd-nd-cost">−100</span></button>',
     );
@@ -379,33 +445,34 @@ describe('the game page while the game is on', () => {
     expect(html).toContain('<button type="button" class="cd-nd-fact" aria-label="Show roughly how long it is. It costs 50 points.">');
     expect(html).toContain('<button type="button" class="cd-nd-fact" disabled="" aria-label="Show its genre. It costs 100 points.">');
     expect(html).toContain('<button type="button" class="cd-nd-fact" disabled="" aria-label="Show the director. It costs 250 points.">');
-    // And Next name, which would leave nothing, with no next row.
-    expect(html).toContain('<button type="button" class="cd-nd-nextbtn" disabled="">Next name<span class="cd-nd-cost">−100</span></button>');
+    // And no next row, since a name would leave nothing.
     expect(html).not.toContain('cd-nd-row-next');
   });
 
-  it('pins the guess bar: the points line, Next name and the field, with Guess held until something matches', () => {
+  it('pins the guess bar as one row, the field and Guess, with Guess held until something matches', () => {
     const html = drawn(gameOf());
-    expect(html).toContain(
-      '<p class="cd-nd-points" aria-live="polite">Get it now for <span class="cd-nd-points-n">1,000</span> points · wrong guess −100</p>',
-    );
-    expect(html).toContain('<button type="button" class="cd-nd-nextbtn">Next name<span class="cd-nd-cost">−100</span></button>');
     expect(html).toMatch(
-      /<input class="cd-nd-input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="[^"]+" aria-label="Name the movie" placeholder="Name the movie"/,
+      /<div class="cd-nd-msgwrap" aria-live="polite"><\/div><div class="cd-nd-ask"><input class="cd-nd-input" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="[^"]+" aria-label="Name the movie" placeholder="Name the movie · a miss costs 100"/,
     );
-    expect(html).toContain('<button type="button" class="cd-nd-guess" disabled="">Guess</button>');
-    // The message box's region is there, empty, with no guess to tell of.
-    expect(html).toContain('<div class="cd-nd-msgwrap" aria-live="polite"></div>');
+    expect(html).toContain('<button type="button" class="cd-nd-guess" disabled="">Guess · 1,000</button></div></div></div>');
+    // No points line and no Next name: the next name is the cast's next
+    // row's to give.
+    for (const gone of ['cd-nd-points', 'cd-nd-nextbtn', 'cd-nd-bar-row', 'Next name', 'Get it now']) {
+      expect(html).not.toContain(gone);
+    }
+    expect(html).toContain('<button type="button" class="cd-nd-row-go" aria-label="Show the next name. It costs 100 points."></button>');
   });
 
-  it('says the next wrong guess is the last when the points cannot cover it', () => {
+  it('says in the field that the next wrong guess is the last when the points cannot cover it', () => {
     const html = drawn(gameOf({ pts: 100, nextCost: 150 }));
-    expect(html).toContain('Last guess, for <span class="cd-nd-points-n">100</span> points</p>');
+    expect(html).toContain('placeholder="Name the movie · last guess"');
+    expect(html).toContain('>Guess · 100</button>');
   });
 
-  it('says everyone is showing once all six are out', () => {
+  it('offers no next row once all six are out', () => {
     const html = drawn(gameOf({ pts: 500, slots: ALL_SHOWN }));
-    expect(html).toContain('<button type="button" class="cd-nd-nextbtn" disabled="">Everyone’s showing</button>');
+    expect(html).not.toContain('cd-nd-row-go');
+    expect(html.match(/cd-nd-row-shown/g)).toHaveLength(6);
   });
 
   it('offers Show the answer under the wrong guesses', () => {
@@ -431,7 +498,8 @@ describe('after a wrong guess', () => {
   });
 
   it('says what the next one costs, dearer than the last', () => {
-    expect(drawn(PLAYING)).toContain('Get it now for <span class="cd-nd-points-n">600</span> points · wrong guess −150</p>');
+    expect(drawn(PLAYING)).toContain('placeholder="Name the movie · a miss costs 150"');
+    expect(drawn(PLAYING)).toContain('>Guess · 600</button>');
   });
 
   it('tells what it learned in one row: the title, the warmth, the faces it shares and the three chips', () => {
@@ -460,7 +528,6 @@ describe('after a wrong guess', () => {
         opening: false,
         guessed: new Set([THIRTEENTH.guess.id]),
         inputRef: { current: null },
-        onNext: () => {},
         onGuess: async () => true,
         say: () => {},
       }),
@@ -609,6 +676,7 @@ describe('the cast list', () => {
 describe('the page once the game is over', () => {
   it('turns the card over to the poster, and heads the page with the answer’s title and no line', () => {
     const html = drawn(SOLVED);
+    expect(html).toContain('<div class="cd-nd-card" aria-hidden="true"><div class="cd-nd-card-in cd-nd-card-over">');
     expect(html).toContain('<div class="cd-nd-card-in cd-nd-card-over">');
     expect(html).toMatch(/<div class="cd-nd-card-back" style="--poster-fill:linear-gradient\(165deg, oklch\(0\.45 0\.07 \d+\), oklch\(0\.28 0\.05 \d+\)\)">/);
     expect(html).toContain('<h1 class="cd-nd-heading">The Matrix</h1>');
@@ -637,9 +705,12 @@ describe('the page once the game is over', () => {
     expect(html).not.toContain('cd-nd-movies');
   });
 
-  it('says every fact exactly, as About the movie', () => {
+  it('says every fact exactly, as About the movie, in the facts panel with no note and no nudge', () => {
     const html = drawn(SOLVED);
-    expect(html).toContain('<h2 id="cd-nd-about-head" class="cd-nd-facts-head">About the movie</h2>');
+    expect(html).toContain(
+      '<section class="cd-nd-facts" aria-labelledby="cd-nd-about-head"><div class="cd-nd-facts-top"><h2 id="cd-nd-about-head" class="cd-nd-facts-head">About the movie</h2></div><div class="cd-nd-fact-list">',
+    );
+    expect(html).not.toContain('cd-nd-facts-note');
     const facts = [...html.matchAll(/<span class="cd-nd-fact-label">([^<]+)<\/span><span class="cd-nd-fact-value">([^<]+)<\/span>/g)].map(
       (m) => `${m[1]} ${m[2]}`,
     );
@@ -968,20 +1039,22 @@ describe('starting again', () => {
 
 describe('the header’s end on /daily', () => {
   it('names the puzzle by number and day, and offers the rules', () => {
-    const html = renderToStaticMarkup(
-      createElement(DailyHeaderTail, { day: { no: 143, date: '2026-10-09' }, phone: false, onRules: () => {} }),
-    );
+    const html = renderToStaticMarkup(createElement(DailyHeaderTail, { day: { no: 143, date: '2026-10-09' }, onRules: () => {} }));
     expect(html).toContain('<span class="cd-daily-pill">Daily</span>');
     expect(html).toContain('No. 143 · Friday 9 October');
     expect(html).toContain('aria-label="How it works"');
   });
 
-  it('names it by number alone on a phone, and not at all before it has loaded', () => {
-    const phone = renderToStaticMarkup(
-      createElement(DailyHeaderTail, { day: { no: 143, date: '2026-10-09' }, phone: true, onRules: () => {} }),
-    );
+  it('names it by number alone on a phone, read from the window as it is, and not at all before it has loaded', () => {
+    vi.stubGlobal('window', { innerWidth: 375, innerHeight: 540 });
+    const phone = renderToStaticMarkup(createElement(DailyHeaderTail, { day: { no: 143, date: '2026-10-09' }, onRules: () => {} }));
     expect(phone).toContain('>No. 143<');
-    const none = renderToStaticMarkup(createElement(DailyHeaderTail, { day: null, phone: false, onRules: () => {} }));
+    // Whatever the app last measured: the window says it is a phone.
+    const told = renderToStaticMarkup(
+      createElement(DailyHeaderTail, { day: { no: 143, date: '2026-10-09' }, phone: false, onRules: () => {} }),
+    );
+    expect(told).toContain('>No. 143<');
+    const none = renderToStaticMarkup(createElement(DailyHeaderTail, { day: null, onRules: () => {} }));
     expect(none).not.toContain('cd-daily-date');
   });
 });
@@ -1059,6 +1132,65 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-play').get('height')).toBe('56px');
   });
 
+  it('draws the title screen’s picture at v2’s sizes: an 88 by 132 card glowing 38px round, and 164px rows 8px apart', () => {
+    const card = decls('.cd-nd-title-card');
+    expect([card.get('width'), card.get('height'), card.get('border-radius')]).toEqual(['88px', '132px', '13px']);
+    expect(card.get('box-shadow')).toBe('var(--nd-edge), var(--sh), 0 0 38px var(--glow, transparent)');
+    expect(card.get('rotate')).toBe('-4deg');
+    expect(card.get('overflow')).toBe('hidden');
+    expect(decls('.cd-nd-title-rows').get('width')).toBe('164px');
+    expect(decls('.cd-nd-title-rows').get('gap')).toBe('8px');
+    expect(decls('.cd-nd-title-row').get('height')).toBe('36px');
+    expect(decls('.cd-nd-title-row-next').get('border')).toBe('1.5px dashed var(--acc)');
+    expect(decls('.cd-nd-title-row-hidden').get('border')).toBe('1.5px dashed var(--ln3)');
+    // The rows that drop in rest out of sight, over the dashed edge.
+    expect(decls('.cd-nd-title-drop').get('opacity')).toBe('0');
+    expect(decls('.cd-nd-title-drop').get('inset')).toBe('-1.5px');
+  });
+
+  it('rests the shines off to the side: the card’s 45% wide and tilted 12°, Play’s 40%', () => {
+    const sheen = decls('.cd-nd-title-sheen');
+    expect([sheen.get('width'), sheen.get('rotate'), sheen.get('translate')]).toEqual(['45%', '12deg', '-160% 0']);
+    expect(sheen.get('background')).toBe('linear-gradient(100deg, transparent, var(--nd-card-shine), transparent)');
+    const shine = decls('.cd-nd-play-shine');
+    expect([shine.get('width'), shine.get('translate')]).toEqual(['40%', '-120% 0']);
+    expect(shine.get('background')).toBe('linear-gradient(100deg, transparent, var(--nd-play-shine), transparent)');
+    expect(decls('.cd-nd-play').get('overflow')).toBe('hidden');
+    expect(decls('.cd-daily').get('--nd-card-shine')).toBe('rgba(255, 255, 255, 0.3)');
+    expect(decls('.cd-daily').get('--nd-play-shine')).toBe('rgba(255, 255, 255, 0.4)');
+  });
+
+  it('rounds the hidden card in play, so its glow and ripples are its shape', () => {
+    expect(decls('.cd-nd-card').get('border-radius')).toBe('14px');
+  });
+
+  it('sets the facts out as a panel under the card, one row of chips that scrolls sideways and clips no hit area', () => {
+    const panel = decls('.cd-nd-facts');
+    expect(panel.get('padding')).toBe('9px 12px 10px');
+    expect(panel.get('border-radius')).toBe('14px');
+    expect(panel.get('background')).toBe('var(--s)');
+    expect(panel.get('box-shadow')).toBe('inset 0 0 0 1px var(--ln2)');
+    expect(decls('.cd-nd-facts-nudge').get('box-shadow')).toBe('inset 0 0 0 1px var(--acc)');
+    expect(decls('.cd-nd-facts-head').get('font-size')).toBe('13.5px');
+    expect(decls('.cd-nd-facts-head').get('color')).toBe('var(--t)');
+    expect(decls('.cd-nd-facts-note').get('font-size')).toBe('12.5px');
+    expect(decls('.cd-nd-facts-note').get('color')).toBe('var(--t3)');
+    expect(decls('.cd-nd-facts-nudge .cd-nd-facts-note').get('color')).toBe('var(--accText)');
+    const row = decls('.cd-nd-fact-list');
+    expect(row.get('flex-wrap')).toBe('nowrap');
+    expect(row.get('overflow-x')).toBe('auto');
+    expect(row.get('scrollbar-width')).toBe('none');
+    // 5px above and below, given back by the margin, and out to the
+    // panel's edges: the facts' -5px hit areas fit inside.
+    expect(row.get('padding')).toBe('5px 12px');
+    expect(row.get('margin')).toBe('-5px -12px');
+    expect(parseFloat(HIT_INSETS.fact)).toBe(-5);
+    expect(decls('.cd-nd-fact-list > *').get('flex-shrink')).toBe('0');
+    expect(decls('.cd-nd-fact-list > *').get('white-space')).toBe('nowrap');
+    // For sale on the page's ground.
+    expect(decls('.cd-nd-fact').get('background')).toBe('var(--g)');
+  });
+
   it('moves a name in as the design does: the placeholder out over .3s, the text up from 6px over .45s, the face growing from 0.7', () => {
     expect(decls('.cd-nd-ph').get('transition')).toBe('opacity 0.3s ease');
     expect(decls('.cd-nd-who').get('transition')).toBe('opacity 0.45s ease, translate 0.45s ease');
@@ -1075,9 +1207,8 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-giveup::before').get('inset')).toBe(HIT_INSETS.showAnswer);
     expect(decls('.cd-nd-fact::before').get('inset')).toBe(HIT_INSETS.fact);
     expect(decls('.cd-nd-movies::before').get('inset')).toBe(HIT_INSETS.movies);
-    expect(decls('.cd-nd-nextbtn::before').get('inset')).toBe(HIT_INSETS.next);
     expect(decls('.cd-nd-tab::before').get('inset')).toBe(HIT_INSETS.tab);
-    for (const c of ['.cd-nd-tried-chip', '.cd-nd-giveup', '.cd-nd-fact', '.cd-nd-movies', '.cd-nd-nextbtn', '.cd-nd-tab']) {
+    for (const c of ['.cd-nd-tried-chip', '.cd-nd-giveup', '.cd-nd-fact', '.cd-nd-movies', '.cd-nd-tab']) {
       expect(decls(c).get('position'), c).toBe('relative');
     }
   });
@@ -1094,6 +1225,9 @@ describe('Name Drop’s stylesheet', () => {
     expect(decls('.cd-nd-msg > *').get('white-space')).toBe('nowrap');
     expect(decls('.cd-nd-input').get('font-size')).toBe('16px');
     expect(decls('.cd-nd-guess:disabled').get('opacity')).toBe('0.45');
+    expect(decls('.cd-nd-guess').get('white-space')).toBe('nowrap');
+    // The points line and Next name are gone, rules and all.
+    expect(css).not.toMatch(/\.cd-nd-(points|nextbtn|bar-row)\b/);
     expect(decls('.cd-daily .cd-toast').get('bottom')).toBe('calc(170px + env(safe-area-inset-bottom))');
   });
 
@@ -1114,7 +1248,7 @@ describe('Name Drop’s stylesheet', () => {
     expect(inner.get('min-height')).toBe('0');
     expect(inner.get('justify-content')).toBe('flex-end');
     expect(css.replace(/\/\*[\s\S]*?\*\//g, '')).toMatch(
-      /\.cd-nd-land :is\(\.cd-nd-msgwrap, \.cd-nd-bar-row, \.cd-nd-ask\) \{\s*flex-shrink: 0;\s*\}/,
+      /\.cd-nd-land :is\(\.cd-nd-msgwrap, \.cd-nd-ask\) \{\s*flex-shrink: 0;\s*\}/,
     );
     // Portrait keeps the list hung above the field, over the page.
     expect(decls('.cd-nd-hits').get('position')).toBe('absolute');
@@ -1197,7 +1331,7 @@ describe('Name Drop’s stylesheet', () => {
 
   it('moves nothing with stillness asked for', () => {
     const still = stillRules();
-    for (const c of ['.cd-nd-card-in', '.cd-nd-row', '.cd-nd-ph', '.cd-nd-who', '.cd-nd-facewrap', '.cd-nd-peek', '.cd-nd-play']) {
+    for (const c of ['.cd-nd-card-in', '.cd-nd-row', '.cd-nd-ph', '.cd-nd-who', '.cd-nd-facewrap', '.cd-nd-peek', '.cd-nd-facts', '.cd-nd-play']) {
       expect(still, c).toMatch(new RegExp(`${c.replace(/[.-]/g, (x) => `\\${x}`)}[,\\s][^}]*transition: none`));
     }
   });

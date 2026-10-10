@@ -5,13 +5,13 @@ import {
   CHART_LABELS,
   NEXT_MOVIE_IN,
   PLAY_AGAIN,
+  SCORE_COUNT_AFTER_MS,
   SCORE_COUNT_MS,
   betterLine,
   boardNote,
   boardRows,
   boardsWanted,
   chartBars,
-  countUp,
   countdown,
   dropFailed,
   fmtN,
@@ -19,6 +19,7 @@ import {
   paidFor,
   resultFaces,
   resultKicker,
+  scoreAt,
   streakPill,
   weekLetters,
   type BoardsSeen,
@@ -31,12 +32,13 @@ import type { Theme } from './theme';
 // The end of the game: the result card and the leaderboard, between About
 // the movie and the cast.
 
-/** The score as the result draws it: counting up from nought, easing out,
- *  over SCORE_COUNT_MS when the game has just ended on the page, and simply
- *  there for a game opened already over, or for a reader who has asked for
- *  stillness. Drawn a frame at a time, but finished by a timer: a page
- *  nobody is painting gets no frames, and the number must still be right
- *  when the reader looks. */
+/** The score as the result draws it, when the game has just ended on the
+ *  page: nought while the card turns and the page moves down to the
+ *  result, SCORE_COUNT_AFTER_MS, then counting up, easing out, over
+ *  SCORE_COUNT_MS (scoreAt). Simply there for a game opened already over,
+ *  or for a reader who has asked for stillness. Drawn a frame at a time
+ *  once it counts, but finished by a timer: a page nobody is painting gets
+ *  no frames, and the number must still be right when the reader looks. */
 export function useCountUp(score: number, play: boolean): number {
   const [shown, setShown] = useState(() => (play && !stillNow() ? 0 : score));
   useEffect(() => {
@@ -45,19 +47,23 @@ export function useCountUp(score: number, play: boolean): number {
       return;
     }
     const t0 = performance.now();
+    const all = SCORE_COUNT_AFTER_MS + SCORE_COUNT_MS;
     let frame = 0;
     const step = (t: number) => {
-      setShown(countUp(score, t - t0));
-      if (t - t0 < SCORE_COUNT_MS) frame = requestAnimationFrame(step);
+      setShown(scoreAt(score, t - t0));
+      if (t - t0 < all) frame = requestAnimationFrame(step);
     };
-    frame = requestAnimationFrame(step);
+    const start = window.setTimeout(() => {
+      frame = requestAnimationFrame(step);
+    }, SCORE_COUNT_AFTER_MS);
     const end = window.setTimeout(() => {
       cancelAnimationFrame(frame);
       setShown(score);
-    }, SCORE_COUNT_MS + 50);
+    }, all + 50);
     return () => {
-      cancelAnimationFrame(frame);
+      window.clearTimeout(start);
       window.clearTimeout(end);
+      cancelAnimationFrame(frame);
     };
   }, [score, play]);
   return shown;

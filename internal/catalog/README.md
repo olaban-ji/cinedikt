@@ -342,8 +342,12 @@ as `length`, poster colour and genres), then three JSON documents:
 Also in movie (`cast` is a word SQL keeps), and `movies`, each with
 the slots it credits (`cast`), the slots whose own sheet it is on
 (`sheets`) and whether a director is on it (`dir`); and the era and
-first genre the next days are mixed against. `puzzleColumns` writes a
-nil list as an empty one, since the columns refuse null.
+first genre the next days are mixed against. No response sends a
+movie's `cast` or `dir` now: they are what the pick worked the sheets
+and the Also in movies out from, and a Movies sheet that said either
+would pick the answer out of two people's sheets, the one card on
+both. `puzzleColumns` writes a nil list as an empty one, since the
+columns refuse null.
 
 `meta.daily_players` is a cookie's SHA-256, a generated name, unique,
 and a hue; `CreateDailyPlayer` and `RenameDailyPlayer` answer
@@ -372,6 +376,28 @@ applies `meta.sql` twice over no daily tables, twice over Point
 Blank's and twice over Name Drop's, and finds the same shape every
 time.
 
+Name Drop itself first sold an overlap, which put a second person on
+a Movies sheet and lit only the movies the two shared; the answer is
+on every sheet, so two or three names in it was most of the way to
+it, and it went. `CREATE TABLE IF NOT EXISTS` leaves a moves table
+made before then with a kind check that still takes `'overlap'`, so a
+second `DO` block, after the `CREATE`, makes the check again without
+it, and only while `pg_constraint` shows `daily_moves_kind_check`
+still naming it. Before it does, it deletes every game holding an
+overlap move, the moves going with it by cascade, rather than the
+moves alone: the check would refuse them, and the game cannot be kept
+without them, since its points, its end and the `seq` of every move
+after were worked out with the overlap, and its next move would be
+recorded under a `seq` already taken. Nothing was released, so only
+test games ever bought one. The players are kept, and every other
+game. On a fresh database, and on one already without the overlap,
+the block does nothing, every time the file runs.
+`TestMetaTakesTheOverlapOutOfTheKindCheck` builds the old check, with
+a game that bought an overlap and one that did not, applies `meta.sql`
+twice, and finds a fresh database's shape, the one game and both
+players kept, and the check refusing the overlap and taking every
+other move.
+
 `DailyAct` makes each move in one transaction holding the game's row
 (`FOR UPDATE`), in this order: a key already recorded is a retry,
 answered with the game as it is, even past midnight, since the move
@@ -394,11 +420,14 @@ imports do to the guessed movie.
 `DailyLive` reads the posters and photos a game shows, fresh for every
 answer: posters from `meta.posters`, photos from `meta.people` only
 while younger than the 175 days anything of TMDb's is kept
-(`photoServed`). A Movies sheet asks it for the poster of every movie
-on the sheet (`daily.Puzzle.SheetWants`), so the sheet can give all of
-them or none. Neither is copied into a puzzle, and nothing of a
-synopsis is, OMDb's or TMDb's, so the Daily keeps nothing of TMDb's
-past its six months.
+(`photoServed`). A Movies sheet asks it for the posters of only the
+movies readable on it as the game stands
+(`daily.Puzzle.SheetWants(state, slot)`), those inside every range
+bought, or all of them once the game is over, so the sheet can give
+every readable card its poster or none; before any range it reads
+none, and a blank card never has one. Neither is copied into a
+puzzle, and nothing of a synopsis is, OMDb's or TMDb's, so the Daily
+keeps nothing of TMDb's past its six months.
 
 `DailyBoard` places in SQL and reads only the rows the board shows.
 The board is the players who have finished `daily.EarlierGames`

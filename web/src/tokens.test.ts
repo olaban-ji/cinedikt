@@ -171,6 +171,9 @@ describe('the theme tokens', () => {
       // app's box so the guess bar rides above an on-screen keyboard.
       '--vv-top',
       '--vv-h',
+      // The glow round the Daily's title card: today's poster colour,
+      // lightened, worked out in script (daily.ts's posterGlow).
+      '--glow',
     ]);
     // Set by the very rule that reads it: the sheet's wash is an oklch()
     // made from --h, which has to live in a custom property to ship as
@@ -179,7 +182,8 @@ describe('the theme tokens', () => {
     // photo's inset, the director's corner and the fade, which the face's
     // own rules set (.cd-face-chip and the rest). Name Drop's hidden card
     // is lit in white whatever the theme, as a poster is, and its sheen,
-    // edge, "?" and stand-in title's shadow are set on .cd-daily.
+    // edge, "?" and stand-in title's shadow are set on .cd-daily, with the
+    // bands of light that cross the title screen's card and Play.
     const local = new Set([
       '--wash',
       '--face',
@@ -190,6 +194,8 @@ describe('the theme tokens', () => {
       '--nd-edge',
       '--nd-q',
       '--nd-glow',
+      '--nd-card-shine',
+      '--nd-play-shine',
     ]);
     const used = new Set([...css.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1]));
     const missing = [...used].filter((v) => !defined.has(v) && !inline.has(v) && !local.has(v));

@@ -443,17 +443,17 @@ CREATE INDEX IF NOT EXISTS daily_games_no ON meta.daily_games (no);
 
 -- A game's moves, in order. key is the page's own name for the request
 -- that made the move, so a retry is answered with the game rather than
--- charged twice. arg is the person an overlap adds or the movie guessed,
--- cost what the move cost, and detail, for a wrong guess, what it
--- learned when it was made: the movie's title and year, the slots of the
--- six it credits, and whether it shares the answer's decade and a genre,
--- so a replay never needs the live catalog.
+-- charged twice. arg is the movie guessed, cost what the move cost, and
+-- detail, for a wrong guess, what it learned when it was made: the
+-- movie's title and year, the slots of the six it credits, and whether
+-- it shares the answer's decade and a genre, so a replay never needs the
+-- live catalog.
 CREATE TABLE IF NOT EXISTS meta.daily_moves (
     game   bigint NOT NULL REFERENCES meta.daily_games (id) ON DELETE CASCADE,
     seq    int NOT NULL,
     key    text NOT NULL,
     kind   text NOT NULL CHECK (kind IN ('next', 'length', 'rating', 'genre', 'decade', 'years',
-                                         'director', 'overlap', 'guess', 'reveal')),
+                                         'director', 'guess', 'reveal')),
     arg    text,
     cost   int NOT NULL,
     detail jsonb,
@@ -461,3 +461,32 @@ CREATE TABLE IF NOT EXISTS meta.daily_moves (
     PRIMARY KEY (game, seq),
     UNIQUE (game, key)
 );
+
+-- Name Drop first sold an overlap, which put a second person on a Movies
+-- sheet and lit only the movies the two shared: the answer is on every
+-- sheet, so two or three names were most of the way to it, and it went.
+-- CREATE TABLE IF NOT EXISTS leaves a moves table made before then with
+-- a kind check that still takes 'overlap', so the check is made again
+-- here without it. Nothing was released, so only test games ever bought
+-- one, and each such game is deleted, its moves with it, before the
+-- check is made: the check would refuse the move, and the game cannot
+-- be kept without it, since its points, its end and the seq of every
+-- move after it were worked out with it, and its next move would be
+-- recorded under a seq already taken. The players are kept, and every
+-- other game. The test reads the catalog, so on a fresh database and on
+-- one already without the overlap this does nothing, every time this
+-- file runs.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'meta.daily_moves'::regclass AND conname = 'daily_moves_kind_check'
+          AND pg_get_constraintdef(oid) LIKE '%''overlap''%'
+    ) THEN
+        DELETE FROM meta.daily_games g
+        WHERE EXISTS (SELECT 1 FROM meta.daily_moves m WHERE m.game = g.id AND m.kind = 'overlap');
+        ALTER TABLE meta.daily_moves DROP CONSTRAINT daily_moves_kind_check;
+        ALTER TABLE meta.daily_moves ADD CONSTRAINT daily_moves_kind_check
+            CHECK (kind IN ('next', 'length', 'rating', 'genre', 'decade', 'years', 'director', 'guess', 'reveal'));
+    END IF;
+END $$;

@@ -1,15 +1,15 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 import { searchMovies, type DailyGame, type SearchHit } from './api';
 import {
-  GUESS_PLACEHOLDER,
+  GUESS_FIELD,
   LIST_CLOSE_MS,
   MESSAGE_FACES,
   SEARCH_MIN_CHARS,
   SEARCH_WAIT_MS,
   TOASTS,
+  guessLabel,
   guessOptions,
-  nextButton,
-  pointsLine,
+  guessPlaceholder,
   resultsMax,
   toneStyle,
   warmthColour,
@@ -24,8 +24,10 @@ import type { Theme } from './theme';
 
 // The guess bar, pinned under the page while the game is on (or a column
 // beside the cast on a landscape phone): what the last wrong guess told,
-// what getting it now would score, Next name, and the field that names the
-// movie, with its results above it.
+// over one row, the field that names the movie and Guess, with its
+// results above it. The row says it all: the field what the next miss
+// costs, or that it is the last guess, and Guess the points getting it
+// now would score. The next name is the cast's dashed next row's to give.
 
 interface BarProps {
   game: DailyGame;
@@ -34,13 +36,13 @@ interface BarProps {
   message: GuessMessage | null;
   codes: ReadonlyMap<string, string>;
   theme: Theme;
-  /** Below 640px, where the list holds four results rather than six. */
+  /** Below 640px, now, where the list holds four results rather than
+   *  six. */
   phone: boolean;
   /** Play is still hiding the names: nothing can be done yet. */
   opening: boolean;
   guessed: ReadonlySet<string>;
   inputRef: RefObject<HTMLInputElement | null>;
-  onNext: () => void;
   /** A guess at this movie, by IMDb id. Whether it was taken, so the field
    *  can clear; one that never got an answer stays typed, so trying again
    *  is one press. */
@@ -57,7 +59,6 @@ export function DailyBar({
   opening,
   guessed,
   inputRef,
-  onNext,
   onGuess,
   say,
 }: BarProps) {
@@ -121,8 +122,6 @@ export function DailyBar({
   // While the reader types, the message box gives the results its room.
   const typing = focus && typed.length > 0;
   const can = !opening && !sending && rows.length > 0;
-  const points = pointsLine(game);
-  const next = nextButton(game);
 
   const guess = async (hit: SearchHit) => {
     if (opening || sending) return;
@@ -182,22 +181,6 @@ export function DailyBar({
         <div className="cd-nd-msgwrap" aria-live="polite">
           {message && !typing && <MessageBox message={message} codes={codes} theme={theme} />}
         </div>
-        <div className="cd-nd-bar-row">
-          <p className="cd-nd-points" aria-live="polite">
-            {points.lead}
-            <span className="cd-nd-points-n">{points.pts}</span>
-            {points.tail}
-          </p>
-          <button
-            type="button"
-            className="cd-nd-nextbtn"
-            disabled={!next.can || opening}
-            onClick={onNext}
-          >
-            {next.label}
-            {next.price && <span className="cd-nd-cost">{next.price}</span>}
-          </button>
-        </div>
         <div className="cd-nd-ask">
           <input
             ref={inputRef}
@@ -208,8 +191,8 @@ export function DailyBar({
             aria-expanded={listed}
             aria-controls={listId}
             aria-activedescendant={active != null ? `${listId}-${active}` : undefined}
-            aria-label={GUESS_PLACEHOLDER}
-            placeholder={GUESS_PLACEHOLDER}
+            aria-label={GUESS_FIELD}
+            placeholder={guessPlaceholder(game)}
             autoComplete="off"
             autoCorrect="off"
             spellCheck={false}
@@ -229,7 +212,7 @@ export function DailyBar({
             }}
           />
           <button type="button" className="cd-nd-guess" disabled={!can} onClick={submit}>
-            Guess
+            {guessLabel(game)}
           </button>
         </div>
       </div>

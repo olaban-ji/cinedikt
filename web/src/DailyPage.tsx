@@ -30,10 +30,14 @@ import { DailyRules } from './DailyRules';
 import { DailyTitle } from './DailyTitle';
 import {
   AGAIN_FAILED,
+  CARD_BOB,
   CAST_HEADING,
+  FACTS_NOTE,
   GAME_NAME,
-  LANDSCAPE_QUERY,
+  NEXT_IN_VIEW_MS,
+  NUDGE_NOTE,
   PLAY_HIDE_MS,
+  RESULT_AFTER_MS,
   REVEAL_CONFIRM_MS,
   SHOW_ANSWER,
   SHOW_ANSWER_SURE,
@@ -41,28 +45,35 @@ import {
   UNREACHABLE,
   aboutItems,
   cardColour,
+  cardGlow,
+  cardRipple,
   castRows,
   clockOffset,
   codesOf,
   dailyDateText,
   earlyRefusal,
   factItems,
+  factNudge,
   factsHeading,
   guessById,
   guessMessage,
   guessedIds,
-  isLandscapePhone,
+  hueColour,
   midnightText,
   moveSig,
   newKey,
   newWrongGuess,
   newestGuess,
+  nextInView,
+  nudgePulse,
   openingRows,
   pageHeading,
   pageLine,
   pageSections,
   refusalText,
+  resultScroll,
   revealDelays,
+  rippleSlot,
   shareText,
   staleGame,
   todaysPeople,
@@ -73,7 +84,9 @@ import {
   watchMidnight,
   type PageSection,
 } from './daily';
-import { stillNow } from './motion';
+import { useLiveScreen } from './dailyScreen';
+import { animate, stillNow } from './motion';
+import { listenWheelSideways } from './PeopleChips';
 import { PosterImage } from './PosterImage';
 import { posterFallback } from './poster';
 import { useScreen } from './screen';
@@ -83,10 +96,12 @@ import { Toast, useToast } from './Toast';
 
 // Cinedikt Daily's page, under the app's header, and its game, Name Drop:
 // the title screen, then the game page — the hidden card and the wrong
-// guesses, the cast showing up one name at a time, the facts for sale and
-// the guess bar pinned under them — and, once it is over, the answer, the
-// result and the leaderboard, with the cast below. The server owns the
-// game: every move is sent, and the page draws the game it sends back.
+// guesses, the facts for sale right under it, the cast showing up one name
+// at a time, and the guess bar pinned under them — and, once it is over,
+// the answer, the result and the leaderboard, with the cast below. The
+// server owns the game: every move is sent, and the page draws the game it
+// sends back. The page's size is read live (dailyScreen.ts): the phone's
+// four results and the landscape column follow the window as it is now.
 
 interface Props {
   /** Told the puzzle's number and day once it has loaded, for the
@@ -155,31 +170,6 @@ function useViewportFit(box: RefObject<HTMLElement | null>): void {
       app.style.removeProperty('--vv-h');
     };
   }, [box]);
-}
-
-/** Whether the window is a landscape phone (LANDSCAPE_QUERY), read now.
- *  Its width and height stand in where matchMedia is missing. */
-function landscapeNow(): boolean {
-  if (typeof window === 'undefined') return false;
-  if (typeof window.matchMedia === 'function') return window.matchMedia(LANDSCAPE_QUERY).matches;
-  return isLandscapePhone(window.innerWidth, window.innerHeight);
-}
-
-/** A landscape phone, kept as the window turns: the guess bar becomes a
- *  column beside the cast. Watched from script rather than written as a
- *  media query because 520px tall is not one of the stylesheet's screen
- *  classes, which screen.test.ts holds every query in grid.css to. */
-function useLandscape(): boolean {
-  const [land, setLand] = useState(landscapeNow);
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-    const mq = window.matchMedia(LANDSCAPE_QUERY);
-    const read = () => setLand(mq.matches);
-    read();
-    mq.addEventListener('change', read);
-    return () => mq.removeEventListener('change', read);
-  }, []);
-  return land;
 }
 
 /** Cinedikt Daily, under the app's header. It asks for today's puzzle as
@@ -300,9 +290,9 @@ const NO_DELAYS: ReadonlyMap<number, number> = new Map();
  *  from a fixture; the page draws it once today's puzzle has arrived. */
 export function DailyGameView({ today, offset, say, reload, again, rulesSignal, onOpenMovie }: GameProps) {
   const screen = useScreen();
+  const live = useLiveScreen();
   const theme = useResolvedTheme();
   const still = useReducedMotion();
-  const land = useLandscape();
   const main = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -354,29 +344,61 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
   const done = game?.phase === 'done';
   const boards = useBoards(today.no, done);
 
+  // ---- moving the page ----
+
+  /** The result, brought up to RESULT_GAP_PX under the page's top: smoothly,
+   *  or in one jump with stillness asked for. */
+  const toResult = useCallback(() => {
+    const m = main.current;
+    const res = m?.querySelector('.cd-nd-res');
+    if (!m || !res) return;
+    const top = resultScroll(m.scrollTop, res.getBoundingClientRect().top, m.getBoundingClientRect().top);
+    m.scrollTo({ top, behavior: stillNow() ? 'auto' : 'smooth' });
+  }, []);
+
+  /** The next row, the only way to the next name, brought into sight over
+   *  the guess bar should a name that has just appeared have pushed it
+   *  under; failing a next row, the foot of the cast. Nothing moves when
+   *  it is in sight already. */
+  const keepNextInView = useCallback(() => {
+    const m = main.current;
+    const row = m?.querySelector('.cd-nd-row-next') ?? m?.querySelector('.cd-nd-cast');
+    if (!m || !row) return;
+    const by = nextInView(row.getBoundingClientRect().bottom, m.getBoundingClientRect().bottom);
+    if (by > 0) m.scrollTo({ top: m.scrollTop + by, behavior: stillNow() ? 'auto' : 'smooth' });
+  }, []);
+
   // ---- taking a game the server sent ----
 
   /** Draws the game the server sent. A new wrong guess puts its message
-   *  in the bar. A game that ends here ends: the card turns, the page
-   *  goes back to its top, where the answer is, and the field lets the
-   *  keyboard go. `quiet` takes a game handed back by a refusal, or by
-   *  Play, which changes what is drawn and reports nothing about it. */
-  const adopt = useCallback((next: DailyGame, quiet = false) => {
-    const was = gameRef.current;
-    gameRef.current = next;
-    setGame(next);
-    if (next.phase === 'play' && newWrongGuess(was, next)) setMsgId(newestGuess(next)?.id ?? null);
-    if (was?.phase === 'play' && next.phase === 'done') {
-      // A game that ended in another tab was counted there.
-      if (!quiet) capture('daily_finish', { won: next.won, pts: next.pts });
-      setEnded(true);
-      setSheet(null);
-      setMsgId(null);
-      setSure(false);
-      inputRef.current?.blur();
-      setTopAsk((n) => n + 1);
-    }
-  }, []);
+   *  in the bar, and a new name, once it has settled in, has the page
+   *  keep the next row in sight. A game that ends here ends: the card
+   *  turns, the page goes back to its top, where the answer is, and the
+   *  field lets the keyboard go; RESULT_AFTER_MS later the page moves on
+   *  down to the result. `quiet` takes a game handed back by a refusal,
+   *  or by Play, which changes what is drawn and reports nothing about
+   *  it. */
+  const adopt = useCallback(
+    (next: DailyGame, quiet = false) => {
+      const was = gameRef.current;
+      gameRef.current = next;
+      setGame(next);
+      if (next.phase === 'play' && newWrongGuess(was, next)) setMsgId(newestGuess(next)?.id ?? null);
+      if (rippleSlot(was, next) != null) later(keepNextInView, NEXT_IN_VIEW_MS);
+      if (was?.phase === 'play' && next.phase === 'done') {
+        // A game that ended in another tab was counted there.
+        if (!quiet) capture('daily_finish', { won: next.won, pts: next.pts });
+        setEnded(true);
+        setSheet(null);
+        setMsgId(null);
+        setSure(false);
+        inputRef.current?.blur();
+        setTopAsk((n) => n + 1);
+        later(toResult, RESULT_AFTER_MS);
+      }
+    },
+    [later, keepNextInView, toResult],
+  );
 
   // Back to the top once the end is drawn, smoothly, or at once with
   // stillness asked for.
@@ -521,7 +543,6 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
   const next = useCallback(() => void act({ kind: 'next' }), [act]);
   const buy = useCallback((fact: DailyFactKind) => void act({ kind: 'buy', fact }), [act]);
   const guess = useCallback((film: string) => act({ kind: 'guess', film }), [act]);
-  const overlap = useCallback((person: string) => act({ kind: 'overlap', person }), [act]);
 
   /** Show the answer takes two presses: the first asks "Sure? Show it"
    *  for REVEAL_CONFIRM_MS, and a second within that gives the game up. */
@@ -620,7 +641,7 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
 
   return (
     <>
-      <div className={`cd-nd${land ? ' cd-nd-land' : ''}`}>
+      <div className={`cd-nd${live.land ? ' cd-nd-land' : ''}`}>
         <div ref={main} className="cd-nd-main">
           <div className="cd-nd-col">
             {pageSections(!playing).map((s) => (
@@ -634,11 +655,10 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
             message={message}
             codes={codes}
             theme={theme}
-            phone={screen.phone}
+            phone={live.phone}
             opening={opening}
             guessed={guessed}
             inputRef={inputRef}
-            onNext={next}
             onGuess={guess}
             say={say}
           />
@@ -650,12 +670,10 @@ export function DailyGameView({ today, offset, say, reload, again, rulesSignal, 
           person={sheet}
           game={game}
           theme={theme}
-          onOverlap={overlap}
           onGuess={(id) => {
-            // A move still on its way (a name the sheet is buying) would
-            // have act drop the guess unsaid. The sheet holds Guess it
-            // until then; should a press get through, the sheet stays up
-            // rather than close on a guess never made.
+            // A move still on its way would have act drop the guess
+            // unsaid: the sheet stays up rather than close on a guess
+            // never made.
             if (busyRef.current) return;
             // The sheet goes first, then the guess is made as any other.
             setSheet(null);
@@ -697,26 +715,11 @@ function TopBlock({
   onAgain?: () => void;
 }) {
   const playing = game.phase === 'play';
-  const answer = game.end?.answer;
   const chips = triedChips(game);
   const line = pageLine(game);
   return (
     <div className="cd-nd-top">
-      <div className="cd-nd-card" aria-hidden="true">
-        <div className={`cd-nd-card-in${answer ? ' cd-nd-card-over' : ''}`}>
-          <div className="cd-nd-card-front" style={toneStyle(cardColour(today.colour))}>
-            <span className="cd-nd-card-q">?</span>
-          </div>
-          {/* The back is not drawn until the game is over: the page is not
-              told the poster before then. */}
-          {answer && (
-            <div className="cd-nd-card-back" style={{ ['--poster-fill' as string]: posterFallback(answer.title, theme) }}>
-              <PosterImage id={answer.id} url={answer.poster} cssPx={104} className="cd-nd-card-poster" eager />
-              {!answer.poster && <span className="cd-nd-card-standin">{answer.title}</span>}
-            </div>
-          )}
-        </div>
-      </div>
+      <HiddenCard colour={today.colour} game={game} theme={theme} />
       <div className="cd-nd-beside">
         <span className="cd-nd-kicker">{GAME_NAME}</span>
         <h1 className="cd-nd-heading">{pageHeading(game)}</h1>
@@ -760,9 +763,76 @@ function TopBlock({
   );
 }
 
-/** The facts row while the game is on: each fact for sale, with its price,
- *  or what it says once bought (factItems). One the points do not cover
- *  with one to spare is drawn at half strength and cannot be pressed. */
+/** The hidden card: today's poster colour with a "?", which turns over to
+ *  the poster at the end. Its back is not drawn until then, and the page
+ *  holds nothing of the poster before: it is not told it.
+ *
+ *  While the game is on it is alive: its glow breathes in the lightened
+ *  poster colour (cardGlow), its "?" bobs (CARD_BOB), and each name that
+ *  appears sends a ripple of that person's colour out of it (rippleSlot,
+ *  cardRipple), so the eye goes from the card to whoever has just joined.
+ *  The loops start once, as the game starts or the page opens on one, and
+ *  stop at the end; nothing moves for a reader who has asked for
+ *  stillness, and the card simply sits there. */
+function HiddenCard({ colour, game, theme }: { colour: string; game: DailyGame; theme: Theme }) {
+  const card = useRef<HTMLDivElement>(null);
+  const q = useRef<HTMLSpanElement>(null);
+  const still = useReducedMotion();
+  const playing = game.phase === 'play';
+  const answer = game.end?.answer;
+
+  useEffect(() => {
+    if (!playing || still) return;
+    const glow = cardGlow(colour);
+    const loops = [
+      glow ? animate(card.current, glow.keyframes, glow.options) : null,
+      animate(q.current, CARD_BOB.keyframes, CARD_BOB.options),
+    ];
+    return () => loops.forEach((a) => a?.cancel());
+  }, [playing, still, colour]);
+
+  // The game as last drawn, so a name that has just appeared is told from
+  // one that was there: none ripples as the page opens.
+  const was = useRef(game);
+  useEffect(() => {
+    const k = rippleSlot(was.current, game);
+    was.current = game;
+    const slot = k == null ? null : game.slots[k];
+    if (!slot?.shown) return;
+    const ripple = cardRipple(hueColour(slot.person.hue, theme));
+    animate(card.current, ripple.keyframes, ripple.options);
+  }, [game, theme]);
+
+  return (
+    <div ref={card} className="cd-nd-card" aria-hidden="true">
+      <div className={`cd-nd-card-in${answer ? ' cd-nd-card-over' : ''}`}>
+        <div className="cd-nd-card-front" style={toneStyle(cardColour(colour))}>
+          <span ref={q} className="cd-nd-card-q">
+            ?
+          </span>
+        </div>
+        {answer && (
+          <div className="cd-nd-card-back" style={{ ['--poster-fill' as string]: posterFallback(answer.title, theme) }}>
+            <PosterImage id={answer.id} url={answer.poster} cssPx={104} className="cd-nd-card-poster" eager />
+            {!answer.poster && <span className="cd-nd-card-standin">{answer.title}</span>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The facts panel, right under the card while the game is on, where it
+ *  cannot be missed: "Buy a fact" with its note beside it, over one row
+ *  of the facts, each for sale with its price, or what it says once
+ *  bought (factItems). The row scrolls sideways, its scrollbar hidden, so
+ *  a mouse wheel moves it too (FactsPanel). One the points do not cover
+ *  with one to spare is drawn at half strength and cannot be pressed.
+ *
+ *  Once three names are showing and nothing has been bought (factNudge),
+ *  the panel's ring turns the accent and its note asks, and the first
+ *  time it does, it pulses three times (nudgePulse), its edge in the
+ *  accent the page resolves --acc to now, in whichever theme. */
 function DailyFacts({
   game,
   opening,
@@ -772,68 +842,125 @@ function DailyFacts({
   opening: boolean;
   onBuy: (fact: DailyFactKind) => void;
 }) {
+  const panel = useRef<HTMLElement>(null);
+  const nudge = factNudge(game);
+  const pulsed = useRef(false);
+  useEffect(() => {
+    if (!nudge || pulsed.current) return;
+    pulsed.current = true;
+    const el = panel.current;
+    const pulse = nudgePulse(el ? getComputedStyle(el).getPropertyValue('--acc').trim() : '');
+    animate(el, pulse.keyframes, pulse.options);
+  }, [nudge]);
   return (
-    <section className="cd-nd-facts" aria-labelledby="cd-nd-facts-head">
-      <h2 id="cd-nd-facts-head" className="cd-nd-facts-head">
-        {factsHeading(false)}
-      </h2>
-      <div className="cd-nd-fact-list">
-        {factItems(game).map((f) =>
-          f.bought ? (
-            <span key={f.kind} className="cd-nd-fact-got">
-              <span className="cd-nd-fact-label">{f.label}</span>
-              <span className="cd-nd-fact-value">{f.value}</span>
-            </span>
-          ) : (
-            <button
-              key={f.kind}
-              type="button"
-              className="cd-nd-fact"
-              disabled={!f.can || opening}
-              aria-label={f.aria}
-              onClick={() => onBuy(f.kind)}
-            >
-              {f.label}
-              <span className="cd-nd-cost">{f.price}</span>
-            </button>
-          ),
-        )}
-      </div>
-    </section>
-  );
-}
-
-/** About the movie, once the game is over: every fact, exact. */
-function DailyAbout({ end }: { end: NonNullable<DailyGame['end']> }) {
-  return (
-    <section className="cd-nd-facts" aria-labelledby="cd-nd-about-head">
-      <h2 id="cd-nd-about-head" className="cd-nd-facts-head">
-        {factsHeading(true)}
-      </h2>
-      <div className="cd-nd-fact-list">
-        {aboutItems(end).map((f) => (
-          <span key={f.label} className="cd-nd-fact-got">
+    <FactsPanel
+      panelRef={panel}
+      id="cd-nd-facts-head"
+      heading={factsHeading(false)}
+      note={nudge ? NUDGE_NOTE : FACTS_NOTE}
+      nudge={nudge}
+    >
+      {factItems(game).map((f) =>
+        f.bought ? (
+          <span key={f.kind} className="cd-nd-fact-got">
             <span className="cd-nd-fact-label">{f.label}</span>
             <span className="cd-nd-fact-value">{f.value}</span>
           </span>
-        ))}
+        ) : (
+          <button
+            key={f.kind}
+            type="button"
+            className="cd-nd-fact"
+            disabled={!f.can || opening}
+            aria-label={f.aria}
+            onClick={() => onBuy(f.kind)}
+          >
+            {f.label}
+            <span className="cd-nd-cost">{f.price}</span>
+          </button>
+        ),
+      )}
+    </FactsPanel>
+  );
+}
+
+/** About the movie, once the game is over, in the same panel: every
+ *  fact, exact. */
+function DailyAbout({ end }: { end: NonNullable<DailyGame['end']> }) {
+  return (
+    <FactsPanel id="cd-nd-about-head" heading={factsHeading(true)}>
+      {aboutItems(end).map((f) => (
+        <span key={f.label} className="cd-nd-fact-got">
+          <span className="cd-nd-fact-label">{f.label}</span>
+          <span className="cd-nd-fact-value">{f.value}</span>
+        </span>
+      ))}
+    </FactsPanel>
+  );
+}
+
+/** The panel the facts sit in: a head row, the heading and a note beside
+ *  it, over one row of chips that scrolls sideways. The note is a polite
+ *  live region, so the nudge is heard as well as seen.
+ *
+ *  A mouse wheel over the row moves the row (listenWheelSideways), heard
+ *  on the row itself rather than through onWheel: React hears every wheel
+ *  passively, at its root, so the page here would scroll first and carry
+ *  the row out from under the pointer, and the chips past the edge could
+ *  only be reached with Shift or Tab. */
+function FactsPanel({
+  id,
+  heading,
+  note,
+  nudge = false,
+  panelRef,
+  children,
+}: {
+  id: string;
+  heading: string;
+  note?: string;
+  nudge?: boolean;
+  panelRef?: RefObject<HTMLElement | null>;
+  children: ReactNode;
+}) {
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => listenWheelSideways(list.current), []);
+  return (
+    <section ref={panelRef} className={`cd-nd-facts${nudge ? ' cd-nd-facts-nudge' : ''}`} aria-labelledby={id}>
+      <div className="cd-nd-facts-top">
+        <h2 id={id} className="cd-nd-facts-head">
+          {heading}
+        </h2>
+        {note != null && (
+          <p className="cd-nd-facts-note" aria-live="polite">
+            {note}
+          </p>
+        )}
+      </div>
+      <div ref={list} className="cd-nd-fact-list">
+        {children}
       </div>
     </section>
   );
 }
 
 /** The header's end on /daily, for the app to put after its wordmark:
- *  the Daily pill, the puzzle's number and day, and "How it works". The
- *  header keeps its own row; this is only what goes in it. */
+ *  the Daily pill, the puzzle's number and day ("No. 143" alone on a
+ *  phone), and "How it works". The header keeps its own row; this is only
+ *  what goes in it. Whether it is on a phone is read from the window as it
+ *  is now (useLiveScreen), whatever the app last measured. */
 export function DailyHeaderTail({
   day,
-  phone,
   onRules,
 }: {
   day: { no: number; date: string } | null;
-  phone: boolean;
+  /** The app's own reading of the screen. Not read: the tail reads the
+   *  window itself, live, so the date follows a phone turned or a window
+   *  dragged narrow. */
+  phone?: boolean;
   onRules: () => void;
 }) {
+  const { phone } = useLiveScreen();
   return (
     <>
       <span className="cd-daily-pill">Daily</span>

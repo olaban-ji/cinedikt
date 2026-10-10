@@ -10,9 +10,10 @@
 // answer, a hidden name or a fact nobody has paid for until the game is
 // over. So what is here is only what the page needs to draw the game it
 // is handed: what each row, fact, chip and line says, what a wrong guess
-// told, what the result and the share say, what the Movies sheet lights,
-// and when things move. Everything is pure but the midnight watch, which
-// is a timer, and all of it is checked without a DOM in daily.test.ts.
+// told, what the result and the share say, what the Movies sheet says,
+// and when and how things move. Everything is pure but the midnight
+// watch, which is a timer, and all of it is checked without a DOM in
+// daily.test.ts.
 
 import type { CSSProperties } from 'react';
 import type {
@@ -25,8 +26,8 @@ import type {
   DailyGame,
   DailyGuess,
   DailyMove,
-  DailyMovie,
   DailyPerson,
+  DailyReadableMovie,
   DailySlot,
   DailyTab,
   DailyToday,
@@ -34,6 +35,7 @@ import type {
   DailyWeek,
 } from './api';
 import { initialsFor } from './grid';
+import { screenOf } from './screen';
 import type { Theme } from './theme';
 
 /** The game's name: the title screen's heading, the game page's kicker,
@@ -60,7 +62,7 @@ export const DAILY_START = 1000;
 /** The names in a puzzle: the six billed cast, in reveal order. */
 export const CAST_SIZE = 6;
 
-/** Next name. */
+/** The next name, shown from the cast's dashed next row. */
 export const NEXT_COST = 100;
 
 /** The first wrong guess, and how much more each one after it costs, so
@@ -85,10 +87,6 @@ export const FACT_COST: Record<DailyFactKind, number> = {
   years: 100,
   director: 250,
 };
-
-/** An overlap on the Movies sheet: once per person, and then theirs to
- *  switch on and off for nothing. */
-export const OVERLAP_COST = 250;
 
 /** Whether the points cover a purchase: a purchase must leave at least
  *  one point, so it is refused at exactly its cost, as the server
@@ -117,8 +115,35 @@ export function hueColour(hue: number, theme: Theme): string {
   return theme === 'light' ? `oklch(0.56 0.16 ${hue})` : `oklch(0.76 0.13 ${hue})`;
 }
 
-/** The hue of the face on the title screen's shown row. */
-export const TITLE_HUE = 118;
+/** The hues of the title screen's three faces: the row that is always
+ *  shown, then the two that drop into the next and hidden rows. */
+export const TITLE_HUES = [118, 205, 345] as const;
+
+/** How far the hidden card's glow is lightened towards white from the
+ *  poster colour, as a share of the way. */
+export const GLOW_LIGHTEN = 0.45;
+
+/** The glow round the hidden card, at alpha `a`: today's poster colour
+ *  lightened towards white, so a dark poster still lights the page round
+ *  it. Worked out here and set inline (as --glow, or in an animation's
+ *  frames), since a stylesheet colour could not follow the day's poster;
+ *  rgba rather than oklch, so it reads the same in every browser that
+ *  can animate a shadow. Null for anything but the "#rrggbb" the server
+ *  promises, and then the card simply has no glow. */
+export function posterGlow(colour: string | null | undefined, a: number): string | null {
+  if (!isPosterColour(colour)) return null;
+  const n = parseInt(colour.slice(1), 16);
+  const lift = (v: number) => Math.round(v + (255 - v) * GLOW_LIGHTEN);
+  return `rgba(${lift((n >> 16) & 255)}, ${lift((n >> 8) & 255)}, ${lift(n & 255)}, ${a})`;
+}
+
+/** The accent as the design's glows draw it, rgba(170, 140, 255), at
+ *  alpha `a`: the title screen's next row pulsing and the facts panel's
+ *  nudge. Only ever set from script, into an animation's frames, never
+ *  written in the stylesheet, which keeps its colours in tokens. */
+export function accentGlow(a: number): string {
+  return `rgba(170, 140, 255, ${a})`;
+}
 
 /** What a wrong guess's warmth is called, cold to hot. */
 export const WARMTH_LABELS: Record<DailyWarmth, 'Cold' | 'Warm' | 'Hot'> = { 0: 'Cold', 1: 'Warm', 2: 'Hot' };
@@ -145,7 +170,13 @@ export function toneStyle(colour: string): CSSProperties {
  *  "#rrggbb" the server promises; anything else is not put into a style
  *  at all, and the card falls back to the card ground. */
 export function cardColour(colour: string | null | undefined): string {
-  return typeof colour === 'string' && /^#[0-9a-f]{6}$/i.test(colour) ? colour : 'var(--c)';
+  return isPosterColour(colour) ? colour : 'var(--c)';
+}
+
+/** Whether a colour is the "#rrggbb" the server promises for a poster's
+ *  average, and so safe to put into a style. */
+function isPosterColour(colour: string | null | undefined): colour is string {
+  return typeof colour === 'string' && /^#[0-9a-f]{6}$/i.test(colour);
 }
 
 /** The initials drawn on a face with no photo, unique among `people`: the
@@ -347,9 +378,27 @@ export function aboutItems(end: { answer: DailyAnswer; directors: DailyPerson[] 
   ].filter((f) => f.value);
 }
 
-/** The facts row's heading: what is for sale, or About the movie. */
+/** The facts panel's heading: what is for sale, or About the movie. */
 export function factsHeading(done: boolean): string {
-  return done ? 'About the movie' : 'Buy a fact. Each one also marks the map';
+  return done ? 'About the movie' : 'Buy a fact';
+}
+
+/** The note beside the heading while the game is on, and what it becomes
+ *  when the reader seems stuck (factNudge). */
+export const FACTS_NOTE = 'Each one also marks the map';
+export const NUDGE_NOTE = 'Stuck? A fact narrows it down.';
+
+/** The facts are easy to miss, so once three names are showing and not
+ *  one fact has been bought, the panel asks: its ring turns the accent,
+ *  its note says so, and, once only, it pulses. */
+export const NUDGE_NAMES = 3;
+
+export function factNudge(game: Pick<DailyGame, 'phase' | 'slots' | 'facts'>): boolean {
+  return (
+    game.phase === 'play' &&
+    shownSlots(game).length >= NUDGE_NAMES &&
+    !FACT_ORDER.some((kind) => hasFact(kind, game.facts))
+  );
 }
 
 // ---- the cast ----
@@ -387,14 +436,14 @@ export function shownSlots(game: Pick<DailyGame, 'slots'>): Extract<DailySlot, {
   return game.slots.filter((s): s is Extract<DailySlot, { shown: true }> => s.shown);
 }
 
-/** Whether Next name can be pressed: a game on, a name still hidden, and
- *  the points to leave one over after it. */
+/** Whether the next name can be asked for: a game on, a name still
+ *  hidden, and the points to leave one over after it. */
 export function canNext(game: Pick<DailyGame, 'phase' | 'pts' | 'slots'>): boolean {
   return game.phase === 'play' && game.slots.some((s) => !s.shown) && affords(game.pts, NEXT_COST);
 }
 
-/** The slot Next name shows: the first hidden one in reveal order, or
- *  null when it cannot be pressed. */
+/** The slot the next name is: the first hidden one in reveal order, or
+ *  null when it cannot be asked for. */
 export function nextSlot(game: Pick<DailyGame, 'phase' | 'pts' | 'slots'>): number | null {
   if (!canNext(game)) return null;
   return game.slots.find((s) => !s.shown)?.slot ?? null;
@@ -427,10 +476,10 @@ export type CastRow =
   | { slot: number; state: 'next'; bar: number }
   | { slot: number; state: 'hidden'; bar: number };
 
-/** The cast list, in reveal order. The row Next name would show is the
- *  "next" one only while it can be pressed; otherwise every hidden row is
- *  just hidden. A hidden row carries no name at all: the page is never
- *  told one. */
+/** The cast list, in reveal order. The row the next name would fill is
+ *  the "next" one, the only way to ask for it, only while it can be
+ *  pressed; otherwise every hidden row is just hidden. A hidden row
+ *  carries no name at all: the page is never told one. */
 export function castRows(game: Pick<DailyGame, 'phase' | 'pts' | 'slots' | 'log'>): CastRow[] {
   const next = nextSlot(game);
   const seen = seenSlots(game);
@@ -448,19 +497,28 @@ export function moviesLabel(name: string): string {
   return `See ${name}’s movies on a Cinedikt map`;
 }
 
-/** The Next name button in the guess bar: its words, its price, and
- *  whether it can be pressed. Once all six are out it says so. */
-export function nextButton(game: Pick<DailyGame, 'phase' | 'pts' | 'slots'>): {
-  label: string;
-  price: string;
-  can: boolean;
-} {
-  const left = game.slots.some((s) => !s.shown);
-  return {
-    label: left ? 'Next name' : 'Everyone’s showing',
-    price: left ? `−${NEXT_COST}` : '',
-    can: canNext(game),
-  };
+/** The slot whose colour runs out of the hidden card as a ripple, now
+ *  that `now` has come back from `was`: the name that has just appeared,
+ *  in a game still on. One name bought is that name. A wrong guess fills
+ *  in everyone it shares and then shows the next name, and the ripple is
+ *  that last one's, the newest, as the cast list shows them coming;
+ *  failing that, the last it filled in. Null when no name has appeared,
+ *  for a game just opened (`was` null) and for one that has ended, whose
+ *  names arrive at the end with no ripple. */
+export function rippleSlot(
+  was: Pick<DailyGame, 'slots'> | null,
+  now: Pick<DailyGame, 'phase' | 'slots' | 'log'>,
+): number | null {
+  if (!was || now.phase !== 'play') return null;
+  const before = new Set(shownSlots(was).map((s) => s.slot));
+  const fresh = shownSlots(now)
+    .map((s) => s.slot)
+    .filter((k) => !before.has(k));
+  if (!fresh.length) return null;
+  const shared = new Set(newestGuess(now)?.shared ?? []);
+  const next = fresh.filter((k) => !shared.has(k));
+  const pool = next.length ? next : fresh;
+  return pool[pool.length - 1];
 }
 
 /** Whether a row's photo preview opens upwards: the lower three do, so it
@@ -544,20 +602,22 @@ export function guessMessage(guess: DailyGuess, game: Pick<DailyGame, 'slots'>):
   };
 }
 
-/** The points line over the field: what getting it now scores, and what
- *  the next wrong guess costs, or, when that guess would end the game,
- *  that it is the last. The number is set apart; `text` is the whole. */
-export function pointsLine(game: Pick<DailyGame, 'pts' | 'nextCost'>): {
-  lead: string;
-  pts: string;
-  tail: string;
-  text: string;
-} {
-  const pts = fmtN(game.pts);
-  const [lead, tail] = lastGuess(game)
-    ? ['Last guess, for ', ' points']
-    : ['Get it now for ', ` points · wrong guess −${fmtN(game.nextCost)}`];
-  return { lead, pts, tail, text: `${lead}${pts}${tail}` };
+// The guess bar is one row, the field and Guess, with no points line and
+// no Next name button: the next name comes from the dashed next row in
+// the cast. What the line used to say is in the row's own words.
+
+/** The field's placeholder: what the next miss costs, rising as wrong
+ *  guesses get dearer, or, when that miss would end the game, that this
+ *  is the last guess. */
+export function guessPlaceholder(game: Pick<DailyGame, 'pts' | 'nextCost'>): string {
+  return lastGuess(game)
+    ? `${GUESS_FIELD} · last guess`
+    : `${GUESS_FIELD} · a miss costs ${fmtN(game.nextCost)}`;
+}
+
+/** Guess, with the points getting it now would score: "Guess · 1,000". */
+export function guessLabel(game: Pick<DailyGame, 'pts'>): string {
+  return `Guess · ${fmtN(game.pts)}`;
 }
 
 // ---- the results list ----
@@ -662,21 +722,16 @@ export interface PaidChip {
 }
 
 /** What you paid for, from the log: each fact bought, in the row's order,
- *  then the overlaps and the wrong guesses, each as one chip with what
- *  they cost between them. The names are the names line's to say. */
+ *  then the wrong guesses, as one chip with what they cost between them.
+ *  The names are the names line's to say. */
 export function paidFor(log: readonly DailyEntry[]): PaidChip[] {
   const out: PaidChip[] = [];
   const facts = new Map<DailyFactKind, number>();
-  let overlaps = 0;
-  let overlapCost = 0;
   let wrong = 0;
   let wrongSpent = 0;
   for (const e of log) {
     if (e.type === 'fact') facts.set(e.kind, e.cost);
-    else if (e.type === 'overlap') {
-      overlaps += 1;
-      overlapCost += e.cost;
-    } else if (e.type === 'guess') {
+    else if (e.type === 'guess') {
       wrong += 1;
       wrongSpent += e.cost;
     }
@@ -685,7 +740,6 @@ export function paidFor(log: readonly DailyEntry[]): PaidChip[] {
     const cost = facts.get(kind);
     if (cost != null) out.push({ label: FACTS[kind].paid, price: `−${fmtN(cost)}` });
   }
-  if (overlaps) out.push({ label: overlaps === 1 ? '1 overlap' : `${overlaps} overlaps`, price: `−${fmtN(overlapCost)}` });
   if (wrong) out.push({ label: wrong === 1 ? '1 wrong guess' : `${wrong} wrong guesses`, price: `−${fmtN(wrongSpent)}` });
   return out;
 }
@@ -696,15 +750,12 @@ export function usedText(game: Pick<DailyGame, 'log'>): string {
   const n = seenSlots(game).size;
   const parts = [n === 1 ? 'one name' : `${n} names`];
   const bought = new Set<DailyFactKind>();
-  let overlaps = 0;
   let wrong = 0;
   for (const e of game.log) {
     if (e.type === 'fact') bought.add(e.kind);
-    else if (e.type === 'overlap') overlaps += 1;
     else if (e.type === 'guess') wrong += 1;
   }
   for (const kind of FACT_ORDER) if (bought.has(kind)) parts.push(FACTS[kind].used);
-  if (overlaps) parts.push(overlaps === 1 ? 'one overlap' : `${overlaps} overlaps`);
   if (wrong) parts.push(wrong === 1 ? 'one wrong guess' : `${wrong} wrong guesses`);
   return andList(parts);
 }
@@ -892,10 +943,10 @@ export const HOW_IT_WORKS = {
   heading: 'How it works',
   items: [
     'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
-    'Guess whenever you like. Each wrong guess, or each tap on Next name, shows another person, working up to the star.',
+    'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
     'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
     'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade and then a five-year range, or the director.',
-    `Tap Movies on any name to see their movies on a Cinedikt map. Facts you buy mark the map, and for ${OVERLAP_COST} you can add another name to light only the movies they share.`,
+    'Tap Movies on any name to see their movies on a Cinedikt map. Titles only show inside the ranges you’ve bought.',
     'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
   ],
   then: `You start with ${fmtN(DAILY_START)} points. Each extra name costs ${NEXT_COST}. Wrong guesses cost ${wrongCost(0)}, then ${wrongCost(1)}, ${wrongCost(2)} and so on. Facts cost ${Math.min(...Object.values(FACT_COST))} to ${Math.max(...Object.values(FACT_COST))}. There’s no clock.`,
@@ -922,8 +973,9 @@ export function pageLine(game: Pick<DailyGame, 'phase'> | null): string {
 export const CAST_LIST_LABEL = 'Today’s names';
 export const CAST_HEADING = 'The cast';
 
-/** The guess field's placeholder and name. "/" reaches for it. */
-export const GUESS_PLACEHOLDER = 'Name the movie';
+/** The guess field's name, which its placeholder starts with
+ *  (guessPlaceholder). "/" reaches for it. */
+export const GUESS_FIELD = 'Name the movie';
 
 /** Show the answer takes two presses: this, then SHOW_ANSWER_SURE within
  *  REVEAL_CONFIRM_MS. */
@@ -970,12 +1022,15 @@ export function bannerLabel(no: number, game: Pick<DailyGame, 'phase'> | null): 
 // ---- the Movies sheet ----
 //
 // One showing person's movies on a small Cinedikt map, with the reader's
-// bought facts drawn on it. Today's movie is among the cards, unmarked:
-// the server sends a poster for every card or for none, and nothing here
-// can tell it from the rest. Length is not drawn, since other movies'
-// runtimes are not on a map.
+// bought facts drawn on it. Titles only show inside the ranges bought,
+// and the server is what keeps to that: a movie outside them comes as a
+// blank card, a year and a place on the rating axis, so the page cannot
+// show what it was never told, and two people's maps cannot be laid
+// side by side to find the one movie both are on. Today's movie is among
+// the cards by the same rule as any other, unmarked. Length is not a
+// range here, since other movies' runtimes are not on a map.
 
-/** The years a bought decade or five years light, inclusive, or null
+/** The years a bought decade or five years take in, inclusive, or null
  *  with neither bought. The five years win: they are inside the decade. */
 export function yearSpan(facts: Pick<DailyFacts, 'decade' | 'years'>): [number, number] | null {
   if (facts.years != null) return [facts.years, facts.years + 4];
@@ -992,85 +1047,79 @@ export const RATING_SPANS: readonly (readonly [number, number])[] = [
   [8, Infinity],
 ];
 
-/** The ratings a bought rating band lights, or null with none bought. */
+/** The ratings a bought rating band takes in, or null with none bought. */
 export function ratingSpan(facts: Pick<DailyFacts, 'rating'>): readonly [number, number] | null {
   return facts.rating == null ? null : (RATING_SPANS[facts.rating] ?? null);
 }
 
-/** Who the sheet has selected: the showing slots switched on, the one it
- *  opened on always among them, and the director chip, which means any
- *  of today's directors. */
-export interface SheetChoice {
-  slots: readonly number[];
-  director: boolean;
+/** Whether any range is bought that makes a card readable: the decade or
+ *  the five years, the rating band, or the genre. Length never does. */
+export function rangeBought(facts: DailyFacts): boolean {
+  return facts.decade != null || facts.years != null || facts.rating != null || facts.genre != null;
 }
 
-/** Whether a card is lit: every selected person is on it, it is inside
- *  the bought years and rating band, and it has every one of the answer's
- *  genres once Genre is bought. The rest fade. */
-export function movieLit(
-  movie: Pick<DailyMovie, 'year' | 'rating' | 'genres' | 'on' | 'dir'>,
-  chosen: SheetChoice,
-  facts: DailyFacts,
-): boolean {
-  if (!chosen.slots.every((k) => movie.on.includes(k))) return false;
-  if (chosen.director && !movie.dir) return false;
-  const years = yearSpan(facts);
-  if (years && (movie.year < years[0] || movie.year > years[1])) return false;
-  const ratings = ratingSpan(facts);
-  if (ratings && !(movie.rating >= ratings[0] && movie.rating < ratings[1])) return false;
-  if (facts.genre && !facts.genre.every((g) => movie.genres.includes(g))) return false;
-  return true;
+/** What the movies the server sends depend on, besides whose they are:
+ *  the ranges bought. The sheet asks again whenever this changes, so a
+ *  range bought shows the titles inside it. */
+export function rangesKey(facts: DailyFacts): string {
+  return [facts.decade ?? '', facts.years ?? '', facts.rating ?? '', facts.genre?.join(',') ?? '-'].join('|');
 }
 
-/** The sheet's title: "Joe Pantoliano’s movies", or with more selected,
- *  "Movies with Joe Pantoliano and Gloria Foster". The person it opened
- *  on comes first; the director chip names every director. */
-export function sheetTitle(names: readonly string[]): string {
-  return names.length > 1 ? `Movies with ${andList(names)}` : `${names[0] ?? ''}’s movies`;
+/** The sheet's title: "Joe Pantoliano’s movies". */
+export function sheetTitle(name: string): string {
+  return `${name}’s movies`;
 }
 
-/** The line under it: "6 of 14 movies lit · on Cinedikt". */
-export function sheetSub(lit: number, total: number): string {
-  return `${fmtN(lit)} of ${fmtN(total)} ${total === 1 ? 'movie' : 'movies'} lit · on Cinedikt`;
+function moviesWord(n: number): string {
+  return n === 1 ? 'movie' : 'movies';
 }
 
-/** The legend over the map: the facts drawn on it, or what buying them
- *  and adding names would do. Either way, that today's movie is there and
- *  not marked. */
+/** The line under it: "13 movies · on Cinedikt" before any range, then
+ *  "5 of 13 movies readable · on Cinedikt". */
+export function sheetSub(readable: number, total: number, ranged: boolean): string {
+  return ranged
+    ? `${fmtN(readable)} of ${fmtN(total)} ${moviesWord(total)} readable · on Cinedikt`
+    : `${fmtN(total)} ${moviesWord(total)} · on Cinedikt`;
+}
+
+/** The legend over the map: where titles show, and that today's movie is
+ *  there. Once a range is bought it names the ranges, and says the
+ *  answer is not marked. */
 export function sheetLegend(facts: DailyFacts): string {
   const marks: string[] = [];
   if (facts.years != null) marks.push(yearsText(facts.years));
   else if (facts.decade != null) marks.push(decadeText(facts.decade));
   if (facts.rating != null) marks.push(`rated ${inSentence(ratingBandText(facts.rating))}`);
   if (facts.genre?.length) marks.push(facts.genre.join(', '));
-  const tail = 'Today’s movie is one of these cards, but it isn’t marked.';
-  return marks.length
-    ? `Your facts are on the map: ${marks.join(' · ')}. ${tail}`
-    : `Facts you buy mark this map. Add another name to light only the movies they share. ${tail}`;
+  return rangeBought(facts)
+    ? `Titles show inside your ranges: ${marks.join(' · ')}. Today’s movie is one of these cards, but it isn’t marked.`
+    : 'Titles only show inside the ranges you buy: the decade, the years, a rating range or the genre. Today’s movie is one of these cards.';
 }
 
-/** The footer with nothing picked. */
-export function sheetHint(nextCost: number): string {
-  return `Tap a movie to guess it. A wrong guess costs ${fmtN(nextCost)}.`;
+/** The footer with nothing picked: how to guess from the map, once there
+ *  are titles to guess, and before that where the ranges are sold. */
+export function sheetHint(nextCost: number, ranged: boolean): string {
+  return ranged
+    ? `Tap a movie to guess it. A wrong guess costs ${fmtN(nextCost)}.`
+    : 'Buy a range to read this map. The facts are under the card.';
 }
 
 /** The footer's line under a picked card's title: "1993 · IMDb 7.8". */
-export function pickLine(movie: Pick<DailyMovie, 'year' | 'rating'>): string {
+export function pickLine(movie: Pick<DailyReadableMovie, 'year' | 'rating'>): string {
   const rated = `IMDb ${movie.rating.toFixed(1)}`;
   return movie.year > 0 ? `${movie.year} · ${rated}` : rated;
 }
 
-/** A card's name for a screen reader: what it is, and whether it is
- *  faded or already tried. */
-export function sheetCardLabel(movie: Pick<DailyMovie, 'title' | 'year' | 'rating'>, lit: boolean, tried: boolean): string {
-  return `${movie.title}, ${movie.year}, rated ${movie.rating.toFixed(1)}${tried ? ', already tried' : ''}${lit ? '' : ', dimmed'}`;
+/** A readable card's name for a screen reader: what it is, and whether
+ *  it has been tried. */
+export function sheetCardLabel(movie: Pick<DailyReadableMovie, 'title' | 'year' | 'rating'>, tried: boolean): string {
+  return `${movie.title}, ${movie.year}, rated ${movie.rating.toFixed(1)}${tried ? ', already tried' : ''}`;
 }
 
-/** A person's chip on the sheet: their name once theirs to switch, or
- *  "+ Gloria Foster" and its price before their overlap is bought. */
-export function overlapChip(name: string, owned: boolean): { label: string; price: string } {
-  return owned ? { label: name, price: '' } : { label: `+ ${name}`, price: `−${OVERLAP_COST}` };
+/** A blank card's: only its year, which is all the page knows of it, and
+ *  what would read it. */
+export function blankCardLabel(year: number, ranged: boolean): string {
+  return ranged ? `A movie from ${year}, outside your ranges` : `A movie from ${year}. Buy a range to read it`;
 }
 
 /** The sheet's small map: the app's layout at the handoff's metrics. */
@@ -1086,23 +1135,24 @@ export const SHEET_METRICS = {
   labels: [4, 5, 6, 7, 8, 9],
 } as const;
 
-/** The sheet opens scrolled so its first lit card sits this far from the
- *  map's top, a bought range already in view. */
-export const SHEET_LIT_TOP = 36;
+/** The sheet opens scrolled so its first readable card sits this far
+ *  from the map's top, a bought range already in view. */
+export const SHEET_READ_TOP = 36;
 
 // ---- the page ----
 
 /** The game page's parts, top to bottom. While the game is on: the top
- *  block, the cast and then the facts. Once it is over: the top block,
- *  About the movie, the result, the leaderboard, "The cast" heading and
- *  the six names. The page draws them keyed in this order, so the order
- *  on the page is the order a screen reader hears, and the cast keeps its
- *  place in the tree as the rest arrive round it: a list moved in the
- *  tree would start its rows' transitions afresh, and the names the
- *  reader didn't see would arrive all at once. */
+ *  block, the facts right under the card, where they cannot be missed,
+ *  and then the cast. Once it is over: the top block, About the movie,
+ *  the result, the leaderboard, "The cast" heading and the six names. The
+ *  page draws them keyed in this order, so the order on the page is the
+ *  order a screen reader hears, and the cast keeps its place in the tree
+ *  as the rest arrive round it, last both times: a list moved in the tree
+ *  would start its rows' transitions afresh, and the names the reader
+ *  didn't see would arrive all at once. */
 export type PageSection = 'top' | 'cast' | 'facts' | 'about' | 'result' | 'board' | 'castHead';
 export function pageSections(done: boolean): PageSection[] {
-  return done ? ['top', 'about', 'result', 'board', 'castHead', 'cast'] : ['top', 'cast', 'facts'];
+  return done ? ['top', 'about', 'result', 'board', 'castHead', 'cast'] : ['top', 'facts', 'cast'];
 }
 
 /** The cast list while Play hides every name (PLAY_HIDE_MS): six rows,
@@ -1161,15 +1211,11 @@ export const SEARCH_MIN_CHARS = 2;
 
 /** What the reader is told, at once and without asking, about a move the
  *  server would refuse: a name when everyone is showing, a fact already
- *  bought or the years before the decade, an overlap already owned or for
- *  someone not showing, a purchase the points would not leave one over
- *  from, a movie already guessed. Empty for a move worth sending. The
- *  page's buttons already hold back most of these; this is for the rest,
- *  and for a press that lands as the game changes under it. */
-export function earlyRefusal(
-  game: Pick<DailyGame, 'pts' | 'slots' | 'facts' | 'overlaps' | 'log'>,
-  move: DailyMove,
-): string {
+ *  bought or the years before the decade, a purchase the points would not
+ *  leave one over from, a movie already guessed. Empty for a move worth
+ *  sending. The page's buttons already hold back most of these; this is
+ *  for the rest, and for a press that lands as the game changes under it. */
+export function earlyRefusal(game: Pick<DailyGame, 'pts' | 'slots' | 'facts' | 'log'>, move: DailyMove): string {
   switch (move.kind) {
     case 'next':
       if (!game.slots.some((s) => !s.shown)) return refusalText('known', 'next');
@@ -1178,10 +1224,6 @@ export function earlyRefusal(
       if (hasFact(move.fact, game.facts)) return refusalText('known', 'buy');
       if (move.fact === 'years' && !hasFact('decade', game.facts)) return refusalText('bad', 'buy');
       return affords(game.pts, FACT_COST[move.fact]) ? '' : refusalText('points', 'buy');
-    case 'overlap':
-      if (game.overlaps.includes(move.person)) return refusalText('known', 'overlap');
-      if (!shownSlots(game).some((s) => s.person.id === move.person)) return refusalText('bad', 'overlap');
-      return affords(game.pts, OVERLAP_COST) ? '' : refusalText('points', 'overlap');
     case 'guess':
       return guessedIds(game).has(move.film) ? TOASTS.tried : '';
     case 'reveal':
@@ -1314,8 +1356,7 @@ export function newKey(): string {
  *  game is the same request, and is sent again under the same key after
  *  an answer that never came. */
 export function moveSig(move: DailyMove, seq: number): string {
-  const arg =
-    move.kind === 'buy' ? move.fact : move.kind === 'overlap' ? move.person : move.kind === 'guess' ? move.film : '';
+  const arg = move.kind === 'buy' ? move.fact : move.kind === 'guess' ? move.film : '';
   return `${seq}:${move.kind}:${arg}`;
 }
 
@@ -1345,11 +1386,10 @@ export function refusalText(
     case 'known':
       if (kind === 'guess') return TOASTS.tried;
       if (kind === 'next') return 'Everyone’s showing.';
-      if (kind === 'overlap') return 'You’ve already added them.';
       return 'You already have that fact.';
     case 'bad':
       if (kind === 'buy') return 'Buy the decade first.';
-      if (kind === 'overlap' || kind === 'movies') return 'That name isn’t showing yet.';
+      if (kind === 'movies') return 'That name isn’t showing yet.';
       return UNREACHABLE;
     case 'unknown':
       return 'Cinedikt doesn’t know that movie.';
@@ -1436,8 +1476,26 @@ export const PEEK_LEFT = 54;
 export const CARD_TURN_MS = 800;
 export const CARD_TURN_EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';
 
-/** The score counts up from nought over this long, easing out, when the
- *  game ends on the page. A finished game opened later just shows it. */
+/** The end on the page: the card turns and the names not seen arrive,
+ *  and this long after it the page moves on down to the result, its top
+ *  RESULT_GAP_PX under the column's. Smoothly, or in one jump with
+ *  stillness asked for, after the same pause, so the answer at the top
+ *  is still seen first. */
+export const RESULT_AFTER_MS = 1400;
+export const RESULT_GAP_PX = 12;
+
+/** Where the page's scroller goes to bring the result up: from where it
+ *  stands, by how far the result's top is under the scroller's, less the
+ *  gap. Never above the top. */
+export function resultScroll(scrollTop: number, resultTop: number, mainTop: number): number {
+  return Math.max(0, Math.round(scrollTop + resultTop - mainTop - RESULT_GAP_PX));
+}
+
+/** The score waits at nought while the card turns and the page reaches
+ *  the result, then counts up from nought over SCORE_COUNT_MS, easing
+ *  out, when the game ends on the page. A finished game opened later, or
+ *  one ended with stillness asked for, just shows it. */
+export const SCORE_COUNT_AFTER_MS = 1500;
 export const SCORE_COUNT_MS = 1100;
 
 /** The score `elapsed` ms into its count: ease-out cubic, landing on the
@@ -1445,6 +1503,25 @@ export const SCORE_COUNT_MS = 1100;
 export function countUp(score: number, elapsed: number): number {
   const p = Math.min(1, Math.max(0, elapsed / SCORE_COUNT_MS));
   return Math.round(score * (1 - Math.pow(1 - p, 3)));
+}
+
+/** The score as drawn `sinceEnd` ms after the game ended on the page:
+ *  nought through the wait, then counting up. */
+export function scoreAt(score: number, sinceEnd: number): number {
+  return sinceEnd < SCORE_COUNT_AFTER_MS ? 0 : countUp(score, sinceEnd - SCORE_COUNT_AFTER_MS);
+}
+
+/** When a name appears, the next row is the only way to the one after,
+ *  so once the new name has settled in the page makes sure that row is
+ *  in sight above the guess bar, with this much to spare. */
+export const NEXT_IN_VIEW_MS = 650;
+export const NEXT_IN_VIEW_GAP = 34;
+
+/** How far down the page must move for a row whose bottom is at
+ *  `rowBottom` to sit NEXT_IN_VIEW_GAP clear of the scroller's bottom, at
+ *  `mainBottom`: nothing when it already does. */
+export function nextInView(rowBottom: number, mainBottom: number): number {
+  return Math.max(0, Math.round(rowBottom + NEXT_IN_VIEW_GAP - mainBottom));
 }
 
 /** How long "Sure? Show it" waits for its second press before it goes
@@ -1466,6 +1543,189 @@ export const LIST_CLOSE_MS = 120;
  *  header's search waits as long. */
 export const SEARCH_WAIT_MS = 250;
 
+// ---- motion played from script ----
+//
+// Every loop and one-off below is played through the Web Animations API
+// (motion.ts's animate) on elements the components hold refs to, started
+// once as they are put down: a re-render never starts one again, and
+// none starts for a reader who has asked for stillness. The stylesheet
+// draws each element at rest, which is all such a reader sees: the card
+// tilted, the dropping rows and the shines out of sight.
+
+/** An animation as Element.animate takes it. */
+export interface Motion {
+  keyframes: Keyframe[];
+  options: KeyframeAnimationOptions;
+}
+
+/** A loop that goes there and back, for ever, easing in and out. */
+function swing(keyframes: Keyframe[], ms: number): Motion {
+  return { keyframes, options: { duration: ms, direction: 'alternate', iterations: Infinity, easing: 'ease-in-out' } };
+}
+
+/** The title screen's parts rise in one after another, in the order
+ *  they are drawn: the picture, the pill row, the heading and lead, the
+ *  steps, the fine print, Play, then the players line. Each fades in from
+ *  RISE_PX down over RISE_MS on the settle curve (motion.ts's EASE.settle),
+ *  the first 80ms in and the rest 90ms apart, each held out of sight
+ *  (`backwards`) until its turn. */
+export const RISE_PX = 14;
+export const RISE_MS = 560;
+export const RISE_EASE = 'cubic-bezier(0.16, 1, 0.3, 1)';
+export const RISE_FIRST_MS = 80;
+export const RISE_STEP_MS = 90;
+
+export function titleRise(i: number): Motion {
+  return {
+    keyframes: [
+      { opacity: 0, translate: `0 ${RISE_PX}px` },
+      { opacity: 1, translate: '0 0' },
+    ],
+    options: { duration: RISE_MS, delay: RISE_FIRST_MS + i * RISE_STEP_MS, easing: RISE_EASE, fill: 'backwards' },
+  };
+}
+
+/** The title screen's picture as the game's own loop: a filled row drops
+ *  into the next row, then another into the hidden one, over and over.
+ *  Each falls from DROP_FROM_PX above, DROP_OVER_PX past its place, lands
+ *  `land` of the way into the loop (DROP_LANDS: 24% and 52%), holds to
+ *  84% and is gone by 94%, the rows empty again for the next round. Out
+ *  of sight until a tenth of the loop before it lands. */
+export const DROP_LOOP_MS = 6000;
+export const DROP_AFTER_MS = 700;
+export const DROP_FROM_PX = 28;
+export const DROP_OVER_PX = 3;
+export const DROP_LANDS = [0.24, 0.52] as const;
+export const DROP_HOLD_TO = 0.84;
+export const DROP_GONE_AT = 0.94;
+
+export function dropKeyframes(land: number): Keyframe[] {
+  const above = `0 -${DROP_FROM_PX}px`;
+  // In hundredths, as the design gives them, with no float left over.
+  const at = (offset: number) => Math.round(offset * 100) / 100;
+  return [
+    { opacity: 0, translate: above, offset: 0 },
+    { opacity: 0, translate: above, offset: at(land - 0.1) },
+    { opacity: 1, translate: `0 ${DROP_OVER_PX}px`, offset: land },
+    { opacity: 1, translate: '0 0', offset: at(land + 0.04) },
+    { opacity: 1, translate: '0 0', offset: DROP_HOLD_TO },
+    { opacity: 0, translate: '0 0', offset: DROP_GONE_AT },
+    { opacity: 0, translate: '0 0', offset: 1 },
+  ];
+}
+
+/** Play's shine, as the start-screen banner's (DailyBanner.tsx's
+ *  SHINE_KEYFRAMES): a band of light crosses in the first 28% of each
+ *  3.6s and rests off to the side for the rest, starting 1.4s in. */
+export const PLAY_SHINE_KEYFRAMES: Keyframe[] = [
+  { translate: '-120% 0', offset: 0 },
+  { translate: '320% 0', offset: 0.28 },
+  { translate: '320% 0', offset: 1 },
+];
+
+/** The title screen's loops, by the part each plays on (DailyTitle.tsx
+ *  marks each with data-anim):
+ *  - float: the card rises 7px and turns from −4° to −2°, 3.2s each way;
+ *  - bob: its "?" bobs 4px, 1.6s each way;
+ *  - sheen: a band of white crosses the card every 4.2s, 900ms in;
+ *  - pulse: the next row breathes a 5px ring of the accent, 1.1s each way;
+ *  - drop1, drop2: the rows dropping in, 700ms in;
+ *  - shine: Play's. */
+export type TitleLoop = 'float' | 'bob' | 'sheen' | 'pulse' | 'drop1' | 'drop2' | 'shine';
+
+export const TITLE_LOOPS: Record<TitleLoop, Motion> = {
+  float: swing(
+    [
+      { translate: '0 0', rotate: '-4deg' },
+      { translate: '0 -7px', rotate: '-2deg' },
+    ],
+    3200,
+  ),
+  bob: swing([{ translate: '0 0' }, { translate: '0 -4px' }], 1600),
+  sheen: {
+    keyframes: [
+      { translate: '-160% 0', offset: 0 },
+      { translate: '260% 0', offset: 0.3 },
+      { translate: '260% 0', offset: 1 },
+    ],
+    options: { duration: 4200, delay: 900, iterations: Infinity, easing: 'ease-in-out' },
+  },
+  pulse: swing([{ boxShadow: `0 0 0 0 ${accentGlow(0)}` }, { boxShadow: `0 0 0 5px ${accentGlow(0.2)}` }], 1100),
+  drop1: {
+    keyframes: dropKeyframes(DROP_LANDS[0]),
+    options: { duration: DROP_LOOP_MS, delay: DROP_AFTER_MS, iterations: Infinity, easing: 'ease-out' },
+  },
+  drop2: {
+    keyframes: dropKeyframes(DROP_LANDS[1]),
+    options: { duration: DROP_LOOP_MS, delay: DROP_AFTER_MS, iterations: Infinity, easing: 'ease-out' },
+  },
+  shine: {
+    keyframes: PLAY_SHINE_KEYFRAMES,
+    options: { duration: 3600, delay: 1400, iterations: Infinity, easing: 'ease-in-out' },
+  },
+};
+
+/** The title screen's card glows 38px round in the lightened poster
+ *  colour at 30% (posterGlow), still, set inline as --glow. */
+export const TITLE_GLOW_ALPHA = 0.3;
+
+/** The hidden card while the game is on: its glow breathes in the
+ *  lightened poster colour, from a faint 16px at 12% to a 34px halo at
+ *  42%, 2.6s each way. Null with no colour to glow in. */
+export function cardGlow(colour: string | null | undefined): Motion | null {
+  const faint = posterGlow(colour, 0.12);
+  const full = posterGlow(colour, 0.42);
+  if (!faint || !full) return null;
+  return swing([{ boxShadow: `0 0 16px 1px ${faint}` }, { boxShadow: `0 0 34px 8px ${full}` }], 2600);
+}
+
+/** Its "?" bobs 4px, 1.8s each way, while the game is on. */
+export const CARD_BOB: Motion = swing([{ translate: '0 0' }, { translate: '0 -4px' }], 1800);
+
+/** A name appearing sends a ripple of that person's colour out from the
+ *  card's edge, RIPPLE_PX out and fading as it goes, over RIPPLE_MS. */
+export const RIPPLE_MS = 850;
+export const RIPPLE_PX = 22;
+export const RIPPLE_EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
+
+export function cardRipple(colour: string): Motion {
+  return {
+    keyframes: [{ boxShadow: `0 0 0 0 ${colour}` }, { boxShadow: `0 0 0 ${RIPPLE_PX}px transparent` }],
+    options: { duration: RIPPLE_MS, easing: RIPPLE_EASE },
+  };
+}
+
+/** The facts panel's nudge (factNudge), once: three pulses of a ring of
+ *  the accent spreading 12px and fading, 900ms each, over the panel's own
+ *  accent edge. */
+export const NUDGE_PULSE_MS = 900;
+export const NUDGE_PULSES = 3;
+export const NUDGE_PULSE_PX = 12;
+
+/** The nudge's pulses, round a panel whose edge is `ring`: the theme's
+ *  --acc as the page resolved it.
+ *
+ *  An animated box-shadow stands in for the stylesheet's whole
+ *  box-shadow while it runs, so the panel's 1px edge has to be drawn
+ *  again in every frame, or it would vanish for the 2.7s of the pulses.
+ *  It is drawn in --acc, as the stylesheet then keeps it: in the light
+ *  theme that is a much darker purple than the design's glow, which the
+ *  edge would otherwise show until the last pulse and then snap from.
+ *  Only the ring spreading out is the glow's own lavender. The colour is
+ *  read and passed in rather than written as var(--acc), which not every
+ *  engine resolves inside an animation's frames; with none to hand the
+ *  edge is the glow's colour, as near as the dark theme's --acc. */
+export function nudgePulse(ring: string): Motion {
+  const edge = `inset 0 0 0 1px ${ring || accentGlow(1)}`;
+  return {
+    keyframes: [
+      { boxShadow: `${edge}, 0 0 0 0 ${accentGlow(0.45)}` },
+      { boxShadow: `${edge}, 0 0 0 ${NUDGE_PULSE_PX}px ${accentGlow(0)}` },
+    ],
+    options: { duration: NUDGE_PULSE_MS, iterations: NUDGE_PULSES, easing: 'ease-out' },
+  };
+}
+
 // ---- touch ----
 
 /** Every control's hit area is at least 44px, even where it looks smaller,
@@ -1481,20 +1741,38 @@ export const HIT_INSETS = {
   fact: '-5px -3px',
   /** A shown row's Movies button, 34px. */
   movies: '-5px -2px',
-  /** Next name, 36px. */
-  next: '-4px 0',
   /** A leaderboard tab, 30px. */
   tab: '-7px 0',
 } as const;
 
-/** The Movies sheet's chips are this tall on a phone, a finger's size
- *  without a hit area of their own. */
-export const SHEET_CHIP_PHONE_H = 40;
+// ---- the screen ----
 
 /** A landscape phone: under 520px tall and wider than tall. The guess bar
  *  becomes a 340px column on the right of the cast. */
 export const LANDSCAPE_MAX_H = 520;
-export const LANDSCAPE_QUERY = `(max-height: ${LANDSCAPE_MAX_H - 0.02}px) and (orientation: landscape)`;
 export function isLandscapePhone(width: number, height: number): boolean {
   return height < LANDSCAPE_MAX_H && width > height;
+}
+
+/** The window as the Daily lays itself out by it: a phone, under 640px
+ *  wide as the app's screen classes have it (screen.ts), for the header's
+ *  date, the four results and the Movies sheet from the bottom; a
+ *  landscape phone, for the guess bar's column; and the visual viewport's
+ *  height, for the phone sheet's, which the window's stands in for where
+ *  there is none. Worked out afresh from the window whenever it changes
+ *  (dailyScreen.ts), never kept from when the page loaded: a phone turned
+ *  on its side, or a window dragged narrow, is laid out for what it is
+ *  now. */
+export interface LiveScreen {
+  phone: boolean;
+  land: boolean;
+  viewH: number;
+}
+
+export function liveScreen(width: number, height: number, viewH?: number | null): LiveScreen {
+  return {
+    phone: screenOf(width, height).phone,
+    land: isLandscapePhone(width, height),
+    viewH: viewH != null && viewH > 0 ? viewH : height,
+  };
 }

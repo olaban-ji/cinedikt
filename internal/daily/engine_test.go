@@ -3,6 +3,7 @@ package daily
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -17,7 +18,7 @@ func TestEachWrongGuessCostsFiftyMoreThanTheLast(t *testing.T) {
 // TestAGameStartsWithAThousandAndTheSixthBilledShowing, and nobody else.
 func TestAGameStartsWithAThousandAndTheSixthBilledShowing(t *testing.T) {
 	s := Replay(matrix(), nil)
-	if s.Pts != Start || s.Done || s.Wrong != 0 || len(s.Facts) != 0 || len(s.Overlaps) != 0 {
+	if s.Pts != Start || s.Done || s.Wrong != 0 || len(s.Facts) != 0 {
 		t.Errorf("state = %+v", s)
 	}
 	if got := shownSlots(s); !slices.Equal(got, []int{0}) || s.Seen() != 1 || s.FirstHidden() != 1 {
@@ -55,7 +56,7 @@ func TestNextShowsTheFirstHiddenNameForAHundred(t *testing.T) {
 // TestEachFactIsBoughtOnceAtItsPrice: length and rating for fifty, the
 // genre, the decade and the five years for a hundred, the director for
 // two hundred and fifty. The five years only after the decade, and the
-// old game's clues are no moves at all.
+// old game's clues and the overlap are no moves at all.
 func TestEachFactIsBoughtOnceAtItsPrice(t *testing.T) {
 	g := play(t, matrix())
 	if err := g.try(KindYears, ""); !errors.Is(err, ErrBad) {
@@ -82,7 +83,7 @@ func TestEachFactIsBoughtOnceAtItsPrice(t *testing.T) {
 			t.Errorf("%s again: %v, want known", kind, err)
 		}
 	}
-	for _, kind := range []string{"flip", "actor", "genres", "year", "story", "trailer", ""} {
+	for _, kind := range []string{"flip", "actor", "genres", "year", "story", "trailer", "overlap", ""} {
 		if err := g.try(kind, ""); !errors.Is(err, ErrBad) {
 			t.Errorf("%q: %v, want bad", kind, err)
 		}
@@ -93,9 +94,9 @@ func TestEachFactIsBoughtOnceAtItsPrice(t *testing.T) {
 }
 
 // TestAPurchaseMustLeaveAPoint: a buy is refused when the points left
-// are no more than it costs, a hundred for the next name with a hundred
-// left among them; a wrong guess with no more than its price left ends
-// the game at nothing instead.
+// are no more than it costs, the director's 250 with 250 left and the
+// next name's hundred with a hundred left among them; a wrong guess with
+// no more than its price left ends the game at nothing instead.
 func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 	g := play(t, matrix())
 	for _, kind := range factKinds {
@@ -105,9 +106,6 @@ func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 		t.Fatalf("set-up spent to %d, want 350", s.Pts)
 	}
 	g.do(KindNext, "")
-	if err := g.try(KindOverlap, "nm0001592"); !errors.Is(err, ErrPoints) {
-		t.Errorf("an overlap for 250 with 250 left: %v, want points", err)
-	}
 	g.do(KindNext, "")
 	if s := g.do(KindNext, ""); s.Pts != 50 || s.Done {
 		t.Errorf("a next name with 150 left: %+v", s)
@@ -119,11 +117,27 @@ func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 		t.Errorf("after the refusals: %+v, %d moves", s, len(g.moves))
 	}
 
+	dear := play(t, matrix())
+	for range Slots - 1 {
+		dear.do(KindNext, "")
+	}
+	for _, kind := range []string{KindGenre, KindDecade, KindLength} {
+		dear.do(kind, "")
+	}
+	if s := dear.state(); s.Pts != 250 {
+		t.Fatalf("set-up spent to %d, want 250", s.Pts)
+	}
+	if err := dear.try(KindDirector, ""); !errors.Is(err, ErrPoints) {
+		t.Errorf("the director for 250 with 250 left: %v, want points", err)
+	}
+
 	exact := play(t, matrix())
-	for _, kind := range factKinds {
+	for range 3 {
+		exact.do(KindNext, "")
+	}
+	for _, kind := range []string{KindRating, KindGenre, KindDecade, KindYears, KindDirector} {
 		exact.do(kind, "")
 	}
-	exact.do(KindOverlap, "nm0001592")
 	if s := exact.state(); s.Pts != 100 {
 		t.Fatalf("set-up spent to %d, want 100", s.Pts)
 	}
@@ -135,8 +149,8 @@ func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 		t.Errorf("a 100-point wrong guess with 100 left: %+v", s)
 	}
 	// It still showed the next name, as any wrong guess does: seen.
-	if s.Seen() != 2 || s.via[1] != ViaGuess {
-		t.Errorf("the guess that ran out showed %d names, Foster by %q", s.Seen(), s.via[1])
+	if s.Seen() != 5 || s.via[4] != ViaGuess {
+		t.Errorf("the guess that ran out showed %d names, Fishburne by %q", s.Seen(), s.via[4])
 	}
 	if m := exact.moves[len(exact.moves)-1]; m.Cost != 100 || m.Guess == nil {
 		t.Errorf("the guess that ran out was recorded as %+v", m)
@@ -146,25 +160,30 @@ func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 	}
 }
 
-// TestAnOverlapIsOncePerPersonShowing: only for one of the six who is
-// showing, never a director nor anyone hidden, and once each.
-func TestAnOverlapIsOncePerPersonShowing(t *testing.T) {
-	g := play(t, matrix())
-	for _, who := range []string{"nm0287825", "nm0905154", "nm9999999", ""} {
-		if err := g.try(KindOverlap, who); !errors.Is(err, ErrBad) {
+// TestAnOverlapIsNoMoveAtAll: Name Drop's first way of putting two people
+// on one sheet is gone. Asked for, it is refused as bad, for anyone, as a
+// kind that never was; a game holding one replays it as nothing, costing
+// nothing and with no line in the log, as any kind the engine does not
+// know.
+func TestAnOverlapIsNoMoveAtAll(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	for _, who := range []string{"nm0001592", "nm0287825", "nm0905154", ""} {
+		if err := g.try("overlap", who); !errors.Is(err, ErrBad) {
 			t.Errorf("an overlap for %q: %v, want bad", who, err)
 		}
 	}
-	s := g.do(KindOverlap, "nm0001592")
-	if s.Pts != Start-OverlapCost || !s.Overlapped("nm0001592") || !slices.Equal(s.Overlaps, []string{"nm0001592"}) {
-		t.Errorf("after an overlap: %+v", s)
+	g.moves = append(g.moves, Move{Seq: 1, Key: "key-overlap", Kind: "overlap", Arg: "nm0001592", Cost: 250})
+	s := g.do(KindDecade, "")
+	if s.Pts != Start-DecadeCost || !slices.Equal(shownSlots(s), []int{0}) {
+		t.Errorf("replayed: %+v", s)
 	}
-	if err := g.try(KindOverlap, "nm0001592"); !errors.Is(err, ErrKnown) {
-		t.Errorf("the same overlap again: %v, want known", err)
+	game := Render(p, g.record(), live)
+	if body := rendered(t, game); strings.Contains(body, "overlap") {
+		t.Errorf("a recorded overlap is said: %s", body)
 	}
-	g.do(KindNext, "")
-	if s := g.do(KindOverlap, "nm0287825"); !slices.Equal(s.Overlaps, []string{"nm0001592", "nm0287825"}) || s.Pts != 400 {
-		t.Errorf("a second overlap, once she shows: %+v", s)
+	if log := rendered(t, game.Log); log != `[{"type":"fact","kind":"decade","cost":100}]` || game.Seq != 2 || game.Pts != 900 {
+		t.Errorf("log %s, seq %d, %d points", log, game.Seq, game.Pts)
 	}
 }
 
@@ -281,7 +300,7 @@ func TestShowingTheAnswerScoresNothing(t *testing.T) {
 	if m := g.moves[1]; m.Arg != "" || m.Cost != 0 {
 		t.Errorf("the reveal was recorded as %+v", m)
 	}
-	for _, kind := range []string{KindNext, KindDirector, KindOverlap, KindGuess, KindReveal} {
+	for _, kind := range []string{KindNext, KindDirector, KindGuess, KindReveal} {
 		if err := g.try(kind, "nm0001592"); !errors.Is(err, ErrDone) {
 			t.Errorf("%s after the end: %v, want done", kind, err)
 		}

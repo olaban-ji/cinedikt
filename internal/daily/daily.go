@@ -53,10 +53,11 @@ const (
 	DirectorCost = 250
 )
 
-// OverlapCost is what adding someone to another person's Movies sheet
-// costs, once per person: the sheet then lights only the movies they
-// share, which is the strongest move there is, so it is paid for.
-const OverlapCost = 250
+// There is no move that puts two people on one Movies sheet. Name Drop
+// first sold one, an "overlap" that lit only the movies two names
+// shared, and the answer is the one movie all six share: two or three
+// names in, it was most of the way to the answer for 250 points. A sheet
+// now reads only inside the ranges bought (view.go).
 
 // The first wrong guess costs WrongCost, and each one after it
 // WrongStep more, so guessing never beats asking for the next name.

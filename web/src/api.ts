@@ -502,8 +502,6 @@ export interface DailyGuess {
 export type DailyEntry =
   | { type: 'next'; cost: number; slot: number }
   | { type: 'fact'; kind: DailyFactKind; cost: number }
-  /** An overlap bought on the Movies sheet, for this person's id. */
-  | { type: 'overlap'; person: string; cost: number }
   | { type: 'guess'; cost: number; guess: DailyGuess }
   | { type: 'win' }
   | { type: 'gaveup' }
@@ -543,9 +541,6 @@ export interface DailyGame {
    *  over. */
   slots: DailySlot[];
   facts: DailyFacts;
-  /** The people whose overlap has been bought on the Movies sheet, by id:
-   *  each is a free toggle there for the rest of the game. */
-  overlaps: string[];
   /** One entry per move, in order. */
   log: DailyEntry[];
   /** Everything the game kept back, sent once it is over. */
@@ -593,33 +588,42 @@ export interface DailyToday {
 export type DailyMove =
   | { kind: 'next' }
   | { kind: 'buy'; fact: DailyFactKind }
-  /** For a person showing, by id: lights only the movies they share with
-   *  the person the Movies sheet is open on. */
-  | { kind: 'overlap'; person: string }
   | { kind: 'guess'; film: string }
   | { kind: 'reveal' };
 
-/** One of a showing person's movies, for the Movies sheet. Today's movie
- *  is among them when they are in it, and looks like every other: there
- *  is a poster for every one of them, or for none. */
-export interface DailyMovie {
+/** One of a showing person's movies on the Movies sheet, readable: it is
+ *  inside every range the reader has bought (the decade or five years,
+ *  the rating band, the genre; never the length), or the game is over.
+ *  Today's movie is one of these by the same rule as any other, and looks
+ *  like every other: there is a poster for every readable card, or for
+ *  none. Readable cards are the ones with an `id`. */
+export interface DailyReadableMovie {
   id: string;
   title: string;
   year: number;
   rating: number;
   genres: string[];
   poster?: string;
-  /** The slots showing now that are credited on it, the person's own
-   *  included. A hidden slot is never listed. */
-  on: number[];
-  /** One of today's directors is on it. Only there once Director has
-   *  been bought. */
-  dir?: true;
 }
+
+/** One of the person's movies outside the ranges bought, or before any
+ *  range is: its year and its place on the rating axis, `at`, its rating
+ *  rounded to the nearest half, and nothing else. No id, title, exact
+ *  rating, genres or poster, so two people's sheets cannot be laid side
+ *  by side and matched card for card, which is how combining names gave
+ *  the answer away. Sent all the same, so the map keeps its shape. */
+export interface DailyBlankMovie {
+  year: number;
+  at: number;
+}
+
+export type DailyMovie = DailyReadableMovie | DailyBlankMovie;
 
 export interface DailyMovies {
   /** The person asked about, by id. */
   person: string;
+  /** How many movies of theirs there are, readable and blank. */
+  total: number;
   movies: DailyMovie[];
 }
 
@@ -791,17 +795,6 @@ export function buyFact(
   return dailyPost(`/daily/${no}/buy`, { key, seq, kind }, signal);
 }
 
-/** Buys a showing person's overlap on the Movies sheet, by their id. */
-export function buyOverlap(
-  no: number,
-  person: string,
-  key: string,
-  seq: number,
-  signal?: AbortSignal,
-): Promise<{ game: DailyGame }> {
-  return dailyPost(`/daily/${no}/overlap`, { key, seq, person }, signal);
-}
-
 /** Guesses a movie, by its IMDb id. */
 export function guessMovie(
   no: number,
@@ -833,8 +826,6 @@ export function sendDailyMove(
       return nextName(no, key, seq, signal);
     case 'buy':
       return buyFact(no, move.fact, key, seq, signal);
-    case 'overlap':
-      return buyOverlap(no, move.person, key, seq, signal);
     case 'guess':
       return guessMovie(no, move.film, key, seq, signal);
     case 'reveal':
@@ -843,10 +834,11 @@ export function sendDailyMove(
 }
 
 /** One showing person's movies, for the Movies sheet, from today's
- *  snapshot: which of the showing names are on each, and whether a
- *  director is once Director has been bought. Refused for someone who is
- *  not a showing slot in the reader's game (400 "bad"); once the game is
- *  over it answers for anyone in the cast. */
+ *  snapshot: readable inside every range the reader has bought, and
+ *  blank, a year and a place on the rating axis, everywhere else (see
+ *  DailyMovie). Asked again once a range is bought. Refused for someone
+ *  who is not a showing slot in the reader's game (400 "bad"); once the
+ *  game is over it answers for anyone in the cast, every movie readable. */
 export function fetchDailyMovies(no: number, person: string, signal?: AbortSignal): Promise<DailyMovies> {
   return dailyGet<DailyMovies>(`/daily/${no}/movies?person=${encodeURIComponent(person)}`, signal);
 }

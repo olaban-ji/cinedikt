@@ -1,7 +1,9 @@
 package daily
 
 import (
+	"cmp"
 	"encoding/json"
+	"math"
 	"slices"
 	"time"
 )
@@ -11,9 +13,10 @@ import (
 // nothing below names the answer or says its year, rating, length,
 // genres, poster or directors, nothing names a cast member the player
 // has not been shown, and a fact not bought is not there at all. The
-// poster's colour is the one exception, sent from the start, since it
-// fills the hidden card. The tests in view_test.go hold every response
-// to that.
+// poster's colour is one exception, sent from the start, since it fills
+// the hidden card. The Movies sheets are the other: they carry the
+// answer as one card among the rest, rationed in their own way (below).
+// The tests in view_test.go hold every response to that.
 
 // Record is a game as it is kept: when it started, when it ended, the
 // time zone it was started in, and its moves in order.
@@ -111,13 +114,12 @@ type GuessView struct {
 // The entries in a game's log: one per move, and an "out" after the
 // wrong guess that ended it.
 const (
-	EntryNext    = "next"
-	EntryFact    = "fact"
-	EntryOverlap = "overlap"
-	EntryGuess   = "guess"
-	EntryWin     = "win"
-	EntryGaveUp  = "gaveup"
-	EntryOut     = "out"
+	EntryNext   = "next"
+	EntryFact   = "fact"
+	EntryGuess  = "guess"
+	EntryWin    = "win"
+	EntryGaveUp = "gaveup"
+	EntryOut    = "out"
 )
 
 // Entry is one line of the log. Which fields it carries depends on its
@@ -125,12 +127,11 @@ const (
 type Entry struct {
 	Type string
 	Cost int
-	// Slot is the slot a Next name showed; Kind the fact bought; Person
-	// the person an overlap added; Guess what a wrong guess said.
-	Slot   int
-	Kind   string
-	Person string
-	Guess  *GuessView
+	// Slot is the slot a Next name showed; Kind the fact bought; Guess
+	// what a wrong guess said.
+	Slot  int
+	Kind  string
+	Guess *GuessView
 }
 
 // MarshalJSON writes an entry in its type's shape.
@@ -148,12 +149,6 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 			Kind string `json:"kind"`
 			Cost int    `json:"cost"`
 		}{e.Type, e.Kind, e.Cost})
-	case EntryOverlap:
-		return json.Marshal(struct {
-			Type   string `json:"type"`
-			Person string `json:"person"`
-			Cost   int    `json:"cost"`
-		}{e.Type, e.Person, e.Cost})
 	case EntryGuess:
 		return json.Marshal(struct {
 			Type  string     `json:"type"`
@@ -192,7 +187,6 @@ type Game struct {
 	NextCost int        `json:"nextCost"`
 	Slots    []SlotView `json:"slots"`
 	Facts    Facts      `json:"facts"`
-	Overlaps []string   `json:"overlaps"`
 	Log      []Entry    `json:"log"`
 	End      *End       `json:"end"`
 }
@@ -237,7 +231,6 @@ func Render(p *Puzzle, rec *Record, live Live) Game {
 		NextCost:  s.NextCost(),
 		Slots:     make([]SlotView, len(p.Cast)),
 		Facts:     p.facts(s, live),
-		Overlaps:  append([]string{}, s.Overlaps...),
 		Log:       []Entry{},
 	}
 	if s.Done {
@@ -331,8 +324,6 @@ func (p *Puzzle) entries(s *State, st step, last bool) []Entry {
 		return []Entry{{Type: EntryNext, Cost: m.Cost, Slot: st.slot}}
 	case IsFact(m.Kind):
 		return []Entry{{Type: EntryFact, Kind: m.Kind, Cost: m.Cost}}
-	case m.Kind == KindOverlap:
-		return []Entry{{Type: EntryOverlap, Person: m.Arg, Cost: m.Cost}}
 	case m.Kind == KindGuess:
 		if m.Arg == p.Answer.ID {
 			return []Entry{{Type: EntryWin}}
@@ -389,63 +380,170 @@ func (p *Puzzle) Wants(rec *Record) (films, people []string) {
 	return films, people
 }
 
-// SheetMovie is one movie on a Movies sheet as the page draws it: what
-// the card says, which of the slots showing it credits, and whether a
-// director is on it once the Director fact is bought.
-type SheetMovie struct {
-	ID     string   `json:"id"`
-	Title  string   `json:"title"`
-	Year   int      `json:"year"`
-	Rating float64  `json:"rating"`
-	Genres []string `json:"genres"`
-	Poster string   `json:"poster,omitempty"`
-	On     []int    `json:"on"`
-	Dir    bool     `json:"dir,omitempty"`
+// The Movies sheet: one showing person's movies on a small Cinedikt map,
+// today's among them and unmarked. Its cards are the one place a game in
+// play is sent the answer's title, year and rating, so what a card says
+// is rationed. Every card used to be readable, with which of the slots
+// showing it credited, and once two or three names were showing the one
+// card they all shared was the answer: matched across two people's
+// sheets by year and exact rating it gave itself away, whatever the
+// page drew. Now a card is readable only inside the ranges the player
+// has bought, and every other card is blank, only where it sits on the
+// map, its rating no finer than the half point the map places it by.
+
+// readable is whether a movie on the sheets may be read as the game
+// stands. Once a range is bought (the decade or the five years, the
+// rating band, the genre) a movie is readable when it is inside every
+// one bought: its year in the decade and in the five years, its rating
+// in the band, its genres holding every one of the answer's. Before one
+// is, nothing is. Once the game is over, everything is. The ranges are
+// the answer's own, so the answer is readable from the first range
+// bought and blank until then, as any card inside them would be: nothing
+// in the rule marks it out. Length is no range here: other movies'
+// runtimes are not on a map. The rating band is RatingBand's, compared
+// in tenths, so a movie is in it from its floor up to, and not
+// including, its ceiling, as the page draws it.
+func (p *Puzzle) readable(s *State, m Movie) bool {
+	if s.Done {
+		return true
+	}
+	a, ranged := p.Answer, false
+	if s.Facts[KindDecade] {
+		if Decade(m.Year) != Decade(a.Year) {
+			return false
+		}
+		ranged = true
+	}
+	if s.Facts[KindYears] {
+		if Years(m.Year) != Years(a.Year) {
+			return false
+		}
+		ranged = true
+	}
+	if s.Facts[KindRating] {
+		if RatingBand(m.Rating) != RatingBand(a.Rating) {
+			return false
+		}
+		ranged = true
+	}
+	if s.Facts[KindGenre] {
+		for _, g := range a.Genres {
+			if !slices.Contains(m.Genres, g) {
+				return false
+			}
+		}
+		ranged = true
+	}
+	return ranged
+}
+
+// halfPoint is a rating as a blank card is placed by it: to the nearest
+// half point, so 7.2 is 7.0, 7.3 is 7.5 and 7.8 is 8.0. IMDb rates in
+// tenths, so no rating sits exactly between two half points.
+func halfPoint(rating float64) float64 {
+	return math.Round(rating*2) / 2
+}
+
+// SheetCard is one movie on a Movies sheet as the page draws it. A
+// readable card is the movie: its id, title, year, rating and genres,
+// and its poster when every readable card on the sheet has one. A blank
+// card is where a movie sits on the map and nothing more: its year, and
+// At, its rating to the nearest half point. SheetOf never puts anything
+// else of a blank card's movie into it, so no field can carry what the
+// card hides, and MarshalJSON writes it as {year, at} whatever it holds.
+type SheetCard struct {
+	Readable bool
+	ID       string
+	Title    string
+	Year     int
+	Rating   float64
+	Genres   []string
+	Poster   string
+	At       float64
+}
+
+// MarshalJSON writes a readable card as {id, title, year, rating,
+// genres, poster?} and a blank one as {year, at}: the page tells them
+// apart by the id.
+func (c SheetCard) MarshalJSON() ([]byte, error) {
+	if !c.Readable {
+		return json.Marshal(struct {
+			Year int     `json:"year"`
+			At   float64 `json:"at"`
+		}{c.Year, c.At})
+	}
+	return json.Marshal(struct {
+		ID     string   `json:"id"`
+		Title  string   `json:"title"`
+		Year   int      `json:"year"`
+		Rating float64  `json:"rating"`
+		Genres []string `json:"genres"`
+		Poster string   `json:"poster,omitempty"`
+	}{c.ID, c.Title, c.Year, c.Rating, nonNilStrings(c.Genres), c.Poster})
 }
 
 // SheetOf is the Movies sheet of the cast member in slot, as the game
-// stands: their movies, the answer among them, each with the slots
-// showing it credits, never one still hidden, and Dir only once the
-// Director fact is bought. ok is false when the slot is not showing, or
-// is no slot at all; once the game is over everyone is.
+// stands: every movie on their sheet, the answer among them, each
+// readable or blank as readable says. Blank cards are kept, so the map
+// keeps its shape, and the list is ordered by year, then by At, then
+// readable before blank, then by id, so where a card sits in the list
+// says nothing its face does not: in the puzzle's order, by id within a
+// year, a blank card's place among its neighbours would say which ids it
+// fell between, and two sheets' blank cards could be lined up by it.
+// ok is false when the slot is not showing, or is no slot at all; once
+// the game is over everyone is.
 //
-// Every card gets its poster, or none does: the answer always has one,
-// since a movie without one is never an answer, so a sheet where only
-// some cards had theirs would mark it out as one of those. SheetWants is
-// what to read live's posters for.
-func (p *Puzzle) SheetOf(s *State, slot int, live Live) ([]SheetMovie, bool) {
+// Every readable card gets its poster, or none does: the answer always
+// has one, since a movie without one is never an answer, so a sheet where
+// only some readable cards had theirs would mark it out as one of those.
+// A blank card never has one. SheetWants is what to read live's posters
+// for.
+func (p *Puzzle) SheetOf(s *State, slot int, live Live) ([]SheetCard, bool) {
 	if !s.Shown(slot) {
 		return nil, false
 	}
-	dir := s.Facts[KindDirector]
 	theirs := p.sheet(slot)
+	out := make([]SheetCard, len(theirs))
 	all := true
-	for _, m := range theirs {
+	for i, m := range theirs {
+		if !p.readable(s, m) {
+			out[i] = SheetCard{Year: m.Year, At: halfPoint(m.Rating)}
+			continue
+		}
+		out[i] = SheetCard{Readable: true, ID: m.ID, Title: m.Title, Year: m.Year, Rating: m.Rating,
+			Genres: nonNilStrings(slices.Clone(m.Genres)), At: halfPoint(m.Rating)}
 		all = all && live.Posters[m.ID] != ""
 	}
-	out := make([]SheetMovie, 0, len(theirs))
-	for _, m := range theirs {
-		v := SheetMovie{ID: m.ID, Title: m.Title, Year: m.Year, Rating: m.Rating,
-			Genres: nonNilStrings(slices.Clone(m.Genres)), On: []int{}, Dir: dir && m.Dir}
-		for _, i := range m.Cast {
-			if s.Shown(i) {
-				v.On = append(v.On, i)
-			}
+	for i := range out {
+		if all && out[i].Readable {
+			out[i].Poster = live.Posters[out[i].ID]
 		}
-		if all {
-			v.Poster = live.Posters[m.ID]
-		}
-		out = append(out, v)
 	}
+	blank := func(c SheetCard) int {
+		if c.Readable {
+			return 0
+		}
+		return 1
+	}
+	slices.SortStableFunc(out, func(x, y SheetCard) int {
+		return cmp.Or(cmp.Compare(x.Year, y.Year), cmp.Compare(x.At, y.At), cmp.Compare(blank(x), blank(y)), cmp.Compare(x.ID, y.ID))
+	})
 	return out, true
 }
 
-// SheetWants are the movies on slot's sheet, whose posters it reads.
-func (p *Puzzle) SheetWants(slot int) []string {
-	theirs := p.sheet(slot)
-	out := make([]string, len(theirs))
-	for i, m := range theirs {
-		out[i] = m.ID
+// SheetWants are the movies on slot's sheet that are readable as the game
+// stands, whose posters it reads: none before a range is bought, and
+// none for a slot not showing. Once the game is over it is the whole
+// sheet.
+func (p *Puzzle) SheetWants(s *State, slot int) []string {
+	if !s.Shown(slot) {
+		return nil
+	}
+	var out []string
+	for _, m := range p.sheet(slot) {
+		if p.readable(s, m) {
+			out = append(out, m.ID)
+		}
 	}
 	return out
 }

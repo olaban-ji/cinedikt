@@ -4,7 +4,6 @@ import {
   useRef,
   type ReactNode,
   type RefObject,
-  type WheelEvent,
 } from 'react';
 import type { FaceCardEvents, FaceHold } from './faceCard';
 import { initialsFor, type GridPayload, type GridPerson } from './grid';
@@ -181,14 +180,22 @@ export function chipEvents(
   };
 }
 
+/** What wheelSideways reads of a wheel: React's, or the browser's own. */
+export interface SidewaysWheel {
+  deltaX: number;
+  deltaY: number;
+  preventDefault(): void;
+}
+
 /** A wheel over the chips moves them sideways.
  *
  *  A mouse wheel and a trackpad's vertical flick both send deltaY, and a
  *  row that only scrolls horizontally does nothing with it — so on a
  *  desktop the chips past the edge could only be reached by dragging.
  *  A horizontal gesture already works and is left alone. The Daily's
- *  Movies sheet has a row of chips like this one, and uses it too. */
-export function wheelSideways(e: WheelEvent<HTMLDivElement>, row: HTMLDivElement | null) {
+ *  facts panel has a row of chips like this one, and uses it too, heard
+ *  natively (listenWheelSideways). */
+export function wheelSideways(e: SidewaysWheel, row: HTMLDivElement | null) {
   if (!row || e.deltaX !== 0 || e.deltaY === 0) return;
   const room = row.scrollWidth - row.clientWidth;
   if (room <= 0) return;
@@ -198,6 +205,24 @@ export function wheelSideways(e: WheelEvent<HTMLDivElement>, row: HTMLDivElement
   if (to === row.scrollLeft) return;
   e.preventDefault();
   row.scrollLeft = to;
+}
+
+/** wheelSideways, heard by the row itself, and not passively. Hands back
+ *  what stops listening, for an effect to return; nothing without a row.
+ *
+ *  React hears every wheel at its root, passively, so an onWheel's
+ *  preventDefault does nothing, and with nothing on the way that might
+ *  stop it the browser scrolls the page before the handler runs. On a
+ *  page that scrolls, as the Daily's does, the wheel then moves the page
+ *  and carries the row out from under the pointer, never moving the row
+ *  at all. A listener of the row's own that says it may cancel makes the
+ *  browser wait for it, so the row moves alone until it reaches an end,
+ *  and only then does the page scroll on. */
+export function listenWheelSideways(row: HTMLDivElement | null): (() => void) | undefined {
+  if (!row) return undefined;
+  const heard = (e: SidewaysWheel) => wheelSideways(e, row);
+  row.addEventListener('wheel', heard, { passive: false });
+  return () => row.removeEventListener('wheel', heard);
 }
 
 /** How many of each person's films this map holds, by person id.

@@ -34,7 +34,6 @@ function gameOf(over: Partial<DailyGame>): DailyGame {
     nextCost: 100,
     slots: Array.from({ length: 6 }, (_, slot) => ({ slot, shown: false as const })),
     facts: {},
-    overlaps: [],
     log: [],
     end: null,
     ...over,
