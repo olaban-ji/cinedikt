@@ -348,7 +348,7 @@ func (s *Store) DailyDayStats(ctx context.Context, day time.Time) (*notify.Daily
 		SELECT g.id, g.finished_at IS NOT NULL, m.seq, m.key, m.kind, coalesce(m.arg, ''), m.cost, m.detail, m.at
 		FROM meta.daily_games g
 		LEFT JOIN meta.daily_moves m ON m.game = g.id
-		WHERE g.no = $1
+		WHERE g.no = $1 AND `+realGameSQL+`
 		ORDER BY g.id, m.seq`, p.No)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: read the daily day's games: %w", err)
@@ -426,10 +426,11 @@ func (s *Store) DailyDayStats(ctx context.Context, day time.Time) (*notify.Daily
 }
 
 // DailyPlayed is how many games of puzzle no have been started, by
-// anyone: the title screen's "people have played today".
+// anyone, on the day's own movie: the title screen's "people have played
+// today".
 func (s *Store) DailyPlayed(ctx context.Context, no int) (int, error) {
 	var n int
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM meta.daily_games WHERE no = $1`, no).Scan(&n); err != nil {
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM meta.daily_games g WHERE g.no = $1 AND `+realGameSQL, no).Scan(&n); err != nil {
 		return 0, fmt.Errorf("catalog: count daily games: %w", err)
 	}
 	return n, nil
@@ -523,12 +524,13 @@ func (s *Store) DailyNames(ctx context.Context) (daily.Credits, error) {
 // eligibleSQL is the players a board lists for puzzle $1: those who
 // finished at least $2 earlier puzzles (daily.EarlierGames), everyone
 // when that is none, and always player $3, who sees their own place
-// whether or not they are listed.
+// whether or not they are listed. Every board counts only games played
+// on the day's own movie (realGameSQL), never a practice game.
 const eligibleSQL = `
 	eligible AS (
-	    SELECT player FROM meta.daily_games
-	    WHERE no < $1 AND finished_at IS NOT NULL
-	    GROUP BY player HAVING count(*) >= $2
+	    SELECT g.player FROM meta.daily_games g
+	    WHERE g.no < $1 AND g.finished_at IS NOT NULL AND ` + realGameSQL + `
+	    GROUP BY g.player HAVING count(*) >= $2
 	)`
 
 const listedSQL = `($2 = 0 OR g.player IN (SELECT player FROM eligible))`
@@ -552,7 +554,7 @@ const todaySQL = `
 	    SELECT g.player, pl.name, pl.hue, g.pts
 	    FROM meta.daily_games g
 	    JOIN meta.daily_players pl ON pl.id = g.player
-	    WHERE g.no = $1 AND g.finished_at IS NOT NULL
+	    WHERE g.no = $1 AND g.finished_at IS NOT NULL AND ` + realGameSQL + `
 	      AND (` + listedSQL + ` OR g.player = $3)
 	), board AS (
 	    SELECT *, NULL::int[] AS offsets, NULL::int[] AS points,` + placedSQL + `
@@ -574,7 +576,7 @@ const weekSQL = `
 	           array_agg(g.pts ORDER BY z.day) AS points
 	    FROM meta.daily_games g
 	    JOIN meta.daily_puzzles z ON z.no = g.no
-	    WHERE z.day BETWEEN $4::date AND $5::date AND g.finished_at IS NOT NULL
+	    WHERE z.day BETWEEN $4::date AND $5::date AND g.finished_at IS NOT NULL AND ` + realGameSQL + `
 	      AND (` + listedSQL + ` OR g.player = $3)
 	    GROUP BY g.player
 	), board AS (
@@ -670,9 +672,9 @@ func (s *Store) DailyBoard(ctx context.Context, p *daily.Puzzle, tab string, pla
 // chart's bars.
 func (s *Store) todaysFigures(ctx context.Context, p *daily.Puzzle, b *daily.Board) error {
 	rows, err := s.pool.Query(ctx, `
-		SELECT pts, won, count(*)::int FROM meta.daily_games
-		WHERE no = $1 AND finished_at IS NOT NULL
-		GROUP BY pts, won`, p.No)
+		SELECT g.pts, g.won, count(*)::int FROM meta.daily_games g
+		WHERE g.no = $1 AND g.finished_at IS NOT NULL AND `+realGameSQL+`
+		GROUP BY g.pts, g.won`, p.No)
 	if err != nil {
 		return fmt.Errorf("catalog: daily board figures: %w", err)
 	}

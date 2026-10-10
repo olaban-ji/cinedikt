@@ -879,13 +879,14 @@ export function fetchDailyMovies(no: number, person: string, signal?: AbortSigna
 }
 
 /** Development only, for trying the Daily again and again on one day:
- *  starts the reader again as a brand-new player, on a movie newly
- *  picked for the puzzle of their date, the one GET /daily shows them
- *  once they are nobody again. The server picks it as the daily job
- *  would, never today's answer again, and tells nobody which; it deletes
- *  every game on that puzzle, lets go of the reader's cookie and answers
- *  204, with nothing in it. In production the address is not there at
- *  all (404), and today's puzzle never says `dev`. It goes through the
+ *  starts the reader again as a brand-new player, on a movie dealt to
+ *  them alone for the puzzle of their date, the one GET /daily shows them
+ *  next. The server picks it as the daily job would, never today's
+ *  answer, and tells nobody which; nobody else's game or movie changes.
+ *  It sets the new player's cookie and answers 204, with nothing in it.
+ *  Where the server's development tools are off, as for real players,
+ *  the address is not there at all (404), and today's puzzle never says
+ *  `dev`. It goes through the
  *  Daily's helpers with the rest, so it carries the reader's zone, which
  *  is how the server finds their date, and it is a JSON write like every
  *  other, so another site cannot make it in the reader's name. */

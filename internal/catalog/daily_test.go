@@ -26,6 +26,7 @@ import (
 func resetDaily(t *testing.T, s *Store) {
 	t.Helper()
 	for _, stmt := range []string{
+		`DELETE FROM meta.daily_deals`,
 		`DELETE FROM meta.daily_moves`,
 		`DELETE FROM meta.daily_games`,
 		`DELETE FROM meta.daily_players`,
@@ -542,6 +543,37 @@ func TestThePickWaitsForACatalogWithRuntimes(t *testing.T) {
 	}
 	if err := job.Run(ctx); err != nil {
 		t.Errorf("with runtimes: %v", err)
+	}
+}
+
+// TestACatalogWithoutRuntimesIsImportedAgain: the hour's check imports
+// a live catalog that predates runtimes from the very files it was made
+// from, rather than leave the Daily waiting for IMDb's next set; one with
+// them, or a first run, is left to the stamps.
+func TestACatalogWithoutRuntimesIsImportedAgain(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	dailyFixture(t, s)
+	published := Generation{Files[0]: {}}
+	for _, c := range []struct {
+		drop      bool
+		published Generation
+		want      string
+	}{
+		{false, published, ""},
+		{false, nil, ""},
+		{true, nil, ""},
+		{true, published, "the live catalog predates runtimes"},
+	} {
+		if c.drop {
+			if _, err := s.pool.Exec(ctx, `ALTER TABLE `+Live+`.titles DROP COLUMN IF EXISTS runtime_minutes`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := s.liveBehind(ctx, c.published)
+		if err != nil || got != c.want {
+			t.Errorf("runtimes dropped %v, %d published: %q, %v; want %q", c.drop, len(c.published), got, err, c.want)
+		}
 	}
 }
 

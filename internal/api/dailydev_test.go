@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -49,12 +50,12 @@ func heatSaid(raw string) bool {
 	return strings.Contains(raw, "tt0113277") || strings.Contains(raw, "Heat")
 }
 
-// RepickDailyPuzzle deals Heat in place of puzzle No. no and deletes
-// its games, as the catalog's store does, or finds no other movie.
-func (f *fakeDaily) RepickDailyPuzzle(_ context.Context, no int) error {
+// DealDailyPuzzle deals player Heat for puzzle No. no and deletes their
+// game of it, as the catalog's store does, or finds no other movie.
+func (f *fakeDaily) DealDailyPuzzle(_ context.Context, player int64, no int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.repicks = append(f.repicks, no)
+	f.dealt = append(f.dealt, fmt.Sprintf("%d/%d", player, no))
 	if f.fail != nil {
 		return f.fail
 	}
@@ -65,21 +66,33 @@ func (f *fakeDaily) RepickDailyPuzzle(_ context.Context, no int) error {
 	if f.noOther {
 		return catalog.ErrNoOtherAnswer
 	}
-	f.puzzles[no] = heatPuzzle(no, p.Day)
-	for key := range f.games {
-		if key[1] == int64(no) {
-			delete(f.games, key)
-		}
-	}
+	key := [2]int64{player, int64(no)}
+	f.deals[key] = heatPuzzle(no, p.Day)
+	delete(f.games, key)
 	return nil
 }
 
-// devAsked is what the fake has been asked so far: the days, the
-// puzzles dealt again, and the standings.
-func (f *fakeDaily) devAsked() (days []string, repicks []int, standings []string) {
+// DailyDeal is the movie player was dealt for No. no, or
+// catalog.ErrNotFound.
+func (f *fakeDaily) DailyDeal(_ context.Context, player int64, no int) (*daily.Puzzle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.days), slices.Clone(f.repicks), slices.Clone(f.standings)
+	f.dealReads++
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	if p, ok := f.deals[[2]int64{player, int64(no)}]; ok {
+		return p, nil
+	}
+	return nil, catalog.ErrNotFound
+}
+
+// devAsked is what the fake has been asked so far: the days, the deals
+// made, and the standings.
+func (f *fakeDaily) devAsked() (days, dealt, standings []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.days), slices.Clone(f.dealt), slices.Clone(f.standings)
 }
 
 // devServer serves f with the development tools on, the clock at the
@@ -104,14 +117,15 @@ func (b *browser) reset(query string) reply {
 }
 
 // TestPlayAgainIsARouteOnlyInDevelopment: without the development tools,
-// which is production, the router has never heard of the reset, as of
-// any other path, and today does not say dev at all; with them, today
-// says dev and the reset is there.
+// as for real players, the router has never heard of the reset, as of
+// any other path, today does not say dev at all, and no deal is ever
+// read; with them, today says dev and the reset is there.
 func TestPlayAgainIsARouteOnlyInDevelopment(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, _ := dailyServer(t, f)
 	b := newBrowser(t, srv)
 	b.post("/daily/142/play", map[string]any{})
+	b.move("next", 0, nil)
 	if r := b.reset(""); r.status != http.StatusNotFound || r.body != nil || strings.Contains(r.header.Get("Set-Cookie"), "cd_daily") {
 		t.Errorf("reset in production: %d %q, Set-Cookie %q", r.status, r.raw, r.header.Get("Set-Cookie"))
 	}
@@ -119,9 +133,11 @@ func TestPlayAgainIsARouteOnlyInDevelopment(t *testing.T) {
 	if _, said := today.body["dev"]; said || strings.Contains(today.raw, `"dev"`) || today.body["game"] == nil {
 		t.Errorf("today in production: %s", today.raw)
 	}
-	if _, repicks, _ := f.devAsked(); len(repicks) != 0 {
-		t.Errorf("production dealt %v again", repicks)
+	f.mu.Lock()
+	if len(f.dealt) != 0 || f.dealReads != 0 {
+		t.Errorf("production dealt %v and read %d deals", f.dealt, f.dealReads)
 	}
+	f.mu.Unlock()
 
 	dev, _ := devServer(t, newFakeDaily(matrixPuzzle()), todayAt, nil)
 	d := newBrowser(t, dev)
@@ -133,13 +149,15 @@ func TestPlayAgainIsARouteOnlyInDevelopment(t *testing.T) {
 	}
 }
 
-// TestPlayAgainStartsTheReaderAgainOnAnotherMovie: the reader's cookie
-// is expired as it was set, every game of the puzzle goes, anybody's,
-// and the next read, at once, is the new movie with a new name offered
-// and no game, though the old players are kept. The standings this
-// process kept go too, and so does the Movies sheet the old game had
-// opened: the new game opens one of its own.
-func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
+// TestPlayAgainDealsTheReaderAMovieOfTheirOwn: the reader is a new
+// player at once, with the cookie set the way Play sets one, and the
+// next read, at once, is a movie dealt to them alone, their name and no
+// game. The game they had stays, and so does everyone else's, on the
+// day's own movie, which the other player still reads; the day's count
+// is of those games alone, before and after the new player plays.
+// Every move and Movies sheet of the new game is on the new movie's
+// cast, and the new game opens a sheet of its own.
+func TestPlayAgainDealsTheReaderAMovieOfTheirOwn(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, _ := devServer(t, f, todayAt, nil)
 	b := newBrowser(t, srv)
@@ -151,19 +169,18 @@ func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
 	other := newBrowser(t, srv)
 	other.ip = "216.160.83.56"
 	other.post("/daily/142/play", map[string]any{})
-	other.get("/daily/me")
 	before := b.get("/daily")
 	if before.body["game"] == nil || before.body["played"] != 2.0 {
 		t.Fatalf("before Play again: %s", before.raw)
 	}
-	days, _, standings := f.devAsked()
+	was := before.body["player"].(map[string]any)["name"]
 
 	r := b.reset("")
 	if r.status != http.StatusNoContent {
 		t.Fatalf("reset = %d %s", r.status, r.raw)
 	}
 	cookie := r.header.Get("Set-Cookie")
-	for _, want := range []string{"cd_daily=;", "Path=/", "Max-Age=0", "HttpOnly", "Secure", "SameSite=Lax"} {
+	for _, want := range []string{"cd_daily=", "Path=/", "Max-Age=31536000", "HttpOnly", "Secure", "SameSite=Lax"} {
 		if !strings.Contains(cookie, want) {
 			t.Errorf("Set-Cookie %q lacks %s", cookie, want)
 		}
@@ -176,42 +193,31 @@ func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
 	if after.status != http.StatusOK || after.body["no"] != 142.0 || after.body["date"] != "2026-10-08" {
 		t.Fatalf("today after Play again: %d %s", after.status, after.raw)
 	}
-	// A name is offered, as to anyone new; it may even be the old one,
-	// the pool being what it is, so only that it is not kept is asked.
-	if player := after.body["player"].(map[string]any); player["saved"] != false || player["name"] == "" {
-		t.Errorf("after Play again the reader is %v, want a name offered", player)
+	if player := after.body["player"].(map[string]any); player["saved"] != true || player["name"] == "" || player["name"] == was {
+		t.Errorf("after Play again the reader is %v; they were %v", player, was)
 	}
-	if after.body["game"] != nil || after.body["played"] != 0.0 || after.header.Get("Set-Cookie") != "" {
-		t.Errorf("after Play again: game %v, played %v, Set-Cookie %q", after.body["game"], after.body["played"], after.header.Get("Set-Cookie"))
+	if after.body["game"] != nil || after.body["played"] != 2.0 {
+		t.Errorf("after Play again: game %v, played %v", after.body["game"], after.body["played"])
 	}
-	if after.body["colour"] != "#2b3f57" {
-		t.Errorf("after Play again the movie is still the old one: %s", after.raw)
+	if after.body["colour"] != "#2b3f57" || heatSaid(after.raw) {
+		t.Errorf("after Play again the reader's movie: %s", after.raw)
 	}
-	if heatSaid(after.raw) {
-		t.Errorf("today after Play again names the new answer: %s", after.raw)
-	}
-	nowDays, repicks, _ := f.devAsked()
-	if !slices.Equal(repicks, []int{142}) || len(nowDays) != len(days)+1 {
-		t.Errorf("dealt %v again; the day asked for %v before and %v after, want once more", repicks, days, nowDays)
-	}
+	_, dealt, _ := f.devAsked()
 	f.mu.Lock()
-	if len(f.players) != 2 {
-		t.Errorf("%d players after Play again, want both kept", len(f.players))
+	if len(f.players) != 3 || len(f.games) != 2 || !slices.Equal(dealt, []string{"3/142"}) {
+		t.Errorf("after Play again: %d players, %d games, dealt %v; want the new player alone dealt a movie, every game kept",
+			len(f.players), len(f.games), dealt)
 	}
 	f.mu.Unlock()
 
-	// The other player is still theirs, with no game, and their standing,
-	// kept a minute ago, is worked out again.
-	if mine := other.get("/daily"); mine.body["player"].(map[string]any)["saved"] != true || mine.body["game"] != nil {
+	// The other player is still on the day's own movie, game and all.
+	if mine := other.get("/daily"); mine.body["colour"] != "#26382d" || mine.body["game"] == nil || seqOf(t, mine) != 0 {
 		t.Errorf("the other player after Play again: %s", mine.raw)
 	}
-	other.get("/daily/me")
-	if _, _, again := f.devAsked(); len(again) != len(standings)+1 {
-		t.Errorf("standings asked for %v before Play again and %v after, want once more", standings, again)
-	}
 
-	// The new game has no sheet, so none is read, the old one's person's
-	// or the new sixth-billed's, until it opens its own.
+	// The new game is on Heat: its sixth-billed is Diane Venora, and it
+	// has no sheet, so none is read, the old one's person's or Venora's,
+	// until it opens its own.
 	played := b.post("/daily/142/play", map[string]any{})
 	if g := gameOf(t, played); g["sheet"] != nil || g["seq"] != 0.0 {
 		t.Errorf("the new game: %s", played.raw)
@@ -227,15 +233,18 @@ func TestPlayAgainStartsTheReaderAgainOnAnotherMovie(t *testing.T) {
 	if r := b.sheet("nm0001827"); r.status != http.StatusOK || heatSaid(r.raw) {
 		t.Errorf("Venora's sheet, opened: %d %s", r.status, r.raw)
 	}
+	if again := b.get("/daily"); again.body["played"] != 2.0 {
+		t.Errorf("played after the new game began: %v, want the day's two", again.body["played"])
+	}
 }
 
-// TestPlayAgainDealsThePuzzleTheReaderIsShownNext: the puzzle dealt
-// afresh is the one the page shows once the reset has answered, when the
-// reader is nobody: the one for their date in their zone. For most
-// readers that is the one it showed before; for a player GET /daily had
-// moved on to the day their left-behind game's zone has reached, it is
-// the day before, the one their game was left on, and the new movie is
-// there at once rather than on a day they are not shown.
+// TestPlayAgainDealsThePuzzleTheReaderIsShownNext: the movie is dealt for
+// the puzzle of the reader's date in their zone, which is what a new
+// player with no game is shown. For a player GET /daily had moved on to
+// the day their left-behind game's zone has reached, that is the day
+// before, the one their game was left on, and the new movie is there at
+// once rather than on a day they are not shown. The game they left stays
+// theirs.
 func TestPlayAgainDealsThePuzzleTheReaderIsShownNext(t *testing.T) {
 	f := newFakeDaily(puzzleOn(143, "2026-10-09"), puzzleOn(144, "2026-10-10"))
 	// 17:00 in Tokyo, 01:00 in Los Angeles, both on the 9th.
@@ -252,39 +261,28 @@ func TestPlayAgainDealsThePuzzleTheReaderIsShownNext(t *testing.T) {
 	if r := b.reset("?tz=America/Los_Angeles"); r.status != http.StatusNoContent {
 		t.Fatalf("reset = %d %s", r.status, r.raw)
 	}
-	// Before, it dealt 144 again, and the page, with no cookie now, showed
-	// 143 with the movie it had always had.
 	after := b.get("/daily?tz=America/Los_Angeles")
 	if after.body["no"] != 143.0 || after.body["colour"] != "#2b3f57" || after.body["game"] != nil {
 		t.Errorf("after Play again the page shows No. %v in %v: %s", after.body["no"], after.body["colour"], after.raw)
 	}
-	for _, c := range []struct {
-		query string
-		want  int
-	}{
-		{"?tz=America/Los_Angeles", 143},
-		{"?tz=Asia/Tokyo", 144},
-		{"", 143},
-	} {
+	for _, query := range []string{"?tz=America/Los_Angeles", "?tz=Asia/Tokyo", ""} {
 		stranger := newBrowser(t, srv)
-		if r := stranger.reset(c.query); r.status != http.StatusNoContent {
-			t.Errorf("a stranger's reset%s: %d %s", c.query, r.status, r.raw)
+		if r := stranger.reset(query); r.status != http.StatusNoContent {
+			t.Errorf("a stranger's reset%s: %d %s", query, r.status, r.raw)
 		}
 	}
-	if _, repicks, _ := f.devAsked(); !slices.Equal(repicks, []int{143, 143, 144, 143}) {
-		t.Errorf("dealt %v again, want the player's own date's 143, then each stranger's own date", repicks)
+	if _, dealt, _ := f.devAsked(); !slices.Equal(dealt, []string{"2/143", "3/143", "4/144", "5/143"}) {
+		t.Errorf("dealt %v, want the player's own date's 143, then each stranger's own date", dealt)
 	}
-	// The game left behind on the 9th was the 9th's, and went with it.
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.games) != 0 {
-		t.Errorf("%d games left after both days were dealt again", len(f.games))
+	if len(f.games) != 1 {
+		t.Errorf("%d games after Play again, want the one left behind on the 9th, kept", len(f.games))
 	}
 }
 
 // TestPlayAgainWithNoOtherMovieChangesNothing: the reader keeps their
-// cookie and their game, and the puzzle and standings this process kept
-// are kept.
+// cookie, their game and their movie.
 func TestPlayAgainWithNoOtherMovieChangesNothing(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	f.noOther = true
@@ -292,9 +290,6 @@ func TestPlayAgainWithNoOtherMovieChangesNothing(t *testing.T) {
 	b := newBrowser(t, srv)
 	b.post("/daily/142/play", map[string]any{})
 	b.move("next", 0, nil)
-	b.get("/daily")
-	b.get("/daily/me")
-	days, _, standings := f.devAsked()
 
 	r := b.reset("")
 	if r.status != http.StatusServiceUnavailable || r.body["reason"] != "unavailable" || r.header.Get("Set-Cookie") != "" {
@@ -306,12 +301,6 @@ func TestPlayAgainWithNoOtherMovieChangesNothing(t *testing.T) {
 	}
 	if after.body["colour"] != "#26382d" {
 		t.Errorf("after a reset that failed the movie is %s", after.raw)
-	}
-	b.get("/daily/me")
-	nowDays, repicks, nowStandings := f.devAsked()
-	if !slices.Equal(repicks, []int{142}) || len(nowDays) != len(days) || len(nowStandings) != len(standings) {
-		t.Errorf("after a reset that failed: dealt %v; days %v then %v; standings %v then %v",
-			repicks, days, nowDays, standings, nowStandings)
 	}
 }
 
@@ -350,36 +339,43 @@ func TestPlayAgainIsAChangeLikeAnyOther(t *testing.T) {
 	if r := b.do(http.MethodGet, "/daily/dev/reset", "", nil); r.status != http.StatusMethodNotAllowed {
 		t.Errorf("GET of the reset: %d %s", r.status, r.raw)
 	}
-	if _, repicks, _ := f.devAsked(); len(repicks) != 0 {
-		t.Errorf("dealt %v again", repicks)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.dealt) != 0 || len(f.players) != 0 {
+		t.Errorf("dealt %v and made %d players", f.dealt, len(f.players))
 	}
 }
 
-// TestPlayAgainHandsBackTheAddresssAllowance: every press makes a new
-// player at the next Play, so a developer pressing it all afternoon from
-// one address is never taken for a script making players.
-func TestPlayAgainHandsBackTheAddresssAllowance(t *testing.T) {
+// TestPlayAgainNeverCountsAgainstTheAddresssAllowance: every press makes
+// a new player, and a developer pressing it all afternoon from one
+// address is never taken for a script making players, nor is anyone
+// else who shares the address.
+func TestPlayAgainNeverCountsAgainstTheAddresssAllowance(t *testing.T) {
 	f := newFakeDaily(matrixPuzzle())
 	srv, _ := devServer(t, f, todayAt, nil)
 	b := newBrowser(t, srv)
 	for i := range joinBurst + 5 {
-		if r := b.post("/daily/142/play", map[string]any{}); r.status != http.StatusOK {
-			t.Fatalf("Play %d: %d %s", i+1, r.status, r.raw)
-		}
 		if r := b.reset(""); r.status != http.StatusNoContent {
 			t.Fatalf("reset %d: %d %s", i+1, r.status, r.raw)
 		}
+		if r := b.post("/daily/142/play", map[string]any{}); r.status != http.StatusOK {
+			t.Fatalf("Play %d: %d %s", i+1, r.status, r.raw)
+		}
+	}
+	// Had the presses counted, the address's ten would be long spent.
+	if r := newBrowser(t, srv).post("/daily/142/play", map[string]any{}); r.status != http.StatusOK {
+		t.Fatalf("a stranger's Play from the same address: %d %s", r.status, r.raw)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.players) != joinBurst+5 {
-		t.Errorf("%d players, want one for every Play", len(f.players))
+	if len(f.players) != joinBurst+6 {
+		t.Errorf("%d players, want one for every press and the stranger", len(f.players))
 	}
 }
 
 // TestPlayAgainNeverLogsTheNewAnswer: whoever reads the log is about to
-// play it, so it says which puzzle was dealt again and nothing of what
-// with, at every level, and nor does any response.
+// play it, so it says which puzzle a movie was dealt for and nothing of
+// what, at every level, and nor does any response.
 func TestPlayAgainNeverLogsTheNewAnswer(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -395,8 +391,8 @@ func TestPlayAgainNeverLogsTheNewAnswer(t *testing.T) {
 			t.Errorf("a response after Play again: %d %s", r.status, r.raw)
 		}
 	}
-	if !strings.Contains(logs.String(), `msg="daily puzzle re-picked for development" no=142 day=2026-10-08`) {
-		t.Errorf("the log does not say which puzzle was dealt again:\n%s", logs.String())
+	if !strings.Contains(logs.String(), `msg="daily puzzle dealt for development" no=142 day=2026-10-08`) {
+		t.Errorf("the log does not say which puzzle a movie was dealt for:\n%s", logs.String())
 	}
 	if heatSaid(logs.String()) {
 		t.Errorf("the log names the new answer:\n%s", logs.String())

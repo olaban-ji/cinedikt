@@ -50,6 +50,13 @@ type Config struct {
 	// Off unless ANALYTICS_ENABLED is "true", so the tokens can stay set
 	// while nothing is tracked.
 	AnalyticsEnabled bool
+	// DailyDevTools turns on Cinedikt Daily's tools for working on it,
+	// Play again among them, in production too: off unless
+	// DAILY_DEV_TOOLS is "true". Outside production they are on anyway.
+	// It is for a deployed environment someone is testing the Daily on,
+	// such as dev, which keeps production's JSON logs and analytics; the
+	// environment real players use never sets it.
+	DailyDevTools bool
 
 	// --- catalog ---
 
@@ -323,6 +330,7 @@ func Load() (Config, error) {
 		PostHogHost:        envOr("POSTHOG_HOST", "https://us.i.posthog.com"),
 		MixpanelToken:      strings.TrimSpace(os.Getenv("MIXPANEL_PROJECT_TOKEN")),
 		AnalyticsEnabled:   strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_ENABLED")), "true"),
+		DailyDevTools:      strings.EqualFold(strings.TrimSpace(os.Getenv("DAILY_DEV_TOOLS")), "true"),
 		APIAddr:            listenAddr(),
 		WebDir:             os.Getenv("WEB_DIR"),
 
@@ -348,6 +356,10 @@ func Load() (Config, error) {
 
 // Production reports whether this process is serving real traffic.
 func (c Config) Production() bool { return c.Environment == EnvProduction }
+
+// DailyDev reports whether Cinedikt Daily's development tools are on:
+// always outside production, and in production only with DailyDevTools.
+func (c Config) DailyDev() bool { return !c.Production() || c.DailyDevTools }
 
 // NewLogger builds the logger for this environment. In production it
 // writes single-line JSON to stdout, which is what a log collector reads:

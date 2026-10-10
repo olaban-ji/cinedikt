@@ -60,7 +60,9 @@ type Outcome struct {
 }
 
 // RunOnce is one hour's attempt. It reads the five stamps, and runs a
-// whole import only when all five have moved past what was published.
+// whole import only when all five have moved past what was published,
+// or, with none moved, when the live catalog is behind what this
+// importer loads (liveBehind).
 //
 // Every way of stopping leaves the live catalog exactly as it was.
 func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
@@ -101,8 +103,15 @@ func (im *Importer) RunOnce(ctx context.Context) (Outcome, error) {
 		return live, err
 	}
 	if ready, why := Ready(published, opened, Files); !ready {
-		live.Reason, live.Skip = why, SkipNotReady
-		return live, nil
+		behind, err := im.Store.liveBehind(ctx, published)
+		if err != nil {
+			return live, err
+		}
+		if behind == "" {
+			live.Reason, live.Skip = why, SkipNotReady
+			return live, nil
+		}
+		im.Logger.Info("importing the published files again", "reason", behind)
 	}
 
 	im.Logger.Info("import starting", "files", len(Files), "step", "1/4 download")
@@ -269,4 +278,23 @@ func (s *Store) Stale(ctx context.Context, now time.Time) (bool, time.Time, erro
 		return true, at, nil
 	}
 	return now.Sub(at) > StaleAfter, at, nil
+}
+
+// liveBehind says why the live catalog has to be imported again from the
+// files it was made from, or "" when it need not be. A catalog imported
+// before titles kept IMDb's runtime is the one case: Cinedikt Daily can
+// pick nothing from it (ErrNoRuntimes), and without this every server
+// the Daily is first deployed to would wait for IMDb's next set, up to a
+// day, before its first puzzle. The import that follows brings the
+// column, so this asks once. Nothing is behind before a first publish,
+// which imports anyway.
+func (s *Store) liveBehind(ctx context.Context, published Generation) (string, error) {
+	if len(published) == 0 {
+		return "", nil
+	}
+	has, err := s.hasRuntimes(ctx)
+	if err != nil || has {
+		return "", err
+	}
+	return "the live catalog predates runtimes", nil
 }

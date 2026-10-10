@@ -230,8 +230,8 @@ export function DailyPage({ onDay, rulesSignal = 0, dim = false, onOpenMovie }: 
   const reload = useCallback(() => setAsked((n) => n + 1), []);
 
   // Play again (development only). Not a reload, which keeps the old game
-  // up until the new puzzle lands: that game is gone on the server, so the
-  // view drawing it goes at once, and with it all it had running — its
+  // up until the new puzzle lands: that game is no longer the reader's,
+  // who is a new player now, so the view drawing it goes at once, and with it all it had running — its
   // timers, a guess half typed — and any toast it raised. A press while
   // one is on its way is the same press.
   const restart = useCallback(() => {

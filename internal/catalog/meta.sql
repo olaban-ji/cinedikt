@@ -342,7 +342,7 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'meta' AND table_name = 'daily_puzzles' AND column_name = 'cards'
     ) THEN
-        DROP TABLE IF EXISTS meta.daily_moves, meta.daily_games, meta.daily_puzzles;
+        DROP TABLE IF EXISTS meta.daily_deals, meta.daily_moves, meta.daily_games, meta.daily_puzzles;
     END IF;
 END $$;
 
@@ -503,3 +503,33 @@ BEGIN
                        (SELECT string_agg(quote_literal(k), ', ' ORDER BY n) FROM unnest(kinds) WITH ORDINALITY AS u (k, n)));
     END IF;
 END $$;
+
+-- A movie of their own for one player on one day's puzzle: development's
+-- Play again (dailydev.go), which starts whoever presses it again as a
+-- new player and deals them, and only them, another answer for the day,
+-- so that someone working on the Daily can play it as a stranger as
+-- often as they like while everyone else's game, and everyone else's
+-- movie, stays as it was. It has the puzzle's columns from answer to
+-- genre, and takes its number and day from the puzzle it stands in for.
+-- The player's game of that number is played on it, and is a practice
+-- game: no board, count or figure of the day reads it (realGameSQL).
+-- Only a server with the Daily's development tools on ever writes one.
+CREATE TABLE IF NOT EXISTS meta.daily_deals (
+    player    bigint NOT NULL REFERENCES meta.daily_players (id) ON DELETE CASCADE,
+    no        int NOT NULL REFERENCES meta.daily_puzzles (no) ON DELETE CASCADE,
+    answer    text NOT NULL,
+    title     text NOT NULL,
+    year      int NOT NULL,
+    rating    numeric(3,1) NOT NULL,
+    md        int NOT NULL,
+    length    int NOT NULL,
+    colour    char(7) NOT NULL,
+    genres    text[] NOT NULL,
+    directors jsonb NOT NULL,
+    billed    jsonb NOT NULL,
+    movies    jsonb NOT NULL,
+    era       int NOT NULL,
+    genre     text NOT NULL,
+    picked_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (player, no)
+);

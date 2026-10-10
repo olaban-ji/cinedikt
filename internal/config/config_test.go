@@ -111,6 +111,36 @@ func TestNewLoggerFormatsForTheEnvironment(t *testing.T) {
 	})
 }
 
+// TestTheDailysToolsAreOnOutsideProductionOrWhenAsked: a checkout has
+// them; a deployed environment has them only with DAILY_DEV_TOOLS set to
+// "true", so dev can keep production's logs and analytics and still have
+// Play again.
+func TestTheDailysToolsAreOnOutsideProductionOrWhenAsked(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/cinedikt")
+	for _, c := range []struct {
+		env, tools string
+		want       bool
+	}{
+		{"", "", true},
+		{"development", "false", true},
+		{"production", "", false},
+		{"production", "false", false},
+		{"production", "yes", false},
+		{"production", "true", true},
+		{"production", " TRUE ", true},
+	} {
+		t.Setenv("APP_ENV", c.env)
+		t.Setenv("DAILY_DEV_TOOLS", c.tools)
+		got, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.DailyDev() != c.want {
+			t.Errorf("APP_ENV=%q DAILY_DEV_TOOLS=%q: tools on %v, want %v", c.env, c.tools, got.DailyDev(), c.want)
+		}
+	}
+}
+
 func TestACatalogIsEnoughToStart(t *testing.T) {
 	// A clean deployment sets a database and nothing else. Every other
 	// service is optional, and requiring its credentials would stop the

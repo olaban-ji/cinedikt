@@ -884,7 +884,7 @@ func TestMetaBringsPointBlanksTablesToNameDrop(t *testing.T) {
 		return n
 	}
 	t.Cleanup(func() { resetDaily(t, s) })
-	drop := `DROP TABLE meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
+	drop := `DROP TABLE meta.daily_deals, meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
 
 	exec(drop, metaSQL, metaSQL)
 	fresh := dailyShape(t, s)
@@ -978,7 +978,7 @@ func TestMetaTakesTheOverlapOutOfTheKindCheck(t *testing.T) {
 		return n
 	}
 	t.Cleanup(func() { resetDaily(t, s) })
-	drop := `DROP TABLE meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
+	drop := `DROP TABLE meta.daily_deals, meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
 
 	exec(drop, metaSQL, metaSQL)
 	fresh := dailyShape(t, s)
@@ -1091,7 +1091,7 @@ func TestMetaAddsTheSheetToTheKindCheck(t *testing.T) {
 		return got
 	}
 	t.Cleanup(func() { resetDaily(t, s) })
-	drop := `DROP TABLE meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
+	drop := `DROP TABLE meta.daily_deals, meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
 
 	exec(drop, metaSQL, metaSQL)
 	fresh := dailyShape(t, s)
@@ -1221,7 +1221,7 @@ func TestMetaTakesTheYearsOutOfTheKindCheck(t *testing.T) {
 		return oid
 	}
 	t.Cleanup(func() { resetDaily(t, s) })
-	drop := `DROP TABLE meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
+	drop := `DROP TABLE meta.daily_deals, meta.daily_moves, meta.daily_games, meta.daily_players, meta.daily_puzzles`
 
 	exec(drop, metaSQL, metaSQL)
 	fresh := dailyShape(t, s)

@@ -22,8 +22,9 @@ package api
 // and with SameSite=Lax that is the whole of the defence against a move
 // being made on a reader's behalf.
 //
-// Outside production there is one route more, development's Play again
-// (reset), which deals the reader's day afresh; in production it is not
+// With the development tools on there is one route more, development's
+// Play again (reset), which starts the reader again on a movie of their
+// own for the day; where they are off, as for real players, it is not
 // registered at all.
 
 import (
@@ -83,11 +84,16 @@ type DailyStore interface {
 	// DailyNames is the characters players' names are made from, and the
 	// real people no name may be.
 	DailyNames(ctx context.Context) (daily.Credits, error)
-	// RepickDailyPuzzle deals puzzle No. no again with another answer, on
-	// the same day under the same number, and deletes its games; it is
-	// catalog.ErrNoOtherAnswer, changing nothing, when no other movie
-	// fits. Development's Play again is the only caller (WithDailyDev).
-	RepickDailyPuzzle(ctx context.Context, no int) error
+	// DealDailyPuzzle deals a player a movie of their own for puzzle
+	// No. no, another answer on the same day under the same number, which
+	// their game of it is played on from then on, and deletes any game
+	// they had of it; it is catalog.ErrNoOtherAnswer, changing nothing,
+	// when no other movie fits. DailyDeal is that movie, or
+	// catalog.ErrNotFound when they were dealt none. Development's Play
+	// again is the only dealer, and only with the development tools on is
+	// a deal ever read (WithDailyDev).
+	DealDailyPuzzle(ctx context.Context, player int64, no int) error
+	DailyDeal(ctx context.Context, player int64, no int) (*daily.Puzzle, error)
 }
 
 // WithDaily serves Cinedikt Daily from store. Without it every Daily
@@ -99,12 +105,14 @@ func (s *Server) WithDaily(store DailyStore) *Server {
 }
 
 // WithDailyDev turns on Daily's development tools when on, which is
-// whenever the server is not production's: GET /daily says "dev": true,
-// and POST /daily/dev/reset starts the reader again as a new player on a
-// newly picked movie (reset). Off, the route is never registered, so in
-// production it is not a refusal anybody could find a way past but a
-// path the router has never heard of, 404 like any other. Called before
-// Handler, which registers the routes.
+// outside production and wherever DAILY_DEV_TOOLS asks (config.DailyDev):
+// GET /daily says "dev": true, POST /daily/dev/reset starts the reader
+// again as a new player on a movie of their own (reset), and every route
+// plays a player's game on the movie they were dealt, if they were
+// (theirs). Off, the route is never registered, so where real players
+// play it is not a refusal anybody could find a way past but a path the
+// router has never heard of, 404 like any other, and no deal is ever
+// read. Called before Handler, which registers the routes.
 func (s *Server) WithDailyDev(on bool) *Server {
 	s.daily.dev = on
 	return s
@@ -337,6 +345,21 @@ func (d *dailyRoutes) puzzleOn(ctx context.Context, day, now time.Time) (*daily.
 	return p, nil
 }
 
+// theirs is p as player plays it: the movie of their own Play again
+// dealt them for p's number, under its number and on its day, or p
+// itself when they were dealt none. Only with the development tools on
+// is a deal looked for, so where they are off this asks nothing.
+func (d *dailyRoutes) theirs(ctx context.Context, player int64, p *daily.Puzzle) (*daily.Puzzle, error) {
+	if !d.dev {
+		return p, nil
+	}
+	own, err := d.store.DailyDeal(ctx, player, p.No)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return p, nil
+	}
+	return own, err
+}
+
 // puzzleNo is puzzle No. no, or catalog.ErrNotFound.
 func (d *dailyRoutes) puzzleNo(ctx context.Context, no int, now time.Time) (*daily.Puzzle, error) {
 	d.mu.Lock()
@@ -367,14 +390,6 @@ func (d *dailyRoutes) keep(p *daily.Puzzle, now time.Time) {
 	if daily.Current(p.Day, now) {
 		d.live[p.No] = p
 	}
-}
-
-// forget lets go of puzzle No. no, so the next read of it is the
-// store's.
-func (d *dailyRoutes) forget(no int) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	delete(d.live, no)
 }
 
 // named is the puzzle the path names, for a game of it. A number that is
@@ -430,10 +445,13 @@ func puzzleNumber(w http.ResponseWriter, r *http.Request) (int, bool) {
 // later one, since dates only go forward from the one the game was
 // started on, and it is one the reader could have had by naming that
 // zone, so it opens nothing early. Until the job has picked it, the dead
-// game is theirs as it was. catalog.ErrNotFound when their date in zone
-// has no puzzle.
+// game is theirs as it was. Either puzzle is the one they play (theirs).
+// catalog.ErrNotFound when their date in zone has no puzzle.
 func (d *dailyRoutes) readerDay(ctx context.Context, player int64, zone *time.Location, now time.Time) (*time.Location, *daily.Puzzle, *daily.Record, error) {
 	p, err := d.puzzleOn(ctx, daily.DayIn(now, zone), now)
+	if err == nil {
+		p, err = d.theirs(ctx, player, p)
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -445,6 +463,9 @@ func (d *dailyRoutes) readerDay(ctx context.Context, player int64, zone *time.Lo
 	later, err := d.puzzleOn(ctx, daily.DayIn(now, there), now)
 	if errors.Is(err, catalog.ErrNotFound) {
 		return zone, p, rec, nil
+	}
+	if err == nil {
+		later, err = d.theirs(ctx, player, later)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -700,6 +721,9 @@ func (d *dailyRoutes) play(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	player, token, ok, err := d.player(r)
+	if err == nil && ok {
+		p, err = d.theirs(ctx, player.ID, p)
+	}
 	if err != nil {
 		d.fail(w, r, err)
 		return
@@ -864,6 +888,10 @@ func (d *dailyRoutes) act(w http.ResponseWriter, r *http.Request, what func(dail
 		dailyRefuse(w, http.StatusForbidden, "cookie", "that cookie is nobody's")
 		return
 	}
+	if p, err = d.theirs(ctx, player.ID, p); err != nil {
+		d.fail(w, r, err)
+		return
+	}
 	rec, err := d.store.DailyAct(ctx, player.ID, p, daily.Request{Key: body.Key, Seq: *body.Seq, Kind: kind, Arg: arg}, now)
 	if errors.Is(err, daily.ErrStale) && rec != nil {
 		g, gerr := d.rendered(ctx, p, rec)
@@ -948,6 +976,10 @@ func (d *dailyRoutes) movies(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		dailyRefuse(w, http.StatusForbidden, "cookie", "that cookie is nobody's")
+		return
+	}
+	if p, err = d.theirs(ctx, player.ID, p); err != nil {
+		d.fail(w, r, err)
 		return
 	}
 	rec, err := d.store.DailyGame(ctx, player.ID, p.No)
@@ -1036,28 +1068,30 @@ func (d *dailyRoutes) board(w http.ResponseWriter, r *http.Request) {
 }
 
 // reset is POST /daily/dev/reset {}, development's Play again, which
-// exists only outside production (WithDailyDev): the reader starts again
-// as a brand-new player, on their puzzle dealt afresh with another movie,
-// so whoever is working on Daily can play it from the title screen as
-// often as they like, never knowing the answer first. In order:
+// exists only with the development tools on (WithDailyDev): the reader
+// starts again as a brand-new player, on a movie of their own for the
+// day, so whoever is working on Daily can play it from the title screen
+// as often as they like, never knowing the answer first, while every
+// other player's game, and every other player's movie, stays as it was.
+// In order:
 //
-//   - the puzzle is the one the reader is shown once this has answered,
-//     with no cookie: the one for their date in their zone, as GET /daily
-//     finds a stranger's, which is the one their page is showing unless
-//     a left-behind game had moved them on a day (readerDay);
-//   - the store deals it again from another answer, under the same number
-//     on the same day, and deletes every game of it, everybody's, since a
-//     game's moves mean nothing on another movie's cast;
-//   - the puzzle this process kept is let go, and every standing kept
-//     with it, so the next GET /daily is the new movie at once;
-//   - the cookie is expired, so that GET offers a new name and no game.
+//   - the puzzle is the one for the reader's date in their zone, as
+//     GET /daily finds a stranger's, since the reader is about to be a
+//     new player with no game left behind (readerDay);
+//   - a new player is made, with a fresh name;
+//   - the store deals them another answer for that puzzle, under its
+//     number on its day, which their game of it is played on (theirs),
+//     and which no board, count or figure of the day reads;
+//   - the cookie is the new player's, so the next GET /daily is the new
+//     movie, their name, and no game.
 //
-// The old players stay, on the other days' boards. When no other movie
-// fits it is 503 "unavailable", and nothing has changed. The new answer
-// is never in the response, nor the log, which says only which puzzle
-// was dealt again: the store never tells it. A read of the puzzle already
-// under way as it lands could keep the old one again; the page reads
-// only once this has answered, so its own read never does.
+// The old player stays as they were, game and all. When no other movie
+// fits it is 503 "unavailable", and the reader is who they were: the
+// cookie is not changed. The new answer is never in the response, nor
+// the log, which says only which puzzle a movie was dealt for: the store
+// never tells it. A new player made this way does not count against the
+// address's allowance (joins), which is there for strangers' scripts,
+// never for a developer pressing this all afternoon.
 func (d *dailyRoutes) reset(w http.ResponseWriter, r *http.Request) {
 	var body struct{}
 	if !readDailyJSON(w, r, &body) {
@@ -1065,12 +1099,6 @@ func (d *dailyRoutes) reset(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	now := d.now()
-	// Nobody's puzzle, whoever the cookie names: once this answers the
-	// reader is nobody, and GET /daily gives nobody the puzzle for their
-	// date. readerDay's would differ only for a player it moved on to the
-	// day their left-behind game's zone has reached, and dealing that day
-	// afresh would leave them, cookie gone, on the day before it, with the
-	// movie it always had and their dead game on it.
 	p, err := d.puzzleOn(ctx, daily.DayIn(now, zoneOf(r)), now)
 	if errors.Is(err, catalog.ErrNotFound) {
 		dailyRefuse(w, http.StatusServiceUnavailable, "not-ready", "today's puzzle has not been picked yet")
@@ -1080,7 +1108,13 @@ func (d *dailyRoutes) reset(w http.ResponseWriter, r *http.Request) {
 		d.fail(w, r, err)
 		return
 	}
-	err = d.store.RepickDailyPuzzle(ctx, p.No)
+	token := daily.NewToken()
+	player, err := d.join(ctx, token, "", now)
+	if err != nil {
+		d.fail(w, r, err)
+		return
+	}
+	err = d.store.DealDailyPuzzle(ctx, player.ID, p.No)
 	if errors.Is(err, catalog.ErrNoOtherAnswer) {
 		dailyRefuse(w, http.StatusServiceUnavailable, "unavailable", "no other movie can be this puzzle's answer")
 		return
@@ -1089,25 +1123,10 @@ func (d *dailyRoutes) reset(w http.ResponseWriter, r *http.Request) {
 		d.fail(w, r, err)
 		return
 	}
-	d.forget(p.No)
-	d.standings.clear()
-	// Every press is a new player at the next Play, and a developer
-	// pressing it all afternoon from one address would soon be refused as
-	// a script making players. So the address's allowance is handed back
-	// whole: it is there for strangers' scripts, never for this.
-	d.joins.forget(d.addr(r))
 	if d.logger != nil {
-		d.logger.Info("daily puzzle re-picked for development", "no", p.No, "day", daily.DayString(p.Day))
+		d.logger.Info("daily puzzle dealt for development", "no", p.No, "day", daily.DayString(p.Day))
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     dailyCookie,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	setDailyCookie(w, token)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1167,14 +1186,6 @@ func (c *standings) put(key standingKey, me dailyMe, now time.Time) {
 		c.sweep(now)
 	}
 	c.at[key] = standing{me: me, at: now}
-}
-
-// clear drops every answer, for development's Play again, which deletes
-// a puzzle's games and so moves standings no key would notice.
-func (c *standings) clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	clear(c.at)
 }
 
 // sweep drops the answers past standingLife, and if none were, all of
@@ -1282,14 +1293,6 @@ func (l *joinLimiter) allow(addr string, now time.Time) bool {
 	}
 	b.seen = now
 	return b.limiter.AllowN(now, 1)
-}
-
-// forget drops addr's bucket, so its next player is counted against a
-// full one.
-func (l *joinLimiter) forget(addr string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.clients, addr)
 }
 
 // sweep drops addresses idle long enough to have refilled, and if none

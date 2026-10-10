@@ -242,8 +242,10 @@ func (u unnamed) Unwrap() error { return u.err }
 // ErrNoRuntimes is a live catalog imported before titles kept IMDb's
 // runtime, which the Length fact is. Nothing can be picked from it: every
 // candidate would be unfit, and the pass would say so of every day ahead
-// rather than once why. The next import brings the column, and the pass
-// after it picks as usual; until then the page answers "not-ready".
+// rather than once why. The next import brings the column, and runs
+// within the hour whether or not IMDb has published since (liveBehind);
+// the pass after it picks as usual. Until then the page answers
+// "not-ready".
 var ErrNoRuntimes = errors.New("catalog: the catalog predates runtimes; the next import adds them")
 
 // hasRuntimes is whether the live catalog's titles keep runtimes.
@@ -653,20 +655,27 @@ func (s *Store) DailyPuzzleNo(ctx context.Context, no int) (*daily.Puzzle, error
 }
 
 func (s *Store) dailyPuzzle(ctx context.Context, where string, arg any) (*daily.Puzzle, error) {
+	return s.scanDailyPuzzle(ctx, fmt.Sprint(arg), `
+		SELECT no, day, answer, title, year, rating::float8, md, length, colour, genres, directors, billed, movies,
+		       era, genre
+		FROM meta.daily_puzzles WHERE `+where, arg)
+}
+
+// scanDailyPuzzle reads the one puzzle query selects, its number, day
+// and the columns from answer to genre in their order, which says what
+// it is in an error; ErrNotFound when there is none.
+func (s *Store) scanDailyPuzzle(ctx context.Context, which, query string, args ...any) (*daily.Puzzle, error) {
 	var p daily.Puzzle
 	var directors, billed, movies []byte
 	a := &p.Answer
-	err := s.pool.QueryRow(ctx, `
-		SELECT no, day, answer, title, year, rating::float8, md, length, colour, genres, directors, billed, movies,
-		       era, genre
-		FROM meta.daily_puzzles WHERE `+where, arg).
+	err := s.pool.QueryRow(ctx, query, args...).
 		Scan(&p.No, &p.Day, &a.ID, &a.Title, &a.Year, &a.Rating, &a.MD, &a.Length, &a.Colour, &a.Genres,
 			&directors, &billed, &movies, &p.Era, &p.Genre)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("catalog: daily puzzle %v: %w", arg, ErrNotFound)
+		return nil, fmt.Errorf("catalog: daily puzzle %s: %w", which, ErrNotFound)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("catalog: read daily puzzle %v: %w", arg, err)
+		return nil, fmt.Errorf("catalog: read daily puzzle %s: %w", which, err)
 	}
 	for _, doc := range []struct {
 		what string

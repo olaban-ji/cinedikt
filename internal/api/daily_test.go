@@ -97,15 +97,20 @@ type fakeDaily struct {
 	standings []string
 	// weeks are what DailyStanding answers, before and after the game.
 	weeks map[bool]*daily.Week
-	// repicks are the puzzles RepickDailyPuzzle dealt again, in order,
-	// and noOther makes it find no other movie (dailydev_test.go).
-	repicks []int
-	noOther bool
+	// deals are the movies of their own players were dealt, by player
+	// and puzzle number; dealt is each deal made, as "player/no", in
+	// order; dealReads counts DailyDeal's reads; and noOther makes a deal
+	// find no other movie (dailydev_test.go).
+	deals     map[[2]int64]*daily.Puzzle
+	dealt     []string
+	dealReads int
+	noOther   bool
 }
 
 func newFakeDaily(puzzles ...*daily.Puzzle) *fakeDaily {
 	f := &fakeDaily{puzzles: map[int]*daily.Puzzle{}, players: map[string]daily.Player{}, names: map[string]bool{},
 		games: map[[2]int64]*daily.Record{},
+		deals: map[[2]int64]*daily.Puzzle{},
 		weeks: map[bool]*daily.Week{false: {Rank: 2048, Players: 83500}, true: {Rank: 1204, Players: 83500}},
 		films: map[string]daily.Looked{
 			"tt0111257": {Title: "Speed", Year: 1994, Genres: []string{"Action", "Thriller"}, Credited: []string{"nm0000206"}},
@@ -291,9 +296,11 @@ func (f *fakeDaily) DailyLive(_ context.Context, films, people []string) (daily.
 func (f *fakeDaily) DailyPlayed(_ context.Context, no int) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// As the catalog's store counts: a game played on a movie of one's
+	// own is no game of the day's.
 	n := 0
 	for key := range f.games {
-		if key[1] == int64(no) {
+		if _, own := f.deals[key]; key[1] == int64(no) && !own {
 			n++
 		}
 	}

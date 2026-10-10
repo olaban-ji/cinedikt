@@ -356,27 +356,31 @@ fit. The store's errors name the movie they were reading by its
 `tconst`, so `firstFair` hands one on as `unnamed`, which says "a
 candidate" in its place and still unwraps to the error it was.
 
-Development's Play again is `RepickDailyPuzzle`, in `dailydev.go`, the
-only thing that ever deals a picked day again. The API offers it only
-outside production (`WithDailyDev`); nothing here knows which it is
-in, so nothing else may call it. It reads the puzzle, the candidates,
-afresh on every press and so in about two seconds, and `dailyRecent`
-for its day, adds the answer it is replacing to the
-answers left out, though the day's own is among them already, and
+Development's Play again is `DealDailyPuzzle`, in `dailydev.go`: a
+movie of their own for one player on a day's puzzle, kept in
+`meta.daily_deals` under the player and the puzzle's number, with the
+puzzle's columns. A picked day itself is never dealt again, so nobody
+else's game or movie changes. The API offers it only with the Daily's
+development tools on (`WithDailyDev`), and only then reads a deal
+(`DailyDeal`); nothing here knows whether they are, so nothing else may
+call it. It reads the puzzle, the candidates, afresh on every press and
+so in about two seconds, and `dailyRecent` for its day, adds the day's
+own answer and any deal the player had to the answers left out, and
 orders the candidates with `daily.OrderBy` from a generator seeded at
 random rather than from the day: in the day's order each press would
 only swap the same two movies back and forth. The same `firstFair`
-makes the puzzle, so a day dealt again is held to every rule the job
-holds it to, and a poster colour it has to work out is fetched with
-`ColourFetch`'s deadline. `replaceDailyPuzzle` then writes it over the
-old one in one transaction, keeping `no` and `day`, with an `UPDATE`
-guarded on the answer it read, so a second reset of the same puzzle at
-once fails rather than perhaps dealing back the answer the first just
-dealt, and deletes every game of the puzzle, the moves going with them
-by cascade: a game is moves made on one movie's cast, and replayed on
-another's it would be nonsense. The players stay. When no other
-candidate fits it is `ErrNoOtherAnswer` and nothing changes, and
-nothing it returns names the answer it dealt or any candidate.
+makes the puzzle, so a deal is held to every rule the job holds a day
+to, and a poster colour it has to work out is fetched with
+`ColourFetch`'s deadline. `putDailyDeal` then writes it, in place of
+any deal the player had of that number, in one transaction that deletes
+the player's game of it, the moves going with it by cascade: a game is
+moves made on one movie's cast, and replayed on another's it would be
+nonsense. When no other candidate fits it is `ErrNoOtherAnswer` and
+nothing changes, and nothing it returns names the answer it dealt or
+any candidate. Every count, board and figure of a day reads only games
+played on its own movie, `realGameSQL`: the title screen's count, both
+boards and the players they list, the week's standing, today's chart,
+and the Telegram board's figures.
 
 A puzzle's number is its day's distance from No. 1's day, plus one.
 No. 1's day is worked back from the lowest-numbered puzzle
@@ -415,13 +419,16 @@ the zone it was started in, and its moves in `meta.daily_moves`.
 `zone` is the IANA name as `zone.String()` writes it. `StartDailyGame`
 on a game the player already has returns it as it is, its zone
 included, so pressing Play from somewhere else never moves the
-midnight it ends at.
+midnight it ends at. `meta.daily_deals` holds the movies Play again
+dealt players for themselves (above), and goes with the player or the
+puzzle it hangs on.
 
 The Daily's tables were first made for Point Blank, the board of blank
 cards Name Drop replaced, which was never released: production never
 had them. Its puzzles held a board and its moves turned cards over, so
-nothing of it replays as Name Drop. `meta.sql` drops `daily_moves`,
-`daily_games` and `daily_puzzles` in a `DO` block, only while
+nothing of it replays as Name Drop. `meta.sql` drops `daily_deals`,
+which came later and is dropped with them should it be there,
+`daily_moves`, `daily_games` and `daily_puzzles` in a `DO` block, only while
 `daily_puzzles` still has its `cards` column, which only that shape
 had, and the `CREATE TABLE IF NOT EXISTS` statements after it make
 them in Name Drop's: no time on a game, the board's index on points

@@ -256,15 +256,17 @@ func run(logger *slog.Logger) error {
 
 // apiServer is the API over the catalog's handlers and store: the health
 // check, and Cinedikt Daily with its development tools, Play again among
-// them, on only outside production. In production their route is never
-// registered, so nothing deployed can deal a day again or wipe its
-// games, however it is asked; the Docker image sets APP_ENV=production,
-// so only a server run from a checkout has them.
+// them, on outside production and wherever DAILY_DEV_TOOLS asks for them
+// (config.DailyDev). The Docker image sets APP_ENV=production, so a
+// deployed server has them only when asked, as dev is, and the one real
+// players use never is; there their route is never registered. Play
+// again deals only the reader who presses it a movie of their own, so
+// even where it is on it never touches anyone else's game.
 func apiServer(cfg config.Config, cs *api.CatalogServer, store *catalog.Store, logger *slog.Logger) *api.Server {
 	return api.New(cs, logger).
 		WithHealth(api.Dependency{Name: "postgres", Ping: store.Ping}).
 		WithDaily(store).
-		WithDailyDev(!cfg.Production())
+		WithDailyDev(cfg.DailyDev())
 }
 
 // whereToWatch builds the where-to-watch service, places readers with
