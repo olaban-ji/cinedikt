@@ -935,7 +935,7 @@ describe('the result', () => {
     const old = { type: 'fact', kind: 'years', cost: 100 } as unknown as DailyEntry;
     const log: DailyEntry[] = [{ type: 'fact', kind: 'decade', cost: 100 }, old];
     expect(paidFor(log)).toEqual([{ label: 'Decade', price: '−100' }]);
-    expect(shareHelp({ log })).toBe('📅');
+    expect(shareHelp({ log })).toBe('🕰️');
   });
 
   it('says the streak once today is in it', () => {
@@ -981,18 +981,18 @@ describe('sharing a result', () => {
       { won: true, pts: 800 },
     );
     expect(shareText(143, game, origin)).toBe(
-      'Name Drop #143 🎬 Got it in 3 names\n🟪🟪🟪⬜⬜⬜\n800 points · 📅 ❌\ncinedikt.com/daily',
+      'Name Drop #143 🎬 Got it in 3 names\n🟪🟪🟪⬜⬜⬜\n800 points · 🕰️ ❌\nhttps://cinedikt.com/daily',
     );
   });
 
   it('cheers the best there is, a movie from one name', () => {
     const first = ended([{ type: 'win' }], { won: true, pts: 1000 });
-    expect(shareText(143, first, origin)).toBe('Name Drop #143 🎬 Got it from one name 🤯\n🟪⬜⬜⬜⬜⬜\n1,000 points\ncinedikt.com/daily');
+    expect(shareText(143, first, origin)).toBe('Name Drop #143 🎬 Got it from one name 🤯\n🟪⬜⬜⬜⬜⬜\n1,000 points\nhttps://cinedikt.com/daily');
     expect(shareHeadline(first)).toBe('Got it from one name 🤯');
   });
 
   it('shows each fact bought as its emoji, in the row’s order, then a ❌ for each miss', () => {
-    expect(Object.values(FACT_EMOJI)).toEqual(['⏱️', '⭐', '🎭', '📅', '🎥']);
+    expect(Object.values(FACT_EMOJI)).toEqual(['⏱️', '⭐', '🎭', '🕰️', '🎥']);
     expect(shareHelp({ log: [] })).toBe('');
     expect(
       shareHelp({
@@ -1009,18 +1009,18 @@ describe('sharing a result', () => {
 
   it('says a loss as stumped or out of points, with no score, and what helped only when anything did', () => {
     expect(shareText(143, ended([THIRTEENTH, { type: 'out' }], { pts: 0 }), origin)).toBe(
-      'Name Drop #143 🎬 Ran out of points 💸\n🟪🟪⬜⬜⬜⬜\n❌\ncinedikt.com/daily',
+      'Name Drop #143 🎬 Ran out of points 💸\n🟪🟪⬜⬜⬜⬜\n❌\nhttps://cinedikt.com/daily',
     );
     expect(shareText(143, ended([{ type: 'gaveup' }], { pts: 0, gaveUp: true }), origin)).toBe(
-      'Name Drop #143 🎬 Stumped 🏳️\n🟪⬜⬜⬜⬜⬜\ncinedikt.com/daily',
+      'Name Drop #143 🎬 Stumped 🏳️\n🟪⬜⬜⬜⬜⬜\nhttps://cinedikt.com/daily',
     );
     expect(shareMarks(SOLVED)).toBe('🟪🟪🟪🟪⬜⬜');
   });
 
-  it('writes the address without its scheme, whichever server it is', () => {
+  it('keeps the address whole, scheme and all, so every chat app makes it a link', () => {
+    // WhatsApp leaves an address without its scheme as plain words.
     const game = ended([{ type: 'win' }], { won: true, pts: 1000 });
-    expect(shareText(2, game, 'https://cinedikt-dev.up.railway.app').split('\n').at(-1)).toBe('cinedikt-dev.up.railway.app/daily');
-    expect(shareText(2, game, 'http://localhost:5173').split('\n').at(-1)).toBe('localhost:5173/daily');
+    expect(shareText(2, game, 'https://cinedikt-dev.up.railway.app').split('\n').at(-1)).toBe('https://cinedikt-dev.up.railway.app/daily');
   });
 
   it('never names the movie', () => {

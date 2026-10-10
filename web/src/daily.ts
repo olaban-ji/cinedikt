@@ -825,7 +825,9 @@ export const FACT_EMOJI: Record<DailyFactKind, string> = {
   length: '⏱️',
   rating: '⭐',
   genre: '🎭',
-  decade: '📅',
+  // Not 📅, which Apple draws as a page saying JUL 17, and so reads as a
+  // date: a clock of another time is the decade.
+  decade: '🕰️',
   director: '🎥',
 };
 
@@ -868,17 +870,16 @@ export function shareHeadline(game: Pick<DailyGame, 'won' | 'gaveUp' | 'log'>): 
  *
  *    Name Drop #2 🎬 Got it in 5 names
  *    🟪🟪🟪🟪🟪⬜
- *    350 points · ⭐🎭📅 ❌
- *    cinedikt.com/daily
+ *    350 points · ⭐🎭🕰️ ❌
+ *    https://cinedikt.com/daily
  *
  *  A loss has no score, and its third line only when anything was leaned
- *  on. The address goes without its scheme, which every chat app links
- *  all the same, so it reads as a name rather than a URL. */
+ *  on. The address keeps its scheme: WhatsApp leaves an address without
+ *  one as plain words, nothing to tap. */
 export function shareText(no: number, game: Pick<DailyGame, 'won' | 'gaveUp' | 'pts' | 'log'>, origin: string): string {
   const help = shareHelp(game);
   const tally = game.won ? [`${fmtN(game.pts)} points`, help].filter(Boolean).join(' · ') : help;
-  const site = origin.replace(/^https?:\/\//, '');
-  return [`${GAME_NAME} #${no} 🎬 ${shareHeadline(game)}`, shareMarks(game), tally, `${site}/daily`]
+  return [`${GAME_NAME} #${no} 🎬 ${shareHeadline(game)}`, shareMarks(game), tally, `${origin}/daily`]
     .filter(Boolean)
     .join('\n');
 }
