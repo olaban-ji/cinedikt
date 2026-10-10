@@ -6,6 +6,7 @@ import {
   CARD_BLANK,
   CARD_READ,
   CARD_TRIED,
+  COACH_H,
   COACH_W,
   GUESS_IT,
   SHEET_BOTTOM_PAD,
@@ -570,32 +571,85 @@ describe('the one-time pointer at the named cards', () => {
     warm: false,
   });
 
-  it('sits under the first named card that can be guessed, its caret on the card’s middle', () => {
-    // Bound is tried, so the first that can be guessed is The Fugitive.
+  // A map 540 wide and 600 tall, cards 112 by 42, years down a 44px rail.
+  const plot = { w: 540, h: 600 };
+  const m = { cardW: 112, cardH: 42, railW: 44 };
+  const boxOf = (c: { left: number; top: number }) => ({ left: c.left, top: c.top, right: c.left + COACH_W, bottom: c.top + COACH_H });
+  const clearOf = (pill: { left: number; top: number }, cards: SheetCard[]) =>
+    cards.every((c) => {
+      const p = boxOf(pill);
+      return p.right <= c.left || p.left >= c.left + m.cardW || p.bottom <= c.top || p.top >= c.top + m.cardH;
+    });
+
+  const pillOf = (cards: SheetCard[], at2 = plot) => coachAt(cards, at2, m)?.pill ?? null;
+
+  it('sits under a named card that can be guessed, its caret on the card’s middle, where nothing is', () => {
+    const coach = coachAt([at(200, 50), at(330, 200)], plot, m)!;
+    expect(coach.card).toBe('200:50');
+    expect(coach.pill).toMatchObject({ text: 'Tap a title to guess it', width: COACH_W, side: 'below', top: 50 + 42 + 9 });
+    expect(coach.pill!.left + coach.pill!.caret).toBe(200 + 112 / 2);
+  });
+
+  it('on the sheet, rings The Fugitive, the first that can be guessed, and covers no card', () => {
+    // Bound is tried. The Fugitive is ringed, and its pill, wherever it
+    // has room, is clear of every card on the map, its caret on it.
     const v = sheetView(stateOf({ coach: true }));
     const fugitive = cardOf(stateOf(), 'tt0106977');
-    expect(v.coach).not.toBeNull();
-    const c = v.coach!;
-    expect(c.text).toBe('Tap a title to guess it');
-    expect(c.width).toBe(COACH_W);
-    expect(c.top).toBe(fugitive.top + v.cardH + 9);
-    expect(Math.abs(c.left + c.caret - (fugitive.left + v.cardW / 2))).toBeLessThanOrEqual(1);
+    expect(v.coach!.card).toBe(fugitive.key);
+    expect(v.cards.filter((c) => c.kind === 'readable' && c.coached).map((c) => c.key)).toEqual([fugitive.key]);
+    const c = v.coach!.pill;
+    if (!c) return;
+    expect(clearOf(c, v.cards)).toBe(true);
+    if (c.side === 'below') {
+      expect(c.top).toBe(fugitive.top + v.cardH + 9);
+      expect(Math.abs(c.left + c.caret - (fugitive.left + v.cardW / 2))).toBeLessThanOrEqual(1);
+    } else {
+      expect(Math.abs(c.top + c.caret - (fugitive.top + v.cardH / 2))).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('never covers a card: beside the card, its caret pointing back, when one sits under it', () => {
+    // A card stacked under the first, as a year with two movies near one
+    // rating draws them: the pill goes to the right.
+    const cards = [at(200, 50), blankAt(190, 96)];
+    const right = pillOf(cards)!;
+    expect(right).toMatchObject({ side: 'right', left: 200 + 112 + 9, top: 50 + (42 - COACH_H) / 2, caret: COACH_H / 2 });
+    expect(clearOf(right, cards)).toBe(true);
+    // No room on the right, at the map's edge: to the left, clear of the
+    // years.
+    const edge = [at(360, 50), at(350, 96)];
+    const left = pillOf(edge)!;
+    expect(left).toMatchObject({ side: 'left', left: 360 - 9 - COACH_W });
+    expect(left.left).toBeGreaterThanOrEqual(m.railW);
+    expect(clearOf(left, edge)).toBe(true);
+  });
+
+  it('moves on to the next named card when the first has no clear side, and with none clear anywhere rings the first alone', () => {
+    // The first boxed in on every side; the next in reading order, beside
+    // it, has room on its right, and it is the one ringed.
+    const boxed = [at(120, 0), at(110, 46), at(240, 0), at(250, 46)];
+    const coach = coachAt(boxed, plot, m)!;
+    expect(coach.card).toBe('240:0');
+    expect(coach.pill).toMatchObject({ side: 'right', left: 240 + 112 + 9, top: (42 - COACH_H) / 2 });
+    expect(clearOf(coach.pill!, boxed)).toBe(true);
+    // Nowhere clear at all, as a phone's narrow, stacked map often is:
+    // the first card, ringed, and no pill over anything.
+    expect(coachAt(boxed, { w: 400, h: 90 }, m)).toEqual({ card: '120:0', pill: null });
   });
 
   it('passes over cards already tried and blank ones, and goes by row, then from the left', () => {
-    expect(coachAt([at(300, 50, true), blankAt(10, 40), at(200, 90), at(100, 90)], 540, 112, 42)?.top).toBe(141);
-    expect(coachAt([at(300, 50, true), at(200, 90), at(100, 90)], 540, 112, 42)?.caret).toBe(156 - 70);
-    expect(coachAt([at(300, 50, true), blankAt(10, 40)], 540, 112, 42)).toBeNull();
+    expect(pillOf([at(300, 50, true), blankAt(10, 40), at(200, 90), at(100, 90)])?.top).toBe(141);
+    expect(pillOf([at(300, 50, true), at(200, 90), at(100, 90)])?.caret).toBe(156 - 70);
+    expect(coachAt([at(300, 50, true), blankAt(10, 40)], plot, m)).toBeNull();
   });
 
-  it('stays inside the map, its caret still over the card', () => {
-    // A card at the left edge: the pill starts there too.
-    expect(coachAt([at(44, 0)], 540, 112, 42)).toMatchObject({ left: 14, caret: 86 });
-    expect(coachAt([at(0, 0)], 540, 112, 42)).toMatchObject({ left: 0, caret: 56 });
+  it('stays inside the map and clear of the years, its caret still over the card', () => {
+    // A card by the rail: the pill starts at the rail's edge.
+    expect(pillOf([at(44, 0)])).toMatchObject({ side: 'below', left: 44, caret: 56 });
     // At the right edge: it ends there, and the caret moves along it.
-    expect(coachAt([at(428, 0)], 540, 112, 42)).toMatchObject({ left: 540 - COACH_W, caret: 484 - (540 - COACH_W) });
+    expect(pillOf([at(428, 0)])).toMatchObject({ side: 'below', left: 540 - COACH_W, caret: 484 - (540 - COACH_W) });
     // Never closer to the pill's ends than its rounding.
-    expect(coachAt([at(530, 0)], 540, 20, 42)).toMatchObject({ left: 540 - COACH_W, caret: COACH_W - 18 });
+    expect(coachAt([at(530, 0)], plot, { ...m, cardW: 20 })?.pill).toMatchObject({ left: 540 - COACH_W, caret: COACH_W - 18 });
   });
 
   it('leaves the map note to a map nothing names yet', () => {
@@ -684,8 +738,15 @@ describe('the stylesheet', () => {
 
   it('lets a press through the pointer to the cards, and keeps it still when motion is reduced', () => {
     expect(rule('.cd-msheet-coach')).toContain('pointer-events: none;');
+    // The card it is about rings and pulses, and with stillness just rings.
+    expect(rule('.cd-msheet-card-coach')).toContain('box-shadow: inset 0 0 0 2px var(--acc), var(--sh);');
+    expect(rule('.cd-msheet-card-coach')).toMatch(/animation: cd-coach-ring 1\.2s ease-out 0\.35s 3;/);
+    // The height the placing counts on, and a caret on each side it sits.
+    expect(rule('.cd-msheet-coach')).toContain(`height: ${COACH_H}px;`);
+    expect(rule('.cd-msheet-coach-right::before')).toContain('left: -4px;');
+    expect(text).toMatch(/\.cd-msheet-coach-left::before \{\s*left: auto;\s*right: -4px;\s*\}/);
     expect(rule('.cd-msheet-coach')).toContain('z-index: 4;');
-    expect(text).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^@]*\.cd-msheet-coach \{\s*animation: none;/);
+    expect(text).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^@]*\.cd-msheet-coach,\s*\.cd-msheet-card-coach \{\s*animation: none;/);
   });
 
   it('fades cards in and out over .25s, and keeps the axis 26px tall and pinned', () => {

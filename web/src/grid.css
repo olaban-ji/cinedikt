@@ -8739,6 +8739,31 @@ button.cd-nd-tried-chip::before {
   box-shadow: inset 0 0 0 2px var(--acc), var(--sh);
 }
 
+/* The card the one-time pointer is about: ringed in the accent, the ring
+   pulsing out three times as the map lands, so it is found whether or
+   not the pointer's pill has room beside it. Gone, as the pill is, at
+   the first tap. */
+.cd-msheet-card-coach {
+  box-shadow: inset 0 0 0 2px var(--acc), var(--sh);
+  animation: cd-coach-ring 1.2s ease-out 0.35s 3;
+}
+
+@keyframes cd-coach-ring {
+  from {
+    box-shadow:
+      inset 0 0 0 2px var(--acc),
+      0 0 0 0 var(--accSoft),
+      var(--sh);
+  }
+
+  to {
+    box-shadow:
+      inset 0 0 0 2px var(--acc),
+      0 0 0 12px transparent,
+      var(--sh);
+  }
+}
+
 /* A movie outside the ranges bought: the tile and an empty poster, with
    nothing written on it, and nothing to press. */
 .cd-msheet-card-blank:disabled {
@@ -8792,15 +8817,21 @@ button.cd-nd-tried-chip::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* The one-time pointer at the named cards: a pill in the accent under the
-   first that can be guessed, its caret on the card's middle (--caret,
-   set inline with its place), showing a beat after the map lands and
-   gone from the first tap. Presses go through it to the cards. */
+/* The one-time pointer's pill, in the accent beside the card it rings,
+   only where it has room clear of every card (dailyMovies.ts's coachAt): under it with its caret up, at --caret along its top edge,
+   set inline with its place, or to its right or left with the caret at
+   its middle, pointing back. It shows a beat after the map lands and is
+   gone from the first tap. Presses go through it to the cards. 30px
+   tall, which the placing counts on. */
 .cd-msheet-coach {
   position: absolute;
   z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
   box-sizing: border-box;
-  padding: 7px 12px;
+  padding: 0 12px;
   border-radius: 999px;
   background: var(--acc);
   box-shadow: var(--sh);
@@ -8824,6 +8855,20 @@ button.cd-nd-tried-chip::before {
   border-radius: 2px;
   background: var(--acc);
   transform: rotate(45deg);
+}
+
+.cd-msheet-coach-right::before,
+.cd-msheet-coach-left::before {
+  top: calc(var(--caret) - 5px);
+}
+
+.cd-msheet-coach-right::before {
+  left: -4px;
+}
+
+.cd-msheet-coach-left::before {
+  left: auto;
+  right: -4px;
 }
 
 .cd-msheet-tried {
@@ -9012,7 +9057,8 @@ button.cd-nd-tried-chip::before {
     border: 1px solid ButtonText;
   }
 
-  .cd-msheet-card-picked {
+  .cd-msheet-card-picked,
+  .cd-msheet-card-coach {
     border-width: 2px;
   }
 }
@@ -9028,7 +9074,8 @@ button.cd-nd-tried-chip::before {
     transition: none;
   }
 
-  .cd-msheet-coach {
+  .cd-msheet-coach,
+  .cd-msheet-card-coach {
     animation: none;
   }
 }

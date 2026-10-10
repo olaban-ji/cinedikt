@@ -248,6 +248,8 @@ export type SheetCard =
       tried: boolean;
       /** Tapped, so the footer offers it: a 2px accent ring. */
       picked: boolean;
+      /** The one the one-time pointer is about: ringed and pulsing. */
+      coached?: boolean;
       opacity: number;
       aria: string;
       /** Its poster is loaded: it is inside the stretch of the map the
@@ -337,45 +339,102 @@ export function openingScroll(cards: readonly Pick<SheetCard, 'top' | 'kind'>[])
   return first == null ? 0 : Math.max(0, first - SHEET_READ_TOP);
 }
 
-/** The one-time pointer at the named cards: a pill under the first card
- *  that can still be guessed, its caret at the card's middle. */
+/** The one-time pointer at the named cards: a card that can still be
+ *  guessed, ringed in the accent and pulsing, and, where there is room
+ *  beside it clear of every other card, a pill saying what to do with it,
+ *  its caret on the card. */
 export interface SheetCoach {
+  /** The card it is about, by key. */
+  card: string;
+  /** The pill, or null where no place near the card is clear, when the
+   *  ring says it alone, and the footer in words. */
+  pill: CoachPill | null;
+}
+
+export interface CoachPill {
   text: string;
   left: number;
   top: number;
   width: number;
-  /** The caret's middle, from the pill's left edge. */
+  /** Which side of the card it sits on, its caret pointing back. */
+  side: 'below' | 'right' | 'left';
+  /** Under a card, the caret's middle from the pill's left edge; beside
+   *  one, it is at the pill's middle. */
   caret: number;
 }
 
-/** The pill's width: the words on one line at the hint's size. */
+/** The pill: the words on one line at the hint's size, 30px tall. */
 export const COACH_W = 172;
-/** Between the card's foot and the caret's tip. */
+export const COACH_H = 30;
+/** Between the card's edge and the pill's, the caret's room. */
 const COACH_GAP = 9;
 /** How near the pill's edge the caret may come, past its rounding. */
 const CARET_INSET = 18;
+/** The room kept clear between the pill and any other card. */
+const COACH_CLEAR = 4;
+/** How far down from the first title the pointer may look for a clear
+ *  place, so it is still in sight as the sheet opens. */
+const COACH_REACH = 240;
 
-/** Where the pointer goes: under the first named card not yet tried, in
- *  reading order, the card the sheet opened scrolled to, or one near it.
- *  It sits under the card, not over it, since the axis covers the top of
- *  the map, and is held inside the plot, its caret still on the card.
- *  Null with no card to point at. */
+interface Box {
+  left: number;
+  top: number;
+  w: number;
+  h: number;
+}
+
+function overlaps(a: Box, b: Box, clear: number): boolean {
+  return a.left < b.left + b.w + clear && a.left + a.w > b.left - clear && a.top < b.top + b.h + clear && a.top + a.h > b.top - clear;
+}
+
+/** Where the pointer goes: a named card not yet tried, and a pill beside
+ *  it never over any card, named or blank, so it hides nothing it points
+ *  at. The first such card in reading order, the one the sheet opened
+ *  scrolled to or one near it, is tried first, then the next within
+ *  COACH_REACH of it: under the card, its caret up, where there is room,
+ *  as the eye reads down; else to its right, or its left, clear of the
+ *  years down the rail, the caret pointing back. A phone's map is
+ *  narrower than a pill and two cards, and its years stack their movies,
+ *  so there is often no such place: then the first card is pointed at by
+ *  its ring alone. Null with no card to point at. */
 export function coachAt(
   cards: readonly SheetCard[],
-  plotW: number,
-  cardW: number,
-  cardH: number,
+  plot: { w: number; h: number },
+  m: { cardW: number; cardH: number; railW: number },
 ): SheetCoach | null {
-  let first: Extract<SheetCard, { kind: 'readable' }> | null = null;
-  for (const c of cards) {
-    if (c.kind !== 'readable' || c.tried) continue;
-    if (!first || c.top < first.top || (c.top === first.top && c.left < first.left)) first = c;
+  const named = cards
+    .filter((c): c is Extract<SheetCard, { kind: 'readable' }> => c.kind === 'readable' && !c.tried)
+    .sort((a, b) => a.top - b.top || a.left - b.left);
+  if (!named.length) return null;
+  const boxes = cards.map((c) => ({ left: c.left, top: c.top, w: m.cardW, h: m.cardH }));
+  const free = (b: Box) =>
+    b.left >= m.railW &&
+    b.left + b.w <= plot.w &&
+    b.top >= 0 &&
+    b.top + b.h <= plot.h &&
+    !boxes.some((c) => overlaps(b, c, COACH_CLEAR));
+  const below = (card: Pick<Box, 'left' | 'top'>): CoachPill => {
+    const mid = card.left + m.cardW / 2;
+    const left = Math.max(m.railW, Math.min(mid - COACH_W / 2, plot.w - COACH_W));
+    const caret = Math.max(CARET_INSET, Math.min(mid - left, COACH_W - CARET_INSET));
+    return { text: SHEET_COACH, side: 'below', left: Math.round(left), top: card.top + m.cardH + COACH_GAP, width: COACH_W, caret: Math.round(caret) };
+  };
+  const beside = (card: Pick<Box, 'left' | 'top'>, side: 'right' | 'left'): CoachPill => ({
+    text: SHEET_COACH,
+    side,
+    left: Math.round(side === 'right' ? card.left + m.cardW + COACH_GAP : card.left - COACH_GAP - COACH_W),
+    top: Math.round(card.top + (m.cardH - COACH_H) / 2),
+    width: COACH_W,
+    caret: COACH_H / 2,
+  });
+  const first = named[0];
+  for (const card of named) {
+    if (card.top > first.top + COACH_REACH) break;
+    for (const pill of [below(card), beside(card, 'right'), beside(card, 'left')]) {
+      if (free({ left: pill.left, top: pill.top, w: COACH_W, h: COACH_H })) return { card: card.key, pill };
+    }
   }
-  if (!first) return null;
-  const mid = first.left + cardW / 2;
-  const left = Math.max(0, Math.min(mid - COACH_W / 2, plotW - COACH_W));
-  const caret = Math.max(CARET_INSET, Math.min(mid - left, COACH_W - CARET_INSET));
-  return { text: SHEET_COACH, left: Math.round(left), top: first.top + cardH + COACH_GAP, width: COACH_W, caret: Math.round(caret) };
+  return { card: first.key, pill: null };
 }
 
 // ---- the footer ----
@@ -497,6 +556,8 @@ export function sheetView(s: SheetState): SheetView {
   const named = cards.filter((c): c is Extract<SheetCard, { kind: 'readable' }> => c.kind === 'readable');
   const left = named.filter((c) => !c.tried).length;
   const picked = s.pick ? byKey.get(s.pick) : undefined;
+  const coach =
+    s.coach && layout && !s.pick ? coachAt(cards, { w: layout.plotW, h: layout.plotH }, layout.metrics) : null;
   return {
     person: lead?.person ?? null,
     tone: lead ? hueColour(lead.person.hue, theme) : '',
@@ -507,14 +568,13 @@ export function sheetView(s: SheetState): SheetView {
     rows: layout ? sheetRows(game.facts, layout) : [],
     ticks: layout ? sheetTicks(layout) : [],
     column: layout ? ratingColumn(game.facts, layout) : null,
-    cards,
+    cards: coach ? cards.map((c) => (c.kind === 'readable' && c.key === coach.card ? { ...c, coached: true } : c)) : cards,
     plotH: layout?.plotH ?? 0,
     cardW: layout?.metrics.cardW ?? 0,
     cardH: layout?.metrics.cardH ?? 0,
     foot: sheetFoot(picked && isReadable(picked) ? picked : null, game),
     scrollTo: openingScroll(cards),
-    coach:
-      s.coach && layout && !s.pick ? coachAt(cards, layout.plotW, layout.metrics.cardW, layout.metrics.cardH) : null,
+    coach,
     note: s.mapNote && !ranged ? MAP_NOTE : null,
   };
 }

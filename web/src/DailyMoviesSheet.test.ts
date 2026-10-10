@@ -289,12 +289,16 @@ describe('the footer', () => {
 });
 
 describe('the one-time pointer at the named cards', () => {
-  it('is drawn under the first that can be guessed, for the eye alone, until a card is tapped', () => {
+  it('is drawn beside the first that can be guessed, for the eye alone, until a card is tapped', () => {
     expect(draw({ coach: true })).toMatch(
-      /<div class="cd-msheet-coach" style="left:\d+px;top:\d+px;width:172px;--caret:\d+px" aria-hidden="true">Tap a title to guess it<\/div><\/div><\/div>/,
+      /<div class="cd-msheet-coach cd-msheet-coach-(below|right|left)" style="left:\d+px;top:\d+px;width:172px;--caret:\d+px" aria-hidden="true">Tap a title to guess it<\/div><\/div><\/div>/,
     );
     expect(draw()).not.toContain('cd-msheet-coach');
     expect(draw({ coach: true, pick: 'tt0106977' })).not.toContain('cd-msheet-coach');
+    // The card it points at is ringed, and only that one.
+    const html = draw({ coach: true });
+    expect(html.match(/cd-msheet-card-coach/g)).toHaveLength(1);
+    expect(html).toMatch(/class="cd-msheet-card cd-msheet-card-coach"[^>]*aria-label="The Fugitive, 1993, rated 7\.8"/);
   });
 
   it('is not drawn by the sheet as it opens, before its movies have come', () => {

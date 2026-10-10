@@ -434,18 +434,18 @@ export function MoviesSheetView({
               ))}
               {/* Drawn only: the footer says the same to a screen reader,
                   and a press goes through it to the cards. */}
-              {view.coach && (
+              {view.coach?.pill && (
                 <div
-                  className="cd-msheet-coach"
+                  className={`cd-msheet-coach cd-msheet-coach-${view.coach.pill.side}`}
                   style={{
-                    left: view.coach.left,
-                    top: view.coach.top,
-                    width: view.coach.width,
-                    ['--caret' as string]: `${view.coach.caret}px`,
+                    left: view.coach.pill.left,
+                    top: view.coach.pill.top,
+                    width: view.coach.pill.width,
+                    ['--caret' as string]: `${view.coach.pill.caret}px`,
                   }}
                   aria-hidden="true"
                 >
-                  {view.coach.text}
+                  {view.coach.pill.text}
                 </div>
               )}
             </div>
@@ -529,7 +529,7 @@ function SheetCardButton({
   return (
     <button
       type="button"
-      className={`cd-msheet-card${card.picked ? ' cd-msheet-card-picked' : ''}`}
+      className={`cd-msheet-card${card.picked ? ' cd-msheet-card-picked' : ''}${card.coached ? ' cd-msheet-card-coach' : ''}`}
       style={place}
       aria-label={card.aria}
       aria-pressed={card.picked}
