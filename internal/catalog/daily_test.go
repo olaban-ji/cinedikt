@@ -49,11 +49,17 @@ var (
 const dailyCandidates = DailyBehind + 1 + DailyAhead
 
 // dailySheet is how many movies each candidate's Movies sheets hold: the
-// ten candidates and their thirty crowd, every one of them all six's,
-// and the forty-six fillers through one of the six; not the fillers
-// through the director or the seventh-billed alone, nor the unrated
-// movie.
-const dailySheet = 86
+// ten candidates and their crowd, daily.MinCrowd each, every one of them
+// all six's, and the forty-six fillers through one of the six; not the
+// fillers through the director or the seventh-billed alone, nor the
+// unrated movie.
+const dailySheet = 10 + 10*daily.MinCrowd + 46
+
+// crowdN is daily.MinCrowd as the fixture's SQL writes it, and crowdOf
+// the id of candidate 1's kth crowd movie, tt990401k.
+var crowdN = fmt.Sprint(daily.MinCrowd)
+
+func crowdOf(k int) string { return fmt.Sprintf("tt990401%d", k) }
 
 // dailyFixture adds to the published fixture what a day's puzzle needs,
 // straight into the live tables: ten candidates, well past
@@ -61,8 +67,8 @@ const dailySheet = 86
 // opening screen's eight eras and a second in two of them, each with a
 // runtime, a poster and its colour, all eight people on every one of
 // them, and half with only TMDb's overview and half with no synopsis at
-// all, since an answer needs none; each candidate's crowd, three movies
-// the six made in its year at its rating, so every sheet keeps
+// all, since an answer needs none; each candidate's crowd, MinCrowd
+// movies the six made in its year at its rating, so every sheet keeps
 // daily.MinCrowd inside its decade and band, Crowd g.k for candidate g;
 // sixty more movies, each through one of those people, rated and voted
 // from the fewest up, Filler g through the director when g is a multiple
@@ -111,17 +117,17 @@ func dailyFixture(t *testing.T, s *Store) {
 		`INSERT INTO meta.posters (tconst, poster_url, status, fetched_at, colour)
 		 SELECT 'tt99001' || lpad(g::text, 2, '0'), 'https://img.example/' || g || '.jpg', 'ok', now(), '#2' || (g - 1) || '382d'
 		 FROM generate_series(1, 10) g`,
-		// The crowd: tt9904g1 to tt9904g3 for candidate g.
+		// The crowd: tt9904g1 to tt9904gN for candidate g, N daily.MinCrowd.
 		`INSERT INTO ` + Live + `.titles (tconst, primary_title, original_title, is_adult, start_year, genres, runtime_minutes)
 		 SELECT 'tt9904' || lpad(g::text, 2, '0') || k, 'Crowd ' || g || '.' || k, 'Crowd ' || g || '.' || k, false,
 		        t.start_year, ARRAY['Drama'], 100
-		 FROM generate_series(1, 10) g CROSS JOIN generate_series(1, 3) k
+		 FROM generate_series(1, 10) g CROSS JOIN generate_series(1, ` + crowdN + `) k
 		 JOIN ` + Live + `.titles t ON t.tconst = 'tt99001' || lpad(g::text, 2, '0')`,
 		`INSERT INTO ` + Live + `.ratings (tconst, average_rating, num_votes)
-		 SELECT 'tt9904' || lpad(g::text, 2, '0') || k, 7.0 + g / 10.0, 1000 FROM generate_series(1, 10) g, generate_series(1, 3) k`,
+		 SELECT 'tt9904' || lpad(g::text, 2, '0') || k, 7.0 + g / 10.0, 1000 FROM generate_series(1, 10) g, generate_series(1, ` + crowdN + `) k`,
 		`INSERT INTO ` + Live + `.principals (tconst, ordering, nconst, category, character)
 		 SELECT 'tt9904' || lpad(g::text, 2, '0') || k, a, 'nm990000' || (a + 1), 'actor', NULL
-		 FROM generate_series(1, 10) g, generate_series(1, 3) k, generate_series(1, 6) a`,
+		 FROM generate_series(1, 10) g, generate_series(1, ` + crowdN + `) k, generate_series(1, 6) a`,
 		// The sixty: tt9900201 to tt9900260, each through one person, the
 		// director's through the crew.
 		`INSERT INTO ` + Live + `.titles (tconst, primary_title, original_title, is_adult, start_year, genres, runtime_minutes)
@@ -412,19 +418,22 @@ func TestEachOfTheSixHasTheirFourHundredMostVoted(t *testing.T) {
 	// poster read: the whole sheet.
 	done := daily.Replay(p, []daily.Move{{Seq: 1, Key: "k", Kind: daily.KindReveal}})
 	star := p.SheetWants(done, 5)
+	// Hers besides the extras: the answer, the nine other candidates,
+	// every candidate's crowd and her eight fillers. The extras fill the
+	// rest of her MaxSheet, the most voted first, and the rest of the 410
+	// are cut.
+	hers := 1 + 9 + 10*daily.MinCrowd + 8
+	cut := 410 - (daily.MaxSheet - hers)
 	extras := 0
 	for _, id := range star {
 		if n := extra(id); n > 0 {
 			extras++
-			if n <= 58 {
+			if n <= cut {
 				t.Errorf("Extra %d, among the least voted of hers, is on the star's sheet", n)
 			}
 		}
 	}
-	// Hers: the answer first, the nine other candidates, the thirty of
-	// the crowd and her eight fillers, then the three hundred and
-	// fifty-two most voted extras.
-	if len(star) != daily.MaxSheet || extras != daily.MaxSheet-10-30-8 || !slices.Contains(star, p.Answer.ID) {
+	if len(star) != daily.MaxSheet || extras != daily.MaxSheet-hers || !slices.Contains(star, p.Answer.ID) {
 		t.Errorf("the star's sheet has %d movies, %d of them extras, the answer among them %v",
 			len(star), extras, slices.Contains(star, p.Answer.ID))
 	}
@@ -436,12 +445,12 @@ func TestEachOfTheSixHasTheirFourHundredMostVoted(t *testing.T) {
 			t.Errorf("Extra %d, which the fifth-billed is on, is not on his sheet", n)
 		}
 	}
-	if len(ed) != 1+9+30+7+10 || !slices.Contains(ed, p.Answer.ID) {
+	if len(ed) != 1+9+10*daily.MinCrowd+7+10 || !slices.Contains(ed, p.Answer.ID) {
 		t.Errorf("the fifth-billed's sheet has %d movies: %v", len(ed), ed)
 	}
-	// Eleven to fifty-eight are on nobody's sheet, so not kept.
+	// Eleven up to the cut are on nobody's sheet, so not kept.
 	for _, m := range p.Movies {
-		if n := extra(m.ID); n >= 11 && n <= 58 {
+		if n := extra(m.ID); n >= 11 && n <= cut {
 			t.Errorf("Extra %d, on nobody's sheet, is kept", n)
 		}
 	}
@@ -620,21 +629,20 @@ func TestAnyMovieWithMinVotesCanBeTheAnswer(t *testing.T) {
 // TestTheCandidatesAreTheOnesBuildFindsCrowded: dailyCandidates asks
 // daily.Build's crowd rule of every movie at once, and must ask it as
 // Build does, which dailyPuzzleOf asks again of what it reads. Candidate
-// 1, of 1931 rated 7.1, has only its own three in its decade and band.
+// 1, of 1931 rated 7.1, has only its own crowd in its decade and band.
 // It keeps its place while they are inside the 1930s and from 7.0 to
 // 7.9, and loses it, dailyPuzzleOf refusing it alike, when one moves
 // just outside either, when one of the six is taken out of one, or when
 // the star is its director too, and so no one of the six. And
 // the star's cap is counted as Build counts it, with the answer moved
 // first: given the answer and its crowd as the least voted of hers, and
-// 352 more voted movies of hers besides the forty-four she has, its
-// crowd are the last three on her sheet, and with 353 the last of them
-// is past it.
+// just enough more voted movies of hers to fill her sheet, its crowd are
+// the last on it, and with one more the last of them is past it.
 //
 // The one part of the rule the query leaves to Build is someone's own
 // "Also in", which Build sets aside: so it may keep a candidate Build
 // refuses, never the other way. The sixth-billed, taken out of one of
-// the crowd and given a third of her own, the most voted of hers and so
+// the crowd and given one of her own, the most voted of hers and so
 // her "Also in", keeps the candidate in the query, and dailyPuzzleOf
 // refuses it; less voted than her fillers, it is no "Also in", and they
 // agree again.
@@ -679,15 +687,15 @@ func TestTheCandidatesAreTheOnesBuildFindsCrowded(t *testing.T) {
 	}{
 		{1930, 7.0, true}, {1939, 7.9, true}, {1929, 7.1, false}, {1940, 7.1, false}, {1935, 6.9, false}, {1935, 8.0, false},
 	} {
-		exec(`UPDATE `+Live+`.titles SET start_year = $1 WHERE tconst = 'tt9904011'`, c.year)
-		exec(`UPDATE `+Live+`.ratings SET average_rating = $1 WHERE tconst = 'tt9904011'`, c.rating)
+		exec(`UPDATE `+Live+`.titles SET start_year = $1 WHERE tconst = $2`, c.year, crowdOf(1))
+		exec(`UPDATE `+Live+`.ratings SET average_rating = $1 WHERE tconst = $2`, c.rating, crowdOf(1))
 		agree(fmt.Sprintf("one of the crowd in %d at %v", c.year, c.rating), c.in)
 	}
-	exec(`UPDATE ` + Live + `.titles SET start_year = 1931 WHERE tconst = 'tt9904011'`)
-	exec(`UPDATE ` + Live + `.ratings SET average_rating = 7.1 WHERE tconst = 'tt9904011'`)
-	exec(`DELETE FROM ` + Live + `.principals WHERE tconst = 'tt9904012' AND nconst = 'nm9900006'`)
+	exec(`UPDATE `+Live+`.titles SET start_year = 1931 WHERE tconst = $1`, crowdOf(1))
+	exec(`UPDATE `+Live+`.ratings SET average_rating = 7.1 WHERE tconst = $1`, crowdOf(1))
+	exec(`DELETE FROM `+Live+`.principals WHERE tconst = $1 AND nconst = 'nm9900006'`, crowdOf(2))
 	agree("the fifth-billed out of one of the crowd", false)
-	exec(`INSERT INTO ` + Live + `.principals (tconst, ordering, nconst, category) VALUES ('tt9904012', 5, 'nm9900006', 'actor')`)
+	exec(`INSERT INTO `+Live+`.principals (tconst, ordering, nconst, category) VALUES ($1, 5, 'nm9900006', 'actor')`, crowdOf(2))
 	agree("the fifth-billed back", true)
 	// The star credited as its director too, as peopleOn has her, is a
 	// director and no one of the six, and the seventh-billed, with no
@@ -700,34 +708,41 @@ func TestTheCandidatesAreTheOnesBuildFindsCrowded(t *testing.T) {
 	exec(`DELETE FROM ` + Live + `.principals WHERE tconst = 'tt9900101' AND ordering = 9`)
 	agree("the star only its star again", true)
 
-	exec(`DELETE FROM ` + Live + `.principals WHERE tconst = 'tt9904013' AND nconst = 'nm9900007'`)
+	last, own := crowdOf(daily.MinCrowd), crowdOf(daily.MinCrowd+1)
+	exec(`DELETE FROM `+Live+`.principals WHERE tconst = $1 AND nconst = 'nm9900007'`, last)
 	agree("the sixth-billed out of one of the crowd", false)
-	exec(`INSERT INTO ` + Live + `.titles (tconst, primary_title, original_title, is_adult, start_year, genres, runtime_minutes)
-	      VALUES ('tt9904014', 'Crowd 1.4', 'Crowd 1.4', false, 1931, ARRAY['Drama'], 100)`)
-	exec(`INSERT INTO ` + Live + `.ratings (tconst, average_rating, num_votes) VALUES ('tt9904014', 7.1, 1000000)`)
-	exec(`INSERT INTO ` + Live + `.principals (tconst, ordering, nconst, category) VALUES ('tt9904014', 1, 'nm9900007', 'actress')`)
+	exec(`INSERT INTO `+Live+`.titles (tconst, primary_title, original_title, is_adult, start_year, genres, runtime_minutes)
+	      VALUES ($1, 'Crowd 1.own', 'Crowd 1.own', false, 1931, ARRAY['Drama'], 100)`, own)
+	exec(`INSERT INTO `+Live+`.ratings (tconst, average_rating, num_votes) VALUES ($1, 7.1, 1000000)`, own)
+	exec(`INSERT INTO `+Live+`.principals (tconst, ordering, nconst, category) VALUES ($1, 1, 'nm9900007', 'actress')`, own)
 	cands, err = s.dailyCandidates(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.ContainsFunc(cands, func(c daily.Candidate) bool { return c.ID == one.ID }) {
-		t.Error("with a third of her own, her Also in: Candidate 1 is no candidate, want it kept for Build to refuse")
+		t.Error("with one of her own, her Also in: Candidate 1 is no candidate, want it kept for Build to refuse")
 	}
-	if _, err := s.dailyPuzzleOf(ctx, nil, 1, oct8, one); err == nil || !strings.Contains(err.Error(), "2 other movies in the answer's decade and rating band besides their Also in") {
-		t.Errorf("with a third of her own, her Also in: dailyPuzzleOf says %v, want it refused", err)
+	short := fmt.Sprintf("%d other movies in the answer's decade and rating band besides their Also in", daily.MinCrowd-1)
+	if _, err := s.dailyPuzzleOf(ctx, nil, 1, oct8, one); err == nil || !strings.Contains(err.Error(), short) {
+		t.Errorf("with one of her own, her Also in: dailyPuzzleOf says %v, want it refused", err)
 	}
-	exec(`UPDATE ` + Live + `.ratings SET num_votes = 1 WHERE tconst = 'tt9904014'`)
-	agree("a third of her own, and not her Also in", true)
+	exec(`UPDATE `+Live+`.ratings SET num_votes = 1 WHERE tconst = $1`, own)
+	agree("one of her own, and not her Also in", true)
 	for _, table := range []string{"principals", "ratings", "titles"} {
-		exec(`DELETE FROM ` + Live + `.` + table + ` WHERE tconst = 'tt9904014'`)
+		exec(`DELETE FROM `+Live+`.`+table+` WHERE tconst = $1`, own)
 	}
-	exec(`INSERT INTO ` + Live + `.principals (tconst, ordering, nconst, category) VALUES ('tt9904013', 6, 'nm9900007', 'actor')`)
+	exec(`INSERT INTO `+Live+`.principals (tconst, ordering, nconst, category) VALUES ($1, 6, 'nm9900007', 'actor')`, last)
 	agree("the sixth-billed back", true)
 
-	// Hers, by votes: the nine other candidates, the other twenty-seven
-	// of the crowd and her eight fillers, raised past everything below,
-	// then the extras, then the answer's crowd, then the answer.
-	exec(`UPDATE ` + Live + `.ratings SET num_votes = num_votes + 100000 WHERE tconst LIKE 'tt99002%' OR tconst LIKE 'tt9904%'`)
+	// Hers, by votes: the nine other candidates, their crowd and her
+	// eight fillers, raised past everything below, then the extras, then
+	// the answer's crowd, then the answer. Before the extras that is
+	// 9 + 9×MinCrowd + 8 above them and MinCrowd + 1 below, so the extras
+	// that fill her sheet to MaxSheet number MaxSheet − 18 − 10×MinCrowd.
+	// The votes are set from MinVotes: the raised ten times it, the
+	// extras about twice, the answer's crowd just over it and the answer
+	// at it, so the order holds however MinVotes is tuned.
+	exec(`UPDATE `+Live+`.ratings SET num_votes = num_votes + $1::int WHERE tconst LIKE 'tt99002%' OR tconst LIKE 'tt9904%'`, 10*daily.MinVotes)
 	exec(`UPDATE `+Live+`.ratings SET num_votes = $1::int + 1 WHERE tconst LIKE 'tt990401%'`, daily.MinVotes)
 	exec(`UPDATE `+Live+`.ratings SET num_votes = $1::int WHERE tconst = 'tt9900101'`, daily.MinVotes)
 	one.Votes = daily.MinVotes
@@ -737,13 +752,14 @@ func TestTheCandidatesAreTheOnesBuildFindsCrowded(t *testing.T) {
 		      SELECT 'tt97' || lpad(g::text, 5, '0'), 'Extra ' || g, 'Extra ' || g, false, 1950, ARRAY['Drama']
 		      FROM generate_series($1::int, $2::int) g`, from, to)
 		exec(`INSERT INTO `+Live+`.ratings (tconst, average_rating, num_votes)
-		      SELECT 'tt97' || lpad(g::text, 5, '0'), 6.0, 50000 + g FROM generate_series($1::int, $2::int) g`, from, to)
+		      SELECT 'tt97' || lpad(g::text, 5, '0'), 6.0, $3::int + g FROM generate_series($1::int, $2::int) g`, from, to, 2*daily.MinVotes)
 		exec(`INSERT INTO `+Live+`.principals (tconst, ordering, nconst, category)
 		      SELECT 'tt97' || lpad(g::text, 5, '0'), 1, 'nm9900002', 'actress' FROM generate_series($1::int, $2::int) g`, from, to)
 	}
-	extras(1, daily.MaxSheet-48)
-	agree("her crowd the last three on her sheet", true)
-	extras(daily.MaxSheet-47, daily.MaxSheet-47)
+	fill := daily.MaxSheet - 18 - 10*daily.MinCrowd
+	extras(1, fill)
+	agree("her crowd the last on her sheet", true)
+	extras(fill+1, fill+1)
 	agree("the last of her crowd past her cap", false)
 }
 

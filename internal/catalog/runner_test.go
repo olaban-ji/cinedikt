@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -130,12 +131,39 @@ func TestAnOutageThatLastsIsSaidAgain(t *testing.T) {
 func TestAJobThatWasStoppedSaysNothing(t *testing.T) {
 	var sink recordingSink
 	ctx, cancel := context.WithCancel(context.Background())
-	reportRun(ctx, &sink, notify.JobPosters, nil, time.Time{})
+	reportRun(ctx, &sink, notify.JobPosters, nil, time.Time{}, nil)
 	cancel()
-	reportRun(ctx, &sink, notify.JobPosters, context.Canceled, time.Time{})
+	reportRun(ctx, &sink, notify.JobPosters, context.Canceled, time.Time{}, nil)
 	got := sink.all()
 	if len(got) != 1 || got[0].Kind != notify.Checked || got[0].Job != notify.JobPosters {
 		t.Fatalf("events = %+v, want one Checked and nothing for the stopped run", got)
+	}
+}
+
+// TestAPassThatWentWellCarriesWhatItHasToTell: the Daily's figures ride
+// on its Checked event, filled in by the loop's hook; a pass that failed
+// sends its failure alone, since a Checked is what clears one, and a
+// stopping process sends nothing.
+func TestAPassThatWentWellCarriesWhatItHasToTell(t *testing.T) {
+	var sink recordingSink
+	ctx := context.Background()
+	asked := 0
+	fill := func(_ context.Context, e *notify.Event) {
+		asked++
+		e.Daily = &notify.DailyDay{No: 7, Played: 3}
+	}
+	reportRun(ctx, &sink, notify.JobDaily, nil, time.Time{}, fill)
+	reportRun(ctx, &sink, notify.JobDaily, errors.New("catalog: none of 9 candidates can be the daily answer"), time.Now(), fill)
+	stopped, stop := context.WithCancel(ctx)
+	stop()
+	reportRun(stopped, &sink, notify.JobDaily, nil, time.Time{}, fill)
+	got := sink.all()
+	if len(got) != 2 || got[0].Kind != notify.Checked || got[0].Daily == nil || got[0].Daily.No != 7 ||
+		got[1].Kind != notify.Failed || got[1].Daily != nil {
+		t.Errorf("events = %+v", got)
+	}
+	if asked != 1 {
+		t.Errorf("the hook was asked %d times, want once", asked)
 	}
 }
 

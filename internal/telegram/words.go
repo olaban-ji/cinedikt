@@ -23,6 +23,9 @@ const (
 	markPause = "⏸️"
 	markWarn  = "⚠️"
 	markRed   = "🔴"
+	// markFigures leads a line of figures rather than a state: the
+	// Daily's day before.
+	markFigures = "📊"
 )
 
 // Severity orders the parts of a push and picks its mark: something

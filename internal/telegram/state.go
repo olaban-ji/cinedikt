@@ -112,6 +112,11 @@ type job struct {
 	NextTry   time.Time    `json:"next_try,omitzero"`
 	// Alert is the key of the announced alert this streak belongs to.
 	Alert string `json:"alert,omitempty"`
+
+	// Daily is, for the Daily job, how yesterday's puzzle went, from its
+	// last pass that said: kept across passes that did not, and across a
+	// restart, so the board does not lose the figures for an hour.
+	Daily *notify.DailyDay `json:"daily,omitempty"`
 }
 
 // alert is something that has made, or will make, a sound. Several
@@ -220,6 +225,9 @@ func (s *state) apply(e notify.Event, w writer) effects {
 			break
 		}
 		j := s.job(e.Job)
+		if e.Job == notify.JobDaily && e.Daily != nil {
+			j.Daily = e.Daily
+		}
 		if e.Job == notify.JobImport {
 			s.catalogFacts(e)
 			if !e.NextTry.IsZero() {

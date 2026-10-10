@@ -41,6 +41,12 @@ func (s *state) render(w writer, at place) (full, body string) {
 		m, text := s.line(in.id, w)
 		b.WriteString("\n")
 		b.WriteString(boardLine(m, in.label, text))
+		if in.id == notify.JobDaily {
+			for _, l := range s.dailyLines() {
+				b.WriteString("\n")
+				b.WriteString(boardLine(markFigures, l[0], l[1]))
+			}
+		}
 	}
 	b.WriteString("\n")
 	if site := s.siteLine(w); site != "" {
@@ -421,4 +427,40 @@ func (s *state) footer(w writer, at place) string {
 		parts = append(parts, "times UTC")
 	}
 	return strings.Join(parts, " · ")
+}
+
+// dailyLines are the Daily job's figures for yesterday's puzzle, as
+// label and text, under the job's own line: whether the puzzles are too
+// hard or too easy, which no rule can say ahead of real games. Two
+// lines, since one would run past lineMax: how many played and how they
+// did, then what they leaned on. None before the job has said.
+func (s *state) dailyLines() [][2]string {
+	j := s.Jobs[notify.JobDaily]
+	if j == nil || j.Daily == nil {
+		return nil
+	}
+	d := j.Daily
+	head := fmt.Sprintf("No. %d · ", d.No)
+	if d.Played == 0 {
+		return [][2]string{{"Yesterday's Daily", head + "nobody played"}}
+	}
+	if d.Finished == 0 {
+		return [][2]string{{"Yesterday's Daily", head + count(d.Played) + " played · none finished"}}
+	}
+	played := head + count(d.Played) + " played · " + share(d.Solved, d.Finished) + " solved"
+	if d.Solved > 0 {
+		played += fmt.Sprintf(" · %.1f names", d.Names)
+	}
+	help := share(d.Facts, d.Finished) + " bought a fact · " + share(d.Sheets, d.Finished) +
+		" opened a map · median " + count(int64(d.Median))
+	return [][2]string{{"Yesterday's Daily", played}, {"Daily help", help}}
+}
+
+// share is part of all as a whole percentage, rounded to the nearest:
+// unlike pct, a finished day can be 100%.
+func share(part, all int64) string {
+	if all <= 0 {
+		return "0%"
+	}
+	return fmt.Sprintf("%d%%", (200*part+all)/(2*all))
 }

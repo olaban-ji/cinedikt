@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"cinedikt/internal/daily"
+	"cinedikt/internal/notify"
 )
 
 // Each reader plays the puzzle for their own date, so the days the job
@@ -61,6 +62,36 @@ type DailyJob struct {
 	// reached, to work its colour out; nil is one with ColourFetch's
 	// deadline.
 	Client *http.Client
+}
+
+// DailyStatsBudget bounds the reading of a day's games for the board.
+// It is a day's games replayed in memory, quick even for thousands, and
+// what it says is never worth holding up the job's report.
+const DailyStatsBudget = 10 * time.Second
+
+// Stats fills in a pass's Checked event with how yesterday's puzzle, UTC
+// yesterday's, has gone (Store.DailyDayStats): the board's Daily line,
+// which is how the owner sees a day's difficulty without opening the
+// database. Yesterday's rather than today's, since today's has hardly
+// begun for most readers, and yesterday's has had a full day in every
+// zone but the farthest west. A read that fails leaves the event as it
+// is: the board keeps the last figures it had, and the job's work is
+// unaffected.
+func (j *DailyJob) Stats(ctx context.Context, e *notify.Event) {
+	now := time.Now
+	if j.Now != nil {
+		now = j.Now
+	}
+	ctx, cancel := context.WithTimeout(ctx, DailyStatsBudget)
+	defer cancel()
+	d, err := j.Store.DailyDayStats(ctx, daily.Today(now()).AddDate(0, 0, -1))
+	if err != nil {
+		if j.Logger != nil {
+			j.Logger.Warn("daily day stats", "err", err)
+		}
+		return
+	}
+	e.Daily = d
 }
 
 // Run is one pass.

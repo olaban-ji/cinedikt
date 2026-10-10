@@ -144,6 +144,30 @@ type Event struct {
 	// Jobs is, on TookOver, every job this process runs. Anything left
 	// out is off here.
 	Jobs []string
+
+	// Daily is, on JobDaily's Checked, how yesterday's puzzle has gone,
+	// nil when there is none to tell.
+	Daily *DailyDay
+}
+
+// DailyDay is how one day's Cinedikt Daily went, as numbers: the
+// transport words them. Played counts the games started; the rest are
+// out of the games Finished, which is what a day's difficulty is read
+// from, since a game left half played says nothing about it.
+type DailyDay struct {
+	No  int
+	Day time.Time
+	// Played is the games started, and Finished the ones that ended.
+	Played, Finished int64
+	// Solved is the finished games won, and Names the names seen on
+	// average in them, before the movie was named.
+	Solved int64
+	Names  float64
+	// Facts is the finished games that bought at least one fact, and
+	// Sheets the ones that opened a Movies sheet.
+	Facts, Sheets int64
+	// Median is the median score of the finished games, 0 for a miss.
+	Median int
 }
 
 // Sink receives events. Note must return quickly and must not fail the

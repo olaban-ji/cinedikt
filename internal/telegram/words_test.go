@@ -286,3 +286,35 @@ func TestTheStaleAlertStandsInForTheImportsOwn(t *testing.T) {
 		t.Error("the reminder of a failing import went out quiet")
 	}
 }
+
+// TestTheDailyFiguresAreWholePercentagesOfTheFinishedGames: the board's
+// Daily lines count what was played, but read difficulty from the games
+// that ended, rounding to the nearest whole percentage, so a day every
+// finished game solved says 100%, which a running share never may.
+func TestTheDailyFiguresAreWholePercentagesOfTheFinishedGames(t *testing.T) {
+	for _, c := range []struct {
+		part, all int64
+		want      string
+	}{{0, 0, "0%"}, {1, 3, "33%"}, {2, 3, "67%"}, {1, 2, "50%"}, {3, 3, "100%"}, {771, 1204, "64%"}} {
+		if got := share(c.part, c.all); got != c.want {
+			t.Errorf("share(%d, %d) = %q, want %q", c.part, c.all, got, c.want)
+		}
+	}
+	s := &state{Jobs: map[string]*job{notify.JobDaily: {Daily: &notify.DailyDay{No: 4, Played: 5}}}}
+	if got := s.dailyLines(); len(got) != 1 || got[0][1] != "No. 4 · 5 played · none finished" {
+		t.Errorf("a day with games but none finished: %q", got)
+	}
+	s.Jobs[notify.JobDaily].Daily = &notify.DailyDay{No: 4, Played: 5, Finished: 2, Facts: 1, Sheets: 0, Median: 0}
+	if got := s.dailyLines(); len(got) != 2 || got[0][1] != "No. 4 · 5 played · 0% solved" ||
+		got[1][1] != "50% bought a fact · 0% opened a map · median 0" {
+		t.Errorf("a day nobody solved, without the names: %q", got)
+	}
+	for _, l := range s.dailyLines() {
+		if n := len([]rune(boardLine(markFigures, l[0], l[1]))); n > lineMax+len("<b></b>") {
+			t.Errorf("%q runs past the line", l)
+		}
+	}
+	if got := (&state{Jobs: map[string]*job{}}).dailyLines(); got != nil {
+		t.Errorf("before the job has said: %q", got)
+	}
+}

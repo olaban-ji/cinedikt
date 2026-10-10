@@ -15,12 +15,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"cinedikt/internal/daily"
+	"cinedikt/internal/notify"
 )
 
 // ErrNameTaken is a name another player already has.
@@ -325,6 +327,102 @@ func (s *Store) DailyLive(ctx context.Context, films, people []string) (daily.Li
 		}
 	}
 	return live, nil
+}
+
+// DailyDayStats is how the puzzle for day has gone so far, as the
+// Telegram board's Daily line tells it, or nil, with no error, when the
+// day has no puzzle. Every game of it is replayed from its moves, as the
+// page would draw it, so its names are the ones its player saw
+// (State.Seen), not the six the end shows anyway. It reads the day's
+// games in one query, and runs only in the daily job, never while a
+// reader waits.
+func (s *Store) DailyDayStats(ctx context.Context, day time.Time) (*notify.DailyDay, error) {
+	p, err := s.DailyPuzzle(ctx, day)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT g.id, g.finished_at IS NOT NULL, m.seq, m.key, m.kind, coalesce(m.arg, ''), m.cost, m.detail, m.at
+		FROM meta.daily_games g
+		LEFT JOIN meta.daily_moves m ON m.game = g.id
+		WHERE g.no = $1
+		ORDER BY g.id, m.seq`, p.No)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the daily day's games: %w", err)
+	}
+	defer rows.Close()
+	type game struct {
+		over  bool
+		moves []daily.Move
+	}
+	var games []*game
+	var last int64
+	for rows.Next() {
+		var id int64
+		var over bool
+		// A game with no moves yet comes with nulls for them.
+		var seq, cost *int
+		var key, kind, arg *string
+		var detail []byte
+		var at *time.Time
+		if err := rows.Scan(&id, &over, &seq, &key, &kind, &arg, &cost, &detail, &at); err != nil {
+			return nil, fmt.Errorf("catalog: scan the daily day's games: %w", err)
+		}
+		if len(games) == 0 || id != last {
+			games = append(games, &game{over: over})
+			last = id
+		}
+		if seq == nil {
+			continue
+		}
+		m := daily.Move{Seq: *seq, Key: *key, Kind: *kind, Arg: *arg, Cost: *cost}
+		if at != nil {
+			m.At = *at
+		}
+		if detail != nil {
+			m.Guess = &daily.Guessed{}
+			if err := json.Unmarshal(detail, m.Guess); err != nil {
+				return nil, fmt.Errorf("catalog: decode a daily move: %w", err)
+			}
+		}
+		g := games[len(games)-1]
+		g.moves = append(g.moves, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: read the daily day's games: %w", err)
+	}
+	d := &notify.DailyDay{No: p.No, Day: p.Day, Played: int64(len(games))}
+	var scores []int
+	names := 0
+	for _, g := range games {
+		if !g.over {
+			continue
+		}
+		st := daily.Replay(p, g.moves)
+		d.Finished++
+		scores = append(scores, st.Pts)
+		if st.Won {
+			d.Solved++
+			names += st.Seen()
+		}
+		if len(st.Facts) > 0 {
+			d.Facts++
+		}
+		if st.Sheet != "" {
+			d.Sheets++
+		}
+	}
+	if d.Solved > 0 {
+		d.Names = float64(names) / float64(d.Solved)
+	}
+	if len(scores) > 0 {
+		slices.Sort(scores)
+		d.Median = scores[len(scores)/2]
+	}
+	return d, nil
 }
 
 // DailyPlayed is how many games of puzzle no have been started, by

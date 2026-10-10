@@ -68,6 +68,17 @@ func boards(t *testing.T) map[string]*policy {
 
 	out["quiet-day"] = quietDay(t)
 
+	// The Daily job's figures for the day before, under its line.
+	figures := quietDay(t)
+	figures.note(notify.Event{Job: notify.JobDaily, Kind: notify.Checked, Daily: &notify.DailyDay{
+		No: 3, Day: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), Played: 1287, Finished: 1204,
+		Solved: 771, Names: 2.64, Facts: 494, Sheets: 265, Median: 700}})
+	out["daily-figures"] = figures
+	nobody := quietDay(t)
+	nobody.note(notify.Event{Job: notify.JobDaily, Kind: notify.Checked, Daily: &notify.DailyDay{
+		No: 1, Day: time.Date(2026, 10, 7, 0, 0, 0, 0, time.UTC)}})
+	out["daily-nobody"] = nobody
+
 	running := quietDay(t)
 	running.note(notify.Event{Job: notify.JobImport, Kind: notify.Started, Step: 1})
 	running.after(3 * time.Minute).note(notify.Event{Job: notify.JobImport, Kind: notify.Progress, Step: 1,

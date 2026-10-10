@@ -49,7 +49,7 @@ const NameCost = 100
 // fact narrows it by eye as well as by what it reads. Name Drop sold the
 // five years inside the decade too, and with them, the rating and the
 // genre bought, a cast member's sheet kept almost nothing else: two of
-// the 7,181 movies with MinVotes votes kept three others on every one of
+// the 7,181 movies with 25,000 votes kept three others on every one of
 // their six's sheets. So the decade is as fine as the year goes, and
 // each of the six's sheets keeps MinCrowd others inside it and the
 // rating band (Build).

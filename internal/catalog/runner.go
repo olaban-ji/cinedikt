@@ -248,7 +248,7 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	// wakes it in case a day it could not pick for has an answer now.
 	puzzles := &DailyJob{Store: r.store, Logger: r.Logger.With("job", "daily-puzzles")}
 	keep(jobLoop{name: "daily puzzles", job: notify.JobDaily, rest: DailyRest,
-		run: puzzles.Run, wake: wakes.Daily})
+		run: puzzles.Run, wake: wakes.Daily, checked: puzzles.Stats})
 	start(func() {
 		// The files are rebuilt once a day. The hourly check is not
 		// about catching the moment they land; it is about not waiting
@@ -273,7 +273,8 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 // reportRun tells the notifier how one run of a background job ended:
 // a failure, or a check that clears one. next is when it will run
 // again. A run cut short by ctx says nothing; being stopped is not news.
-func reportRun(ctx context.Context, sink notify.Sink, job string, err error, next time.Time) {
+func reportRun(ctx context.Context, sink notify.Sink, job string, err error, next time.Time,
+	checked func(context.Context, *notify.Event)) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -281,7 +282,11 @@ func reportRun(ctx context.Context, sink notify.Sink, job string, err error, nex
 		report(sink, failure(job, err, next, time.Time{}))
 		return
 	}
-	report(sink, notify.Event{Job: job, Kind: notify.Checked})
+	e := notify.Event{Job: job, Kind: notify.Checked}
+	if checked != nil && sink != nil {
+		checked(ctx, &e)
+	}
+	report(sink, e)
 }
 
 // build makes the import and the two OMDb jobs. The poster pass and the
@@ -460,6 +465,12 @@ type jobLoop struct {
 	// pass refills its queue from the new generation. A reader's mark
 	// brings no new names to queue, so it does not call it.
 	refill func()
+	// checked, when set, fills in the Checked event a pass that went
+	// well reports, with whatever the job has to tell the board: the
+	// Daily's figures for the day before. Only a pass that went well,
+	// since a Checked is what clears a failure, and a second one sent
+	// on its own would read as a recovery.
+	checked func(context.Context, *notify.Event)
 }
 
 // keepRunning runs a job for as long as the process does: nothing until
@@ -486,7 +497,7 @@ func (r *Runner) keepRunning(ctx context.Context, loop jobLoop) {
 			if err != nil && ctx.Err() == nil {
 				r.Logger.Warn(loop.name, "err", err)
 			}
-			reportRun(ctx, r.Notify, loop.job, err, time.Now().Add(wait))
+			reportRun(ctx, r.Notify, loop.job, err, time.Now().Add(wait), loop.checked)
 		}
 		woke, byWake := waitForEither(ctx, loop.wake, loop.wanted, wait)
 		if !woke {

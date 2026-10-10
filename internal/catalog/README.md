@@ -222,7 +222,10 @@ a River job: it needs nothing but the catalog, so it runs wherever the
 catalog's jobs do, waits for a published catalog like them, rests
 `DailyRest` (an hour), is woken by a publish through its own
 `Wakes.Daily`, and reports as `notify.JobDaily`, the Telegram board's
-"Daily puzzles" line. A pass asks, for each of those days, whether
+"Daily puzzles" line. A pass that went well also carries how UTC
+yesterday's puzzle went (`DailyJob.Stats`, the loop's `checked` hook,
+from `Store.DailyDayStats`, which replays every game of the day from
+its moves), for the board's two lines under it. A pass asks, for each of those days, whether
 `meta.daily_puzzles` has it, and most passes stop there; the one after
 midnight UTC picks the new last day, and a publish wakes it in case a
 day it could not pick for has an answer in the new catalog. For a
@@ -232,7 +235,7 @@ orders them with `daily.Order` against what the days around it used
 days before and the first genres of the two), and tries them in turn
 (`firstFair`).
 
-The candidates are every movie with `daily.MinVotes` (25,000) votes,
+The candidates are every movie with `daily.MinVotes` (100,000) votes,
 rated and passing `gridFilm`, with a runtime, which the Length fact is
 sold from, and a poster that is `ok` with an address, each with its
 poster's colour where it is known. Each is placed in the era of `eras`
@@ -241,12 +244,15 @@ opening screen's pool in, written once and into both, so a movie made
 before 1920 has no era and is no candidate. They were that pool
 itself, `first_run`, until the crowd rule below: only 70 of its movies
 make a puzzle under it, too few to go 90 days without an answer coming
-back. Nothing is asked of a candidate's synopsis: no fact is a line of
+back. `MinVotes` was 25,000 at first, with a crowd of three, which made
+298 puzzles, but most of their answers were movies few players know,
+so it rose to 100,000 with a crowd of two (see the root README, Daily,
+Choosing the puzzle). Nothing is asked of a candidate's synopsis: no fact is a line of
 its text, since any line can be pasted into a search engine, so a
 movie OMDb has no plot for is as fair an answer as any.
 
 Only the crowded come back. `daily.Build` refuses a candidate unless
-each of its six has `daily.MinCrowd` (three) movies on their own sheet
+each of its six has `daily.MinCrowd` (two) movies on their own sheet
 inside its decade and its rating band, besides it and their own Also
 in movie, since a Movies sheet shows every card's year and rating and
 a reader who has bought both ranges is looking at the cards inside
@@ -266,12 +272,12 @@ band is `width_bucket` over `daily.RatingFloors`, the floors
 out only each one's own Also in, which turns on close relatives and
 shared titles (`daily.RelativeShared`, `sharesTitle`), more than a
 query can fairly say, so it keeps every candidate `Build` would and a
-few it will not: in October 2026 it kept 344 of the movies with
-`MinVotes` votes, of which `dailyPuzzleOf` refused 42 for the crowd
-and 4 for `daily.MinSheet`, each before any poster was fetched, and
-298 make a puzzle. The query takes about two seconds on the full
-catalog, and a pass that picks all ten days about as long, the reads
-of each day's one or two candidates a few milliseconds each.
+few it will not: in October 2026 it kept 325 of the movies with
+`MinVotes` votes, of which `dailyPuzzleOf` refused 30 for the crowd
+and 6 for `daily.MinSheet`, each before any poster was fetched, and
+289 make a puzzle. The query takes about a second on the full catalog,
+and a pass that picks all ten days about as long, the reads of each
+day's one or two candidates a few milliseconds each.
 `TestTheCandidatesAreTheOnesBuildFindsCrowded` holds the two to
 agreeing at every edge: a crowd movie moved to either side of the
 decade or the band, one of the six taken off one, the star credited as
@@ -317,10 +323,10 @@ clash on `no` is not skipped: it means the numbering has gone wrong
 and a day would go without a puzzle for good, so it is an error the
 pass returns. A day no candidate fits is an error, the other days are
 picked all the same, and the pass returns every such day joined, which
-reaches Telegram the way any job's failure does. The two seconds of a
-full pass above were measured read-only, so they leave out the poster
-fetches: the colour job had not reached 266 of the 344, and seven of
-the ten picks would have fetched one. On a new database the first pass
+reaches Telegram the way any job's failure does. The second of a
+full pass above was measured read-only, so it leaves out the poster
+fetches: the colour job had not reached 180 of the 325, and two of the
+ten picks would have fetched one. On a new database the first pass
 runs the moment the first catalog is published, while the poster pass
 is still reaching the candidates' posters, so it can find few or none;
 a day it cannot pick waits for the next pass.
@@ -568,10 +574,10 @@ day a full pass keeps, well past `daily.MinVotes` and none of them in
 `first_run`, one in each of the opening screen's eight eras and a
 second in two of them, each with a runtime, a poster and its colour,
 and all eight people, a director and seven billed cast, on every one
-of them; each candidate's crowd, three movies of its year and rating
-crediting all six, so every sheet keeps `daily.MinCrowd` inside its
+of them; each candidate's crowd, `daily.MinCrowd` movies of its year
+and rating crediting all six, so every sheet keeps `daily.MinCrowd` inside its
 decade and band, with too few votes and no poster to be candidates
 themselves; sixty movies through those people, one each, so every
-candidate's sheets hold 86 movies, the other nine candidates among
+candidate's sheets hold 76 movies (56 and ten crowds), the other nine candidates among
 them as close relatives; and one unrated movie that must be on no
 sheet.

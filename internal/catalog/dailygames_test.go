@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"cinedikt/internal/daily"
+	"cinedikt/internal/notify"
 )
 
 // todaysPuzzle picks UTC yesterday's and today's puzzles from the daily
@@ -1393,5 +1394,63 @@ func TestTheStandingIsYourPlaceOnTheWeeksBoard(t *testing.T) {
 	}
 	if w, err := s.DailyStanding(ctx, thursday, 0, true); err != nil || w != nil {
 		t.Errorf("no player: %+v, %v", w, err)
+	}
+}
+
+// TestADaysFiguresAreItsGamesReplayed: the board's Daily figures come
+// from replaying every game of the day, so a game's names are the ones
+// its player saw, not the six its end shows; a game started and not
+// finished counts as played and nothing else; and the median is of the
+// finished games, a miss scoring nothing. The job's hook reads the day
+// before its own, and a day with no puzzle has no figures.
+func TestADaysFiguresAreItsGamesReplayed(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	p := todaysPuzzle(t, s)
+	play := func(name string, hue int, reqs ...daily.Request) {
+		t.Helper()
+		player, err := s.CreateDailyPlayer(ctx, daily.TokenHash(daily.NewToken()), name, hue)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartDailyGame(ctx, player.ID, p.No, oct8, time.UTC); err != nil {
+			t.Fatal(err)
+		}
+		for i, r := range reqs {
+			r.Seq, r.Key = i, fmt.Sprintf("%s-%d", name, i)
+			if _, err := s.DailyAct(ctx, player.ID, p, r, oct8.Add(time.Duration(i+1)*time.Minute)); err != nil {
+				t.Fatalf("%s's move %d: %v", name, i, err)
+			}
+		}
+	}
+	answer := daily.Request{Kind: daily.KindGuess, Arg: p.Answer.ID}
+	// Two names, a fact and a sheet, then the answer: 800.
+	play("Ada Lane", 1, daily.Request{Kind: daily.KindNext}, daily.Request{Kind: daily.KindDecade},
+		daily.Request{Kind: daily.KindSheet, Arg: p.Cast[0].ID}, answer)
+	// Shown the answer: nothing, one name seen though the end shows six.
+	play("Bo Hale", 2, daily.Request{Kind: daily.KindReveal})
+	// Started, never finished.
+	play("Cy Moor", 3)
+	// The answer on the first name: 1,000.
+	play("Di Vale", 4, answer)
+
+	d, err := s.DailyDayStats(ctx, oct8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := notify.DailyDay{No: p.No, Day: p.Day, Played: 4, Finished: 3, Solved: 2, Names: 1.5, Facts: 1, Sheets: 1, Median: 800}
+	if d == nil || *d != want {
+		t.Errorf("figures = %+v\nwant      %+v", d, want)
+	}
+	if d, err := s.DailyDayStats(ctx, oct8.AddDate(0, 0, 30)); err != nil || d != nil {
+		t.Errorf("a day with no puzzle: %+v, %v; want none", d, err)
+	}
+
+	// The job's hook, a day later, tells of the 8th.
+	now := oct8.AddDate(0, 0, 1)
+	e := notify.Event{Job: notify.JobDaily, Kind: notify.Checked}
+	dailyJob(s, &now).Stats(ctx, &e)
+	if e.Daily == nil || *e.Daily != want {
+		t.Errorf("the hook a day later: %+v", e.Daily)
 	}
 }

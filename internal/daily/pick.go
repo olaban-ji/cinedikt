@@ -120,14 +120,20 @@ type MapFilm struct {
 // What a candidate must have to be a day's answer.
 const (
 	// MinVotes is how many IMDb votes a movie needs to be a candidate at
-	// all: enough that it is worth naming. It is far below what the
-	// opening screen's pool asks, the most voted 250 of each of its
-	// eras, because the crowd rule (MinCrowd) passes about one movie in
-	// twenty-five. On the catalog of October 2026 that pool held only 70
-	// movies that make a puzzle, fewer than RepeatDays, so the pick would
-	// soon have run out of answers it had not used in ninety days. With
-	// 25,000 votes 298 do, and with 100,000, 121.
-	MinVotes = 25000
+	// all: enough that it is worth naming, and enough that most players
+	// have a chance of knowing it. It is below what the opening screen's
+	// pool asks, the most voted 250 of each of its eras, because the
+	// crowd rule (MinCrowd) passes about one movie in twenty: on the
+	// catalog of October 2026 that pool held only 70 movies that make a
+	// puzzle, fewer than RepeatDays, so the pick would soon have run out
+	// of answers it had not used in ninety days. It was 25,000 at first,
+	// with a crowd of three, which made 298 puzzles, but their median
+	// answer had about 70,000 votes, and a simulation of players over
+	// them had a player who knows the well-known movies of the last
+	// decades solving fewer than a third of them, and a casual one almost
+	// none. With 100,000 and a crowd of two, 289 make a puzzle and the
+	// same player solves about two in three (see MinCrowd).
+	MinVotes = 100000
 	// MinDirectors is enough for the Director fact to sell somebody.
 	MinDirectors = 1
 	// MinCast is the six the game shows: a movie with fewer billed cast
@@ -150,15 +156,14 @@ const (
 	// show and so is a card the player knows is not today's. The decade
 	// and the band are where a card sits on the map, so a player who has
 	// bought both and opened a sheet is looking at the cards inside them
-	// whatever they read, and with a card or two there besides the
-	// answer it is all but picked out by eye, where the facts are meant
-	// to narrow the guess and not to make it. Three leaves a handful of
-	// titles to weigh on whichever sheet a game opens. Of the movies with
-	// MinVotes votes in October 2026, 298 make a puzzle keeping three on
-	// every one of the six's sheets; four would leave 101, and five 27.
-	// Counting the "Also in" as one of them would have let in 42 more,
-	// each with a sheet where only two were left to weigh.
-	MinCrowd = 3
+	// whatever they read, and with nothing there besides the answer it
+	// is picked out by eye, where the facts are meant to narrow the guess
+	// and not to make it. Two leaves something to weigh on whichever
+	// sheet a game opens. It was three, but a crowd of three on every
+	// sheet is rare among well-known movies: with MinVotes at 100,000,
+	// three would leave about 143 puzzles, too few for long, where two
+	// leaves 289 (October 2026), so the answers can be ones players know.
+	MinCrowd = 2
 )
 
 // Unfit is why a candidate cannot be a day's answer. It never names the
