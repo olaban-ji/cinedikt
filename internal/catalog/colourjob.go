@@ -1,12 +1,20 @@
 package catalog
 
-// Filling in the colours the opening screen draws before its pictures.
+// Filling in the colours the opening screen draws before its pictures,
+// and the colour Cinedikt Daily fills its hidden card with.
 //
-// The work is bounded by design: the cold screen only ever shows films
-// from the first-run pool, which is two thousand rows, so that is the
-// whole of what needs a colour. Colouring the other three-quarters of a
-// million would be downloading three-quarters of a million images to
-// fill frames nobody will see.
+// The work is bounded by design. The cold screen only ever shows films
+// from the first-run pool, which is two thousand rows, and the Daily's
+// answer is only ever a movie with daily.MinVotes votes, about 2,750 in
+// October 2026, half of them outside the pool. That is the whole of what
+// needs a colour. Colouring the other three-quarters of a million would
+// be downloading three-quarters of a million images to fill frames
+// nobody will see.
+//
+// Coloured here, a Daily answer is never coloured when it is picked: the
+// pick would have to fetch its poster then, under ColourFetch, and a
+// poster host that does not answer held the pick, or a press of Play
+// again, for the whole of it.
 
 import (
 	"context"
@@ -15,6 +23,7 @@ import (
 	"slices"
 	"time"
 
+	"cinedikt/internal/daily"
 	"cinedikt/internal/notify"
 )
 
@@ -30,7 +39,8 @@ const (
 // nothing here — the row simply stays uncoloured until the next round.
 const ColourFetch = 10 * time.Second
 
-// ColourJob gives every film the opening screen might show a colour.
+// ColourJob gives every film the opening screen might show a colour, and
+// every movie that could be a Daily answer.
 type ColourJob struct {
 	Store  *Store
 	Logger *slog.Logger
@@ -62,7 +72,7 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 	if outstanding == 0 {
 		return nil
 	}
-	track := newProgress(j.Logger, "colouring the opening screen", outstanding)
+	track := newProgress(j.Logger, "colouring posters", outstanding)
 	track.watch(j.Notify, notify.Event{Job: notify.JobColours})
 	run := pass{sink: j.Notify, job: notify.JobColours}
 
@@ -85,7 +95,7 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 		fresh := slices.DeleteFunc(rows, func(r uncolouredRow) bool { return tried[r.tconst] })
 		if len(fresh) == 0 {
 			track.done(done + failed)
-			j.Logger.Info("opening screen coloured", "filled", done, "failed", failed)
+			j.Logger.Info("posters coloured", "filled", done, "failed", failed)
 			// Not one poster loading is the image hosts, or the way to
 			// them, rather than a batch of bad addresses.
 			if failed >= failedLookups && done == 0 {
@@ -114,7 +124,7 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 				}
 				failed++
 				last = err
-				j.Logger.Warn("opening colour", "tconst", r.tconst, "err", err)
+				j.Logger.Warn("poster colour", "tconst", r.tconst, "err", err)
 				track.step(done + failed)
 				continue
 			}
@@ -122,7 +132,7 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 				if stopping(err) {
 					return nil
 				}
-				j.Logger.Warn("opening screen colour: save", "tconst", r.tconst, "err", err)
+				j.Logger.Warn("poster colour: save", "tconst", r.tconst, "err", err)
 				continue
 			}
 			done++
@@ -136,22 +146,35 @@ func (j *ColourJob) Run(ctx context.Context, schema string) error {
 // still represents the whole picture.
 const colourWidth = 185
 
-// uncolouredRow is one film the opening screen may show that has no
-// colour yet.
+// colourWanted is the films in schema that need a colour: the first-run
+// pool's, and every movie with at least the votes the placeholder votes
+// is given, daily.MinVotes, which could be a Daily answer.
+func colourWanted(schema, votes string) string {
+	return `
+		SELECT tconst FROM ` + schema + `.first_run
+		UNION
+		SELECT tconst FROM ` + schema + `.ratings WHERE num_votes >= ` + votes
+}
+
+// uncolouredRow is one film the opening screen may show, or the Daily
+// may pick, that has no colour yet.
 type uncolouredRow struct {
 	tconst string
 	url    string
 }
 
+// uncoloured is the next limit of them, the most voted first.
 func (s *Store) uncoloured(ctx context.Context, schema string, limit int) ([]uncolouredRow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT f.tconst, p.poster_url
-		FROM `+schema+`.first_run f
+		WITH wanted AS (`+colourWanted(schema, "$2")+`)
+		SELECT w.tconst, p.poster_url
+		FROM wanted w
 		JOIN meta.posters p USING (tconst)
+		LEFT JOIN `+schema+`.ratings r USING (tconst)
 		WHERE p.colour IS NULL
 		  AND p.poster_url IS NOT NULL AND btrim(p.poster_url) <> ''
-		ORDER BY f.num_votes DESC
-		LIMIT $1`, limit)
+		ORDER BY r.num_votes DESC NULLS LAST, w.tconst
+		LIMIT $1`, limit, daily.MinVotes)
 	if err != nil {
 		return nil, err
 	}
@@ -170,11 +193,12 @@ func (s *Store) uncoloured(ctx context.Context, schema string, limit int) ([]unc
 func (s *Store) uncolouredCount(ctx context.Context, schema string) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx, `
+		WITH wanted AS (`+colourWanted(schema, "$1")+`)
 		SELECT count(*)
-		FROM `+schema+`.first_run f
+		FROM wanted w
 		JOIN meta.posters p USING (tconst)
 		WHERE p.colour IS NULL
-		  AND p.poster_url IS NOT NULL AND btrim(p.poster_url) <> ''`).Scan(&n)
+		  AND p.poster_url IS NOT NULL AND btrim(p.poster_url) <> ''`, daily.MinVotes).Scan(&n)
 	return n, err
 }
 

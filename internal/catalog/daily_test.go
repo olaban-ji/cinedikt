@@ -926,6 +926,49 @@ func TestAPosterIsFetchedOnlyForACandidateThatWillMakeAPuzzle(t *testing.T) {
 	}
 }
 
+// TestTheColourJobColoursEveryPossibleAnswer: a movie with
+// daily.MinVotes votes is coloured ahead, though it is in no first-run
+// pool, so neither the daily pick nor Play again ever waits on its
+// poster; a movie with fewer votes outside the pool is not, as nothing
+// draws its colour.
+func TestTheColourJobColoursEveryPossibleAnswer(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	dailyFixture(t, s)
+	var png bytes.Buffer
+	if err := imagepng.Encode(&png, flat(color.RGBA{0x30, 0x50, 0xa0, 0xff})); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(png.Bytes())
+	}))
+	t.Cleanup(srv.Close)
+	for _, stmt := range []string{
+		`UPDATE meta.posters SET colour = NULL, poster_url = $1 || '/' || tconst || '.png' WHERE tconst LIKE 'tt99001%'`,
+		`INSERT INTO meta.posters (tconst, poster_url, status, fetched_at) VALUES ('tt9904011', $1 || '/tt9904011.png', 'ok', now())
+		 ON CONFLICT (tconst) DO UPDATE SET colour = NULL, poster_url = excluded.poster_url`,
+	} {
+		if _, err := s.pool.Exec(ctx, stmt, srv.URL); err != nil {
+			t.Fatalf("%v\n%s", err, stmt)
+		}
+	}
+	job := &ColourJob{Store: s, Client: srv.Client(), Logger: quietLogger()}
+	if err := job.Run(ctx, Live); err != nil {
+		t.Fatal(err)
+	}
+	var coloured, crowd int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE tconst LIKE 'tt99001%' AND colour IS NOT NULL),
+		       count(*) FILTER (WHERE tconst = 'tt9904011' AND colour IS NOT NULL)
+		FROM meta.posters`).Scan(&coloured, &crowd); err != nil {
+		t.Fatal(err)
+	}
+	if coloured != dailyCandidates || crowd != 0 {
+		t.Errorf("%d of the %d possible answers coloured, and the crowd movie %d; want all of them and not it", coloured, dailyCandidates, crowd)
+	}
+}
+
 // TestADayWithNoFairAnswerFailsThePass, and says which day: every
 // candidate was an answer within ninety days.
 func TestADayWithNoFairAnswerFailsThePass(t *testing.T) {

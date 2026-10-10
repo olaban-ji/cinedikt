@@ -71,7 +71,9 @@ var jobList = []jobInfo{
 	{notify.JobSynopses, "Synopses", "Synopses", "no OMDb key"},
 	{notify.JobTrailers, "Trailers", "Trailers", "no TMDb key"},
 	{notify.JobPeople, "People photos", "People photos", "no TMDb key"},
-	{notify.JobColours, "Opening colours", "Opening colours", ""},
+	// The opening screen's frames, and every movie that could be a Daily
+	// answer, coloured ahead.
+	{notify.JobColours, "Poster colours", "Poster colours", ""},
 	{notify.JobDaily, "Daily puzzles", "Daily puzzles", ""},
 	// The check runs on where to watch's queue, so it is off with
 	// MaxMind credentials set when where to watch is: no
@@ -89,8 +91,10 @@ func info(id string) jobInfo {
 }
 
 // loudFor says whether a job's trouble may make a sound at all. The
-// opening colours are a placeholder tint on the first screen while its
-// posters load; nothing about them is worth waking anyone for.
+// poster colours are a placeholder tint on the first screen while its
+// posters load, and the Daily's hidden card, which a pick works out for
+// itself when the job has not; nothing about them is worth waking anyone
+// for.
 func loudFor(id string) bool { return id != notify.JobColours }
 
 // part is one push's worth of words. Several parts queued within a

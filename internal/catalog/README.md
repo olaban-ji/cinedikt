@@ -310,9 +310,12 @@ Also in. Only then its poster's colour (`candidateColour`): the colour
 job's, or, for a poster the job has not reached, one worked out now
 with `PosterColour`, at the job's `colourWidth` and then the address
 kept, and saved back to `meta.posters.colour` as the job would save
-it. The colour job colours only `first_run`, so most candidates have
-none yet, and asking it last means a poster is fetched only for one
-that will make a puzzle
+it. The colour job colours every movie with `daily.MinVotes` votes as
+well as `first_run` (`colourWanted`), about 1,200 posters beyond the
+pool, so a candidate is without a colour only until the job reaches
+it: on a new catalog, or one a new import has just lifted over the
+line. Asking it last means a poster is fetched only for one that will
+make a puzzle
 (`TestAPosterIsFetchedOnlyForACandidateThatWillMakeAPuzzle`). A poster
 that cannot be read is no colour, and the candidate goes; its error,
 which names the poster's address and so the movie, is never passed on.
