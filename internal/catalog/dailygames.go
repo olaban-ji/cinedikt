@@ -407,6 +407,9 @@ func (s *Store) DailyDayStats(ctx context.Context, day time.Time) (*notify.Daily
 		if st.Won {
 			d.Solved++
 			names += st.Seen()
+			if st.Seen() == 1 {
+				d.First++
+			}
 		}
 		if len(st.Facts) > 0 {
 			d.Facts++

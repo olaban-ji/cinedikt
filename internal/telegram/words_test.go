@@ -309,6 +309,19 @@ func TestTheDailyFiguresAreWholePercentagesOfTheFinishedGames(t *testing.T) {
 		got[1][1] != "50% bought a fact · 0% opened a map · median 0" {
 		t.Errorf("a day nobody solved, without the names: %q", got)
 	}
+	// Solved, and the solves at the first name said as a third line,
+	// even when there are none of them.
+	s.Jobs[notify.JobDaily].Daily = &notify.DailyDay{No: 4, Played: 5, Finished: 4, Solved: 3, Names: 2, First: 1}
+	if got := s.dailyLines(); len(got) != 3 || got[2] != [2]string{"First-name solves", "1 · 33% of solves"} {
+		t.Errorf("a day with a solve at the first name: %q", got)
+	}
+	s.Jobs[notify.JobDaily].Daily.First = 0
+	if got := s.dailyLines(); len(got) != 3 || got[2][1] != "0 · 0% of solves" {
+		t.Errorf("a day with none at the first name: %q", got)
+	}
+	// The longest each line can be, every figure at its widest.
+	s.Jobs[notify.JobDaily].Daily = &notify.DailyDay{No: 12345, Played: 9999999, Finished: 9999999, Solved: 9999999,
+		Names: 6, First: 9999999, Facts: 9999999, Sheets: 9999999, Median: 1000}
 	for _, l := range s.dailyLines() {
 		if n := len([]rune(boardLine(markFigures, l[0], l[1]))); n > lineMax+len("<b></b>") {
 			t.Errorf("%q runs past the line", l)

@@ -163,6 +163,11 @@ type DailyDay struct {
 	// average in them, before the movie was named.
 	Solved int64
 	Names  float64
+	// First is the games won at the first name, the sixth-billed alone,
+	// with nothing more shown. A player who looked the answer up, from a
+	// private window that gave the game up, say, wins this way, so a day
+	// with many more of them than usual is worth a look.
+	First int64
 	// Facts is the finished games that bought at least one fact, and
 	// Sheets the ones that opened a Movies sheet.
 	Facts, Sheets int64

@@ -431,9 +431,13 @@ func (s *state) footer(w writer, at place) string {
 
 // dailyLines are the Daily job's figures for yesterday's puzzle, as
 // label and text, under the job's own line: whether the puzzles are too
-// hard or too easy, which no rule can say ahead of real games. Two
-// lines, since one would run past lineMax: how many played and how they
-// did, then what they leaned on. None before the job has said.
+// hard or too easy, which no rule can say ahead of real games. Up to
+// three lines, since one would run past lineMax: how many played and how
+// they did, then what they leaned on, then, once anyone has solved it,
+// how many did so at the first name. That last is what someone who
+// looked the answer up does, from a private window that gave the game
+// up, say, so a day with many more than usual is worth a look. None
+// before the job has said.
 func (s *state) dailyLines() [][2]string {
 	j := s.Jobs[notify.JobDaily]
 	if j == nil || j.Daily == nil {
@@ -453,7 +457,11 @@ func (s *state) dailyLines() [][2]string {
 	}
 	help := share(d.Facts, d.Finished) + " bought a fact · " + share(d.Sheets, d.Finished) +
 		" opened a map · median " + count(int64(d.Median))
-	return [][2]string{{"Yesterday's Daily", played}, {"Daily help", help}}
+	lines := [][2]string{{"Yesterday's Daily", played}, {"Daily help", help}}
+	if d.Solved > 0 {
+		lines = append(lines, [2]string{"First-name solves", count(d.First) + " · " + share(d.First, d.Solved) + " of solves"})
+	}
+	return lines
 }
 
 // share is part of all as a whole percentage, rounded to the nearest:

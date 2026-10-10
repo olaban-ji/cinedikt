@@ -72,7 +72,7 @@ func boards(t *testing.T) map[string]*policy {
 	figures := quietDay(t)
 	figures.note(notify.Event{Job: notify.JobDaily, Kind: notify.Checked, Daily: &notify.DailyDay{
 		No: 3, Day: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), Played: 1287, Finished: 1204,
-		Solved: 771, Names: 2.64, Facts: 494, Sheets: 265, Median: 700}})
+		Solved: 771, Names: 2.64, First: 31, Facts: 494, Sheets: 265, Median: 700}})
 	out["daily-figures"] = figures
 	nobody := quietDay(t)
 	nobody.note(notify.Event{Job: notify.JobDaily, Kind: notify.Checked, Daily: &notify.DailyDay{

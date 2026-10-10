@@ -1406,7 +1406,9 @@ func TestTheStandingIsYourPlaceOnTheWeeksBoard(t *testing.T) {
 // from replaying every game of the day, so a game's names are the ones
 // its player saw, not the six its end shows; a game started and not
 // finished counts as played and nothing else; and the median is of the
-// finished games, a miss scoring nothing. The job's hook reads the day
+// finished games, a miss scoring nothing. A solve at the first name is
+// one where the sixth-billed was all its player saw, and a game given
+// up after one name is no such solve. The job's hook reads the day
 // before its own, and a day with no puzzle has no figures.
 func TestADaysFiguresAreItsGamesReplayed(t *testing.T) {
 	s := testStore(t)
@@ -1443,7 +1445,7 @@ func TestADaysFiguresAreItsGamesReplayed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := notify.DailyDay{No: p.No, Day: p.Day, Played: 4, Finished: 3, Solved: 2, Names: 1.5, Facts: 1, Sheets: 1, Median: 800}
+	want := notify.DailyDay{No: p.No, Day: p.Day, Played: 4, Finished: 3, Solved: 2, Names: 1.5, First: 1, Facts: 1, Sheets: 1, Median: 800}
 	if d == nil || *d != want {
 		t.Errorf("figures = %+v\nwant      %+v", d, want)
 	}
