@@ -54,20 +54,17 @@ func TestNextShowsTheFirstHiddenNameForAHundred(t *testing.T) {
 }
 
 // TestEachFactIsBoughtOnceAtItsPrice: length and rating for fifty, the
-// genre, the decade and the five years for a hundred, the director for
-// two hundred and fifty. The five years only after the decade, and the
-// old game's clues and the overlap are no moves at all.
+// genre and the decade for a hundred, the director for two hundred and
+// fifty. The old game's clues, the overlap and the five years are no
+// moves at all.
 func TestEachFactIsBoughtOnceAtItsPrice(t *testing.T) {
 	g := play(t, matrix())
-	if err := g.try(KindYears, ""); !errors.Is(err, ErrBad) {
-		t.Errorf("the five years before the decade: %v, want bad", err)
-	}
 	spent := 0
 	for _, c := range []struct {
 		kind string
 		cost int
 	}{
-		{KindLength, 50}, {KindRating, 50}, {KindGenre, 100}, {KindDecade, 100}, {KindYears, 100}, {KindDirector, 250},
+		{KindLength, 50}, {KindRating, 50}, {KindGenre, 100}, {KindDecade, 100}, {KindDirector, 250},
 	} {
 		s := g.do(c.kind, "x")
 		spent += c.cost
@@ -83,12 +80,12 @@ func TestEachFactIsBoughtOnceAtItsPrice(t *testing.T) {
 			t.Errorf("%s again: %v, want known", kind, err)
 		}
 	}
-	for _, kind := range []string{"flip", "actor", "genres", "year", "story", "trailer", "overlap", ""} {
+	for _, kind := range []string{"flip", "actor", "genres", "year", "story", "trailer", "overlap", "years", ""} {
 		if err := g.try(kind, ""); !errors.Is(err, ErrBad) {
 			t.Errorf("%q: %v, want bad", kind, err)
 		}
 	}
-	if s := g.state(); s.Pts != 350 || shownSlots(s)[0] != 0 || len(shownSlots(s)) != 1 {
+	if s := g.state(); s.Pts != 450 || shownSlots(s)[0] != 0 || len(shownSlots(s)) != 1 {
 		t.Errorf("facts changed who is showing: %+v", s)
 	}
 }
@@ -102,11 +99,12 @@ func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 	for _, kind := range factKinds {
 		g.do(kind, "")
 	}
-	if s := g.state(); s.Pts != 350 {
-		t.Fatalf("set-up spent to %d, want 350", s.Pts)
+	if s := g.state(); s.Pts != 450 {
+		t.Fatalf("set-up spent to %d, want 450", s.Pts)
 	}
-	g.do(KindNext, "")
-	g.do(KindNext, "")
+	for range 3 {
+		g.do(KindNext, "")
+	}
 	if s := g.do(KindNext, ""); s.Pts != 50 || s.Done {
 		t.Errorf("a next name with 150 left: %+v", s)
 	}
@@ -132,10 +130,10 @@ func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 	}
 
 	exact := play(t, matrix())
-	for range 3 {
+	for range 4 {
 		exact.do(KindNext, "")
 	}
-	for _, kind := range []string{KindRating, KindGenre, KindDecade, KindYears, KindDirector} {
+	for _, kind := range []string{KindRating, KindGenre, KindDecade, KindDirector} {
 		exact.do(kind, "")
 	}
 	if s := exact.state(); s.Pts != 100 {
@@ -149,8 +147,8 @@ func TestAPurchaseMustLeaveAPoint(t *testing.T) {
 		t.Errorf("a 100-point wrong guess with 100 left: %+v", s)
 	}
 	// It still showed the next name, as any wrong guess does: seen.
-	if s.Seen() != 5 || s.via[4] != ViaGuess {
-		t.Errorf("the guess that ran out showed %d names, Fishburne by %q", s.Seen(), s.via[4])
+	if s.Seen() != 6 || s.via[5] != ViaGuess {
+		t.Errorf("the guess that ran out showed %d names, Keanu by %q", s.Seen(), s.via[5])
 	}
 	if m := exact.moves[len(exact.moves)-1]; m.Cost != 100 || m.Guess == nil {
 		t.Errorf("the guess that ran out was recorded as %+v", m)
@@ -187,6 +185,37 @@ func TestAnOverlapIsNoMoveAtAll(t *testing.T) {
 	}
 }
 
+// TestTheFiveYearsAreNoMoveAtAll: the range Name Drop sold inside the
+// decade is gone. Asked for, before the decade or after it, it is
+// refused as bad, as a kind that never was; a game holding one replays
+// it as nothing, costing nothing, buying nothing, saying nothing and
+// with no line in the log, as any kind the engine does not know, while
+// its seq still counts it.
+func TestTheFiveYearsAreNoMoveAtAll(t *testing.T) {
+	p := matrix()
+	g := play(t, p)
+	if err := g.try("years", ""); !errors.Is(err, ErrBad) {
+		t.Errorf("the five years before the decade: %v, want bad", err)
+	}
+	g.do(KindDecade, "")
+	if err := g.try("years", ""); !errors.Is(err, ErrBad) {
+		t.Errorf("the five years after the decade: %v, want bad", err)
+	}
+	g.moves = append(g.moves, Move{Seq: 2, Key: "key-years", Kind: "years", Cost: 100})
+	s := g.do(KindRating, "")
+	if s.Pts != Start-DecadeCost-RatingCost || len(s.Facts) != 2 || s.Facts["years"] {
+		t.Errorf("replayed: %d points, facts %v", s.Pts, s.Facts)
+	}
+	game := Render(p, g.record(), live)
+	if body := rendered(t, game); strings.Contains(body, "years") || strings.Contains(body, "1995") {
+		t.Errorf("a recorded five years is said: %s", body)
+	}
+	if log := rendered(t, game.Log); log != `[{"type":"fact","kind":"decade","cost":100},{"type":"fact","kind":"rating","cost":50}]` ||
+		game.Seq != 3 || game.Pts != 850 {
+		t.Errorf("log %s, seq %d, %d points", log, game.Seq, game.Pts)
+	}
+}
+
 // TestOneSheetIsOpenedAGameForNothing: the Movies sheet a game reads is
 // chosen once, from the names showing, and costs nothing, so it is
 // opened even with fifty points left. Anyone hidden, a director, someone
@@ -209,14 +238,14 @@ func TestOneSheetIsOpenedAGameForNothing(t *testing.T) {
 	for _, kind := range factKinds {
 		g.do(kind, "")
 	}
-	for range 3 {
+	for range 4 {
 		g.do(KindNext, "")
 	}
 	if s := g.state(); s.Pts != 50 || s.Sheet != "" {
 		t.Fatalf("set-up spent to %d with sheet %q, want 50 and none", s.Pts, s.Sheet)
 	}
 	s := g.do(KindSheet, "nm0005251")
-	if s.Pts != 50 || s.Sheet != "nm0005251" || s.Done || len(shownSlots(s)) != 4 {
+	if s.Pts != 50 || s.Sheet != "nm0005251" || s.Done || len(shownSlots(s)) != 5 {
 		t.Errorf("after opening Moss's sheet: %d points, sheet %q, showing %v", s.Pts, s.Sheet, shownSlots(s))
 	}
 	if m := g.moves[len(g.moves)-1]; m.Kind != KindSheet || m.Arg != "nm0005251" || m.Cost != 0 || m.Guess != nil {
@@ -407,9 +436,25 @@ func TestTheBandsAreTheFactsRanges(t *testing.T) {
 			t.Errorf("RatingBand(%v) = %d, want %d", c.rating, got, c.want)
 		}
 	}
-	for year, want := range map[int][2]int{1999: {1990, 1995}, 1990: {1990, 1990}, 1994: {1990, 1990}, 1995: {1990, 1995}, 2000: {2000, 2000}, 2026: {2020, 2025}} {
-		if Decade(year) != want[0] || Years(year) != want[1] {
-			t.Errorf("%d is the %d decade and the %d years, want %v", year, Decade(year), Years(year), want)
+	for year, want := range map[int]int{1999: 1990, 1990: 1990, 1989: 1980, 2000: 2000, 2026: 2020} {
+		if got := Decade(year); got != want {
+			t.Errorf("Decade(%d) = %d, want %d", year, got, want)
+		}
+	}
+}
+
+// TestTheRatingFloorsAreTheBandsEdges: each floor RatingFloors gives a
+// query is where RatingBand steps up, a tenth below it the band before,
+// so a query banding by them bands as the facts do.
+func TestTheRatingFloorsAreTheBandsEdges(t *testing.T) {
+	floors := RatingFloors()
+	if !slices.Equal(floors, []float64{6, 7, 8}) {
+		t.Errorf("RatingFloors() = %v, want [6 7 8]", floors)
+	}
+	for i, floor := range floors {
+		if RatingBand(floor) != i+1 || RatingBand(floor-0.1) != i {
+			t.Errorf("floor %v: RatingBand is %d there and %d a tenth below, want %d and %d",
+				floor, RatingBand(floor), RatingBand(floor-0.1), i+1, i)
 		}
 	}
 }

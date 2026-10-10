@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   DailyAlso,
   DailyEntry,
+  DailyFactKind,
   DailyFacts,
   DailyGame,
   DailyGuess,
@@ -132,6 +133,7 @@ import {
   countdown,
   dailyDateText,
   dailyDayText,
+  decadeSpan,
   decadeText,
   dropFailed,
   dropKeyframes,
@@ -222,9 +224,7 @@ import {
   weekLetters,
   weekdayOf,
   wrongCost,
-  yearSpan,
   yearsShown,
-  yearsText,
   type GuessFound,
 } from './daily';
 
@@ -360,7 +360,7 @@ describe('the rules’ prices', () => {
     expect(DAILY_START).toBe(1000);
     expect(CAST_SIZE).toBe(6);
     expect(NEXT_COST).toBe(100);
-    expect(FACT_COST).toEqual({ length: 50, rating: 50, genre: 100, decade: 100, years: 100, director: 250 });
+    expect(FACT_COST).toEqual({ length: 50, rating: 50, genre: 100, decade: 100, director: 250 });
   });
 
   it('make each wrong guess dearer than the last: 100, 150, 200, and on by 50', () => {
@@ -467,9 +467,8 @@ describe('the facts', () => {
     expect(lengthBandText(9)).toBe('');
   });
 
-  it('write the decade and the five years from their first years', () => {
+  it('write the decade from its first year', () => {
     expect(decadeText(1990)).toBe('1990s');
-    expect(yearsText(1995)).toBe('1995–1999');
   });
 
   it('write a runtime exactly at the end, in hours and minutes', () => {
@@ -497,24 +496,17 @@ describe('the facts', () => {
     ]);
   });
 
-  it('follow the decade with Narrow the years, and put the five years in its place once bought', () => {
+  it('put the decade bought in its own place, with nothing for sale after it to narrow the years further', () => {
     expect(factItems(PLAYING).map((f) => [f.label, f.value || f.price])).toEqual([
       ['Length range', '−50'],
       ['Rating range', '−50'],
       ['Genre', '−100'],
       ['Decade', '1990s'],
-      ['Narrow the years', '−100'],
       ['Director', '−250'],
     ]);
-    expect(factItems(PLAYING)[4].aria).toBe('Narrow the years to five. It costs 100 points.');
-    const narrowed = factItems({ ...PLAYING, facts: { decade: 1990, years: 1995 } });
-    expect(narrowed.map((f) => [f.label, f.value || f.price])).toEqual([
-      ['Length range', '−50'],
-      ['Rating range', '−50'],
-      ['Genre', '−100'],
-      ['Years', '1995–1999'],
-      ['Director', '−250'],
-    ]);
+    expect(FACT_ORDER).toEqual(['length', 'rating', 'genre', 'decade', 'director']);
+    const copy = Object.values(FACTS).flatMap((f) => Object.values(f));
+    expect(copy.filter((c) => /years|five/i.test(c))).toEqual([]);
   });
 
   it('say what each bought fact is, and nothing for one not bought', () => {
@@ -523,7 +515,6 @@ describe('the facts', () => {
       rating: 3,
       genre: ['Action', 'Sci-Fi'],
       decade: 1990,
-      years: 1995,
       director: [LANA, LILLY],
     };
     expect(
@@ -534,7 +525,7 @@ describe('the facts', () => {
       'Length 2h to 2h 30m',
       'Rating 8.0 or higher',
       'Genre Action, Sci-Fi',
-      'Years 1995–1999',
+      'Decade 1990s',
       'Director Lana Wachowski and Lilly Wachowski',
     ]);
     expect(factValue('genre', {})).toBe('');
@@ -558,7 +549,29 @@ describe('the facts', () => {
     ]);
     expect(factsHeading(false)).toBe('Buy a fact');
     expect(factsHeading(true)).toBe('About the movie');
-    expect(FACTS_NOTE).toBe('Each one also marks the map');
+    expect(FACTS_NOTE).toBe('Decade and rating mark the map');
+  });
+
+  it('name only the facts that mark the map, beside the facts and in How it works', () => {
+    // One of each fact bought alone: the note, and How it works' line on
+    // the map, name a fact exactly when buying it reads titles there, so
+    // neither promises the genre or the length draws anything.
+    const alone: Record<DailyFactKind, DailyFacts> = {
+      length: { length: 2 },
+      rating: { rating: 3 },
+      genre: { genre: ['Action', 'Sci-Fi'] },
+      decade: { decade: 1990 },
+      director: { director: [LANA] },
+    };
+    const mapLine = HOW_IT_WORKS.items[4].split('. ').at(-1) ?? '';
+    expect(mapLine).toBe('Titles only show inside the decade or rating range you’ve bought.');
+    for (const kind of FACT_ORDER) {
+      const word = FACTS[kind].offer.split(' ')[0].toLowerCase();
+      const marks = rangeBought(alone[kind]);
+      expect(FACTS_NOTE.toLowerCase().includes(word), `${kind} in the note`).toBe(marks);
+      expect(mapLine.toLowerCase().includes(word), `${kind} in How it works`).toBe(marks);
+    }
+    expect(FACT_ORDER.filter((kind) => rangeBought(alone[kind]))).toEqual(['rating', 'decade']);
   });
 
   it('nudge the reader once three names are showing and not one fact has been bought', () => {
@@ -887,18 +900,28 @@ describe('the result', () => {
 
   it('lists what was paid for: each fact in the row’s order, then the wrong guesses', () => {
     const log: DailyEntry[] = [
-      { type: 'fact', kind: 'years', cost: 100 },
       { type: 'fact', kind: 'decade', cost: 100 },
+      { type: 'fact', kind: 'rating', cost: 50 },
       THIRTEENTH,
       { ...SPEED, cost: 150 },
     ];
     expect(paidFor(log)).toEqual([
+      { label: 'Rating', price: '−50' },
       { label: 'Decade', price: '−100' },
-      { label: 'Five-year range', price: '−100' },
       { label: '2 wrong guesses', price: '−250' },
     ]);
     expect(paidFor([{ type: 'next', cost: 100, slot: 1 }, { type: 'win' }])).toEqual([]);
-    expect(FACT_ORDER.map((k) => FACTS[k].paid)).toEqual(['Length', 'Rating', 'Genre', 'Decade', 'Five-year range', 'Director']);
+    expect(FACT_ORDER.map((k) => FACTS[k].paid)).toEqual(['Length', 'Rating', 'Genre', 'Decade', 'Director']);
+  });
+
+  it('passes over a fact no longer sold, should a log from before ever carry one', () => {
+    // The five years are gone, and the server replays a recorded "years"
+    // as nothing; were one ever handed back, it is neither paid for nor
+    // used, rather than an empty chip or "undefined" in the share text.
+    const old = { type: 'fact', kind: 'years', cost: 100 } as unknown as DailyEntry;
+    const log: DailyEntry[] = [{ type: 'fact', kind: 'decade', cost: 100 }, old];
+    expect(paidFor(log)).toEqual([{ label: 'Decade', price: '−100' }]);
+    expect(usedText({ log })).toBe('one name and the decade');
   });
 
   it('says the streak once today is in it', () => {
@@ -1065,8 +1088,8 @@ describe('the words', () => {
       'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
       'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
       'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
-      'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade and then a five-year range, or the director.',
-      'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the ranges you’ve bought.',
+      'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade, or the director.',
+      'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the decade or rating range you’ve bought.',
       'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
     ]);
     expect(HOW_IT_WORKS.then).toBe(
@@ -1120,10 +1143,10 @@ describe('the banner’s line', () => {
 });
 
 describe('the Movies sheet', () => {
-  it('takes in the years bought, the five years over the decade', () => {
-    expect(yearSpan({})).toBeNull();
-    expect(yearSpan({ decade: 1990 })).toEqual([1990, 1999]);
-    expect(yearSpan({ decade: 1990, years: 1995 })).toEqual([1995, 1999]);
+  it('takes in the decade bought, its first year to its last', () => {
+    expect(decadeSpan({})).toBeNull();
+    expect(decadeSpan({ decade: 1990 })).toEqual([1990, 1999]);
+    expect(decadeSpan({ decade: 2020 })).toEqual([2020, 2029]);
   });
 
   it('takes in the rating band bought, up to but not including its ceiling', () => {
@@ -1132,18 +1155,30 @@ describe('the Movies sheet', () => {
     expect(ratingSpan({ rating: 3 })).toEqual([8, Infinity]);
   });
 
-  it('counts the decade, the years, a rating band and the genre as ranges, and never the length or the director', () => {
+  it('counts the decade and a rating band as ranges, and never the genre, the length or the director', () => {
     expect(rangeBought({})).toBe(false);
     expect(rangeBought({ length: 2, director: [LANA] })).toBe(false);
-    for (const facts of [{ decade: 1990 }, { decade: 1990, years: 1995 }, { rating: 0 }, { genre: [] }]) {
+    // The genre reads nothing on the map, whatever it is.
+    expect(rangeBought({ genre: ['Action', 'Sci-Fi'] })).toBe(false);
+    expect(rangeBought({ genre: [] })).toBe(false);
+    const ranged: DailyFacts[] = [{ decade: 1990 }, { rating: 0 }, { rating: 3, genre: ['Drama'] }, { decade: 1990, rating: 2 }];
+    for (const facts of ranged) {
       expect(rangeBought(facts), JSON.stringify(facts)).toBe(true);
     }
   });
 
-  it('asks for the movies again whenever a range is bought, and not for anything else', () => {
+  it('asks for the movies again whenever the decade or a rating range is bought, and not for anything else', () => {
     const none = rangesKey({});
     expect(rangesKey({ length: 2, director: [LANA] })).toBe(none);
-    const keys = [none, rangesKey({ decade: 1990 }), rangesKey({ decade: 1990, years: 1995 }), rangesKey({ rating: 0 }), rangesKey({ genre: [] })];
+    expect(rangesKey({ genre: ['Action', 'Sci-Fi'] })).toBe(none);
+    expect(rangesKey({ decade: 1990, genre: ['Action'] })).toBe(rangesKey({ decade: 1990 }));
+    const keys = [
+      none,
+      rangesKey({ decade: 1990 }),
+      rangesKey({ rating: 0 }),
+      rangesKey({ rating: 1 }),
+      rangesKey({ decade: 1990, rating: 0 }),
+    ];
     expect(new Set(keys).size).toBe(keys.length);
   });
 
@@ -1160,15 +1195,21 @@ describe('the Movies sheet', () => {
 
   it('says where titles show, and once ranges are bought which, and that today’s movie is unmarked', () => {
     expect(sheetLegend({})).toBe(
-      'Titles only show inside the ranges you buy: the decade, the years, a rating range or the genre. Today’s movie is one of these cards.',
+      'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.',
     );
-    // A length or a director is not a range: nothing more can be read.
+    // A length, a director or a genre is not a range: nothing more can be
+    // read, and the genre is never named as one.
     expect(sheetLegend({ length: 2, director: [LANA] })).toBe(sheetLegend({}));
+    expect(sheetLegend({ genre: ['Action', 'Sci-Fi'] })).toBe(sheetLegend({}));
     expect(sheetLegend({ decade: 1990, rating: 3 })).toBe(
       'Titles show inside your ranges: 1990s · rated 8.0 or higher. Today’s movie is one of these cards, but it isn’t marked.',
     );
-    expect(sheetLegend({ decade: 1990, years: 1995, genre: ['Action', 'Sci-Fi'] })).toBe(
-      'Titles show inside your ranges: 1995–1999 · Action, Sci-Fi. Today’s movie is one of these cards, but it isn’t marked.',
+    // Only the ranges bought are listed.
+    expect(sheetLegend({ decade: 1990, genre: ['Action', 'Sci-Fi'] })).toBe(
+      'Titles show inside your ranges: 1990s. Today’s movie is one of these cards, but it isn’t marked.',
+    );
+    expect(sheetLegend({ rating: 2, genre: ['Action', 'Sci-Fi'], length: 1 })).toBe(
+      'Titles show inside your ranges: rated 7.0 to 7.9. Today’s movie is one of these cards, but it isn’t marked.',
     );
   });
 
@@ -1182,7 +1223,7 @@ describe('the Movies sheet', () => {
   it('says how to guess from it once there is something to read, and before that where the ranges are', () => {
     expect(sheetHint(150, true)).toBe('Tap a movie to guess it. A wrong guess costs 150.');
     expect(sheetHint(1200, true)).toBe('Tap a movie to guess it. A wrong guess costs 1,200.');
-    expect(sheetHint(150, false)).toBe('Buy a range to read this map. The facts are under the card.');
+    expect(sheetHint(150, false)).toBe('Buy the decade or a rating range to read this map. The facts are under the card.');
   });
 
   it('names a readable card for a screen reader, and a blank one by its year alone', () => {
@@ -1191,7 +1232,7 @@ describe('the Movies sheet', () => {
     expect(pickLine({ year: 0, rating: 7 })).toBe('IMDb 7.0');
     expect(sheetCardLabel(fugitive, false)).toBe('The Fugitive, 1993, rated 7.8');
     expect(sheetCardLabel(fugitive, true)).toBe('The Fugitive, 1993, rated 7.8, already tried');
-    expect(blankCardLabel(1985, false)).toBe('A movie from 1985. Buy a range to read it');
+    expect(blankCardLabel(1985, false)).toBe('A movie from 1985. Buy the decade or a rating range to read it');
     expect(blankCardLabel(1985, true)).toBe('A movie from 1985, outside your ranges');
   });
 
@@ -1430,7 +1471,7 @@ describe('a move', () => {
     expect(moveSig({ kind: 'next' }, 3)).toBe('3:next:');
     expect(moveSig({ kind: 'next' }, 3)).not.toBe(moveSig({ kind: 'next' }, 4));
     expect(moveSig({ kind: 'buy', fact: 'decade' }, 3)).toBe('3:buy:decade');
-    expect(moveSig({ kind: 'buy', fact: 'decade' }, 3)).not.toBe(moveSig({ kind: 'buy', fact: 'years' }, 3));
+    expect(moveSig({ kind: 'buy', fact: 'decade' }, 3)).not.toBe(moveSig({ kind: 'buy', fact: 'rating' }, 3));
     expect(moveSig({ kind: 'guess', film: 'tt1' }, 3)).toBe('3:guess:tt1');
     expect(moveSig({ kind: 'reveal' }, 5)).toBe('5:reveal:');
     // A map chosen is the same request from the same point for the same
@@ -1446,7 +1487,9 @@ describe('a refused move', () => {
     expect(refusalText('known', 'guess')).toBe('You’ve already tried that one');
     expect(refusalText('known', 'buy')).toBe('You already have that fact.');
     expect(refusalText('known', 'next')).toBe('Everyone’s showing.');
-    expect(refusalText('bad', 'buy')).toBe('Buy the decade first.');
+    // Nothing for sale waits on another fact, so a purchase refused as
+    // bad has no words of its own.
+    expect(refusalText('bad', 'buy')).toBe(UNREACHABLE);
     expect(refusalText('bad', 'movies')).toBe('That name isn’t showing yet.');
     expect(refusalText('day', 'guess')).toBe(DAY_OVER);
   });
@@ -1809,7 +1852,6 @@ describe('a move the server would refuse', () => {
     expect(earlyRefusal(gameOf({ slots: ALL_SHOWN }), { kind: 'next' })).toBe('Everyone’s showing.');
     expect(earlyRefusal(gameOf({ pts: 100 }), { kind: 'next' })).toBe('Not enough points for that.');
     expect(earlyRefusal(PLAYING, { kind: 'buy', fact: 'decade' })).toBe('You already have that fact.');
-    expect(earlyRefusal(gameOf(), { kind: 'buy', fact: 'years' })).toBe('Buy the decade first.');
     expect(earlyRefusal(gameOf({ pts: 250 }), { kind: 'buy', fact: 'director' })).toBe('Not enough points for that.');
     expect(earlyRefusal(PLAYING, { kind: 'guess', film: THIRTEENTH.guess.id })).toBe('You’ve already tried that one');
     // One Movies map a game, and only a showing name's.
@@ -1824,7 +1866,9 @@ describe('a move the server would refuse', () => {
 
   it('is nothing for a move worth sending', () => {
     expect(earlyRefusal(gameOf(), { kind: 'next' })).toBe('');
-    expect(earlyRefusal(PLAYING, { kind: 'buy', fact: 'years' })).toBe('');
+    expect(earlyRefusal(PLAYING, { kind: 'buy', fact: 'rating' })).toBe('');
+    // The decade is the last word on the years: nothing waits on it.
+    expect(earlyRefusal(gameOf(), { kind: 'buy', fact: 'decade' })).toBe('');
     expect(earlyRefusal(gameOf({ pts: 51 }), { kind: 'buy', fact: 'length' })).toBe('');
     expect(earlyRefusal(PLAYING, { kind: 'guess', film: MATRIX.id })).toBe('');
     // A wrong guess is never refused for its price: one the points cannot

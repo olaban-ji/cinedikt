@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// The kinds of move a game records. The six facts share their names
+// The kinds of move a game records. The five facts share their names
 // with the API's "kind" field. A sheet is the one Movies sheet a game
 // opens (daily.go): it costs nothing, and is a move so that it is
 // recorded, once, holding the game's row like any other, and two tabs
@@ -16,7 +16,6 @@ const (
 	KindRating   = "rating"
 	KindGenre    = "genre"
 	KindDecade   = "decade"
-	KindYears    = "years"
 	KindDirector = "director"
 	KindSheet    = "sheet"
 	KindGuess    = "guess"
@@ -29,13 +28,13 @@ var factCost = map[string]int{
 	KindRating:   RatingCost,
 	KindGenre:    GenreCost,
 	KindDecade:   DecadeCost,
-	KindYears:    YearsCost,
 	KindDirector: DirectorCost,
 }
 
 // IsFact is whether kind is one of the facts "buy" sells. The old game's
-// clues (actor, genres, year, story) are not, and are refused as bad
-// like any kind that never was.
+// clues (actor, genres, year, story) are not, nor Name Drop's five years
+// inside the decade (daily.go), and each is refused as bad like any kind
+// that never was.
 func IsFact(kind string) bool {
 	_, ok := factCost[kind]
 	return ok
@@ -222,9 +221,9 @@ func (s *State) Step(p *Puzzle, m Move) {
 		// can go on from it. None should ever be met: Apply refuses
 		// them, the moves table's check refuses them, the old game's
 		// moves went with its tables when meta.sql dropped them, and the
-		// test games that bought an overlap, Name Drop's first way of
-		// combining two names, went when meta.sql took it out of the
-		// check.
+		// games that bought an overlap, Name Drop's first way of
+		// combining two names, or the five years inside the decade, went
+		// when meta.sql took each out of the check.
 		return
 	}
 	if s.Done && !s.Won {
@@ -290,9 +289,6 @@ func Apply(p *Puzzle, s *State, r Request, looked *Looked) (Move, error) {
 		m.Arg = ""
 		if s.Facts[r.Kind] {
 			return Move{}, ErrKnown
-		}
-		if r.Kind == KindYears && !s.Facts[KindDecade] {
-			return Move{}, ErrBad
 		}
 		m.Cost = factCost[r.Kind]
 	case r.Kind == KindSheet:

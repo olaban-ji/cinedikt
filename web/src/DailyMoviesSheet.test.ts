@@ -53,7 +53,7 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
   };
 }
 
-const read = (id: string, title: string, year: number, rating: number): DailyMovie => ({ id, title, year, rating, genres: ['Drama'] });
+const read = (id: string, title: string, year: number, rating: number): DailyMovie => ({ id, title, year, rating });
 
 // With the 1990s bought: the three inside readable, today's among them,
 // and the rest blank, as the server sends them.
@@ -187,22 +187,38 @@ describe('before any range is bought', () => {
   it('counts the movies, and says titles only show inside the ranges bought', () => {
     expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">6 movies · on Cinedikt</p>');
     expect(html).toContain(
-      '<p class="cd-msheet-legend">Titles only show inside the ranges you buy: the decade, the years, a rating range or the genre. Today’s movie is one of these cards.</p>',
+      '<p class="cd-msheet-legend">Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.</p>',
     );
   });
 
   it('draws every card as a blank tile: an empty poster, no title, no rating, faded, and not to be pressed', () => {
     expect(count(html, 'class="cd-msheet-card cd-msheet-card-blank"')).toBe(6);
     expect(html).toMatch(
-      /<button type="button" class="cd-msheet-card cd-msheet-card-blank" style="left:\d+px;top:\d+px;width:112px;height:42px;opacity:0.3" aria-label="A movie from 1983. Buy a range to read it" disabled=""><span class="cd-msheet-poster" aria-hidden="true"><\/span><\/button>/,
+      /<button type="button" class="cd-msheet-card cd-msheet-card-blank" style="left:\d+px;top:\d+px;width:112px;height:42px;opacity:0.3" aria-label="A movie from 1983. Buy the decade or a rating range to read it" disabled=""><span class="cd-msheet-poster" aria-hidden="true"><\/span><\/button>/,
     );
     expect(html).not.toContain('cd-msheet-card-title');
     expect(html).not.toContain('cd-msheet-card-foot');
     expect(html).not.toContain('aria-pressed');
   });
 
-  it('points the reader at the facts under the card', () => {
-    expect(html).toContain('<span class="cd-msheet-hint">Buy a range to read this map. The facts are under the card.</span>');
+  it('points the reader at the facts under the card that read it', () => {
+    expect(html).toContain(
+      '<span class="cd-msheet-hint">Buy the decade or a rating range to read this map. The facts are under the card.</span>',
+    );
+  });
+});
+
+describe('with only a genre bought', () => {
+  const html = draw({ game: gameOf({ facts: { genre: ['Action', 'Sci-Fi'] } }), movies: BLANKS });
+
+  it('is still unread, and never names the genre as a range nor draws it', () => {
+    expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">6 movies · on Cinedikt</p>');
+    expect(html).toContain('Titles only show inside the ranges you buy: the decade or a rating range.');
+    expect(html).toContain('Buy the decade or a rating range to read this map.');
+    expect(html).not.toContain('Action');
+    expect(html).not.toContain('Sci-Fi');
+    expect(html).not.toContain('cd-msheet-band-in');
+    expect(html).not.toContain('cd-msheet-range');
   });
 });
 
@@ -215,7 +231,13 @@ describe('the map once a range is bought', () => {
     expect(count(html, 'class="cd-msheet-line"')).toBe(6);
   });
 
-  it('washes the years bought, and draws the rating bought as a column', () => {
+  it('names the ranges bought in the legend, and says today’s movie is among the cards unmarked', () => {
+    expect(html).toContain(
+      '<p class="cd-msheet-legend">Titles show inside your ranges: 1990s · rated 7.0 to 7.9. Today’s movie is one of these cards, but it isn’t marked.</p>',
+    );
+  });
+
+  it('washes the decade bought, and draws the rating bought as a column', () => {
     expect(html).toContain('class="cd-band cd-msheet-band-in"');
     expect(html).toContain('class="cd-msheet-year cd-msheet-year-in"');
     expect(count(html, 'cd-msheet-year-in')).toBe(3);

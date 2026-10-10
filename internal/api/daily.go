@@ -900,8 +900,9 @@ type dailySheet struct {
 // reader opened in their game (POST /sheet), from the puzzle as it was
 // picked (daily.Puzzle.SheetOf), with today's movie among the cards and
 // nothing marking it out. A card is readable only inside the ranges the
-// reader has bought, and every other is blank, its year and its rating
-// to the half point; once the game is over every card is readable.
+// reader has bought, the decade and the rating band, and every other is
+// blank, its year and its rating to the half point; once the game is
+// over every card is readable.
 // Posters are read only for the readable cards (SheetWants), so a sheet
 // before any range reads none. In order, it is refused:
 //

@@ -8309,9 +8309,9 @@ button.cd-nd-tried-chip::before {
 /* ---- daily: Movies sheet ---- */
 
 /* The Movies sheet (DailyMoviesSheet.tsx): one showing name's movies on a
-   small Cinedikt map, with the facts the reader has bought drawn on it,
-   titles only inside the ranges bought and blank tiles elsewhere. A side
-   panel 12px in from the right, top and bottom; on a phone
+   small Cinedikt map, with the decade and rating band the reader has
+   bought drawn on it, titles only inside them and blank tiles elsewhere.
+   A side panel 12px in from the right, top and bottom; on a phone
    (.cd-msheet-phone, from the window's width read live in script, so the
    grabber, the drag and the height all agree with it) a bottom sheet
    whose height is set inline from the visual viewport. Over the header and the
@@ -8525,7 +8525,7 @@ button.cd-nd-tried-chip::before {
 }
 
 /* The rows are the map's own bands (.cd-band and its modifiers); a year
-   inside the decade or five years bought is washed in the accent. */
+   inside the decade bought is washed in the accent. */
 .cd-msheet-band-in {
   background: var(--accWash);
 }

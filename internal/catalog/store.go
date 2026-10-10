@@ -26,6 +26,33 @@ var metaSQL string
 //go:embed firstrun.sql
 var firstRunSQL string
 
+// eras are the opening screen's eras, each its first and last year.
+// firstrun.sql ranks the best known movies of each into the pool the
+// cold screen offers one of each from, and the Daily mixes a week's
+// answers across them (dailyCandidates), so both place a year by these
+// and nothing else. They are not equal spans: the point is a spread of
+// eras a reader recognises, and more movies anyone has heard of were
+// made recently than in the 1930s.
+var eras = [...][2]int{
+	{1920, 1959}, {1960, 1979}, {1980, 1994}, {1995, 2004},
+	{2005, 2012}, {2013, 2018}, {2019, 2023}, {2024, 2100},
+}
+
+// erasSQL is eras as the rows of a VALUES list, "(1920, 1959), (1960,
+// 1979), …", for a query to join a year to its era by: AS e (lo, hi).
+func erasSQL() string {
+	rows := make([]string, len(eras))
+	for i, e := range eras {
+		rows[i] = fmt.Sprintf("(%d, %d)", e[0], e[1])
+	}
+	return strings.Join(rows, ", ")
+}
+
+// firstRunFor is firstrun.sql for schema, with the eras written in.
+func firstRunFor(schema string) string {
+	return forSchema(strings.ReplaceAll(firstRunSQL, "{{eras}}", erasSQL()), schema)
+}
+
 // The schema a reader reads and the one a load writes. The names are
 // swapped at publish; nothing outside this file mentions either.
 const (
@@ -187,7 +214,7 @@ func (s *Store) Finish(ctx context.Context, logger *slog.Logger) error {
 	}
 	logger.Info("tables made durable", "took", time.Since(step).Round(time.Second))
 	step = time.Now()
-	if _, err := s.pool.Exec(ctx, forSchema(firstRunSQL, Staging)); err != nil {
+	if _, err := s.pool.Exec(ctx, firstRunFor(Staging)); err != nil {
 		return fmt.Errorf("catalog: build the first-run pool: %w", err)
 	}
 	logger.Info("first-run pool built", "took", time.Since(step).Round(time.Second))

@@ -90,13 +90,12 @@ func (v SlotView) MarshalJSON() ([]byte, error) {
 
 // Facts are the facts bought, each present only once it is: the length
 // and rating as bands (LengthBand, RatingBand), the genres, the decade
-// and five-year range as their first years, and the directors.
+// as its first year, and the directors.
 type Facts struct {
 	Length   *int      `json:"length,omitempty"`
 	Rating   *int      `json:"rating,omitempty"`
 	Genre    *[]string `json:"genre,omitempty"`
 	Decade   *int      `json:"decade,omitempty"`
-	Years    *int      `json:"years,omitempty"`
 	Director *[]Person `json:"director,omitempty"`
 }
 
@@ -312,10 +311,6 @@ func (p *Puzzle) facts(s *State, live Live) Facts {
 		decade := Decade(a.Year)
 		f.Decade = &decade
 	}
-	if s.Facts[KindYears] {
-		years := Years(a.Year)
-		f.Years = &years
-	}
 	if s.Facts[KindDirector] {
 		directors := p.directors(live)
 		f.Director = &directors
@@ -407,8 +402,9 @@ func (p *Puzzle) Wants(rec *Record) (films, people []string) {
 // card they all shared was the answer: matched across two people's
 // sheets by year and exact rating it gave itself away, whatever the
 // page drew. Now a card is readable only inside the ranges the player
-// has bought, and every other card is blank, only where it sits on the
-// map, its rating no finer than the half point the map places it by.
+// has bought, the decade and the rating band, and every other card is
+// blank, only where it sits on the map, its rating no finer than the
+// half point the map places it by.
 // And a game in play reads one sheet, the one it opened: inside a range
 // or two, two sheets' readable titles almost never share more than
 // today's.
@@ -425,17 +421,26 @@ func (p *Puzzle) Opens(s *State, slot int) bool {
 }
 
 // readable is whether a movie on the sheets may be read as the game
-// stands. Once a range is bought (the decade or the five years, the
-// rating band, the genre) a movie is readable when it is inside every
-// one bought: its year in the decade and in the five years, its rating
-// in the band, its genres holding every one of the answer's. Before one
-// is, nothing is. Once the game is over, everything is. The ranges are
-// the answer's own, so the answer is readable from the first range
-// bought and blank until then, as any card inside them would be: nothing
-// in the rule marks it out. Length is no range here: other movies'
-// runtimes are not on a map. The rating band is RatingBand's, compared
-// in tenths, so a movie is in it from its floor up to, and not
-// including, its ceiling, as the page draws it.
+// stands. Once a range is bought, the decade or the rating band, a movie
+// is readable when it is inside every one bought: its year in the
+// decade, its rating in the band. Before one is, nothing is. Once the
+// game is over, everything is. The ranges are the answer's own, so the
+// answer is readable from the first range bought and blank until then,
+// as any card inside them would be: nothing in the rule marks it out.
+// The rating band is RatingBand's, compared in tenths, so a movie is in
+// it from its floor up to, and not including, its ceiling, as the page
+// draws it.
+//
+// They are the only ranges because they are where a card sits on the
+// map, its row of years and its place along the ratings, so a player who
+// has bought both is looking at the cards inside them whatever the sheet
+// says. The pick sees to it that every sheet keeps MinCrowd others there
+// (Build), and nothing here may narrow them further. So the genre is no
+// range: when a sheet read only the movies holding every one of the
+// answer's genres as well, all but 123 of the 7,181 movies with MinVotes
+// votes had a cast member whose sheet, inside the decade and the band,
+// read the answer alone. Nor is the length: other movies' runtimes are
+// not on a map.
 func (p *Puzzle) readable(s *State, m Movie) bool {
 	if s.Done {
 		return true
@@ -447,23 +452,9 @@ func (p *Puzzle) readable(s *State, m Movie) bool {
 		}
 		ranged = true
 	}
-	if s.Facts[KindYears] {
-		if Years(m.Year) != Years(a.Year) {
-			return false
-		}
-		ranged = true
-	}
 	if s.Facts[KindRating] {
 		if RatingBand(m.Rating) != RatingBand(a.Rating) {
 			return false
-		}
-		ranged = true
-	}
-	if s.Facts[KindGenre] {
-		for _, g := range a.Genres {
-			if !slices.Contains(m.Genres, g) {
-				return false
-			}
 		}
 		ranged = true
 	}
@@ -478,26 +469,34 @@ func halfPoint(rating float64) float64 {
 }
 
 // SheetCard is one movie on a Movies sheet as the page draws it. A
-// readable card is the movie: its id, title, year, rating and genres,
-// and its poster when every readable card on the sheet has one. A blank
-// card is where a movie sits on the map and nothing more: its year, and
-// At, its rating to the nearest half point. SheetOf never puts anything
-// else of a blank card's movie into it, so no field can carry what the
-// card hides, and MarshalJSON writes it as {year, at} whatever it holds.
+// readable card is the movie: its id, title, year and rating, and its
+// poster when every readable card on the sheet has one. A blank card is
+// where a movie sits on the map and nothing more: its year, and At, its
+// rating to the nearest half point. SheetOf never puts anything else of
+// a blank card's movie into it, so no field can carry what the card
+// hides, and MarshalJSON writes it as {year, at} whatever it holds.
+//
+// No card carries its genres, readable or not, in play or after. The
+// genre is no range (readable), so a sheet inside the decade and the
+// band reads movies of every genre, and a card that said its own would
+// let the player who bought Genre narrow them by hand to the ones
+// holding all of the answer's: of the 298 movies that made a puzzle in
+// October 2026, 267 had a cast member whose sheet read the answer alone
+// that way, 104 had all six, and only 6 kept MinCrowd on every sheet.
+// The page never drew them, so nothing is lost.
 type SheetCard struct {
 	Readable bool
 	ID       string
 	Title    string
 	Year     int
 	Rating   float64
-	Genres   []string
 	Poster   string
 	At       float64
 }
 
 // MarshalJSON writes a readable card as {id, title, year, rating,
-// genres, poster?} and a blank one as {year, at}: the page tells them
-// apart by the id.
+// poster?} and a blank one as {year, at}: the page tells them apart by
+// the id.
 func (c SheetCard) MarshalJSON() ([]byte, error) {
 	if !c.Readable {
 		return json.Marshal(struct {
@@ -506,13 +505,12 @@ func (c SheetCard) MarshalJSON() ([]byte, error) {
 		}{c.Year, c.At})
 	}
 	return json.Marshal(struct {
-		ID     string   `json:"id"`
-		Title  string   `json:"title"`
-		Year   int      `json:"year"`
-		Rating float64  `json:"rating"`
-		Genres []string `json:"genres"`
-		Poster string   `json:"poster,omitempty"`
-	}{c.ID, c.Title, c.Year, c.Rating, nonNilStrings(c.Genres), c.Poster})
+		ID     string  `json:"id"`
+		Title  string  `json:"title"`
+		Year   int     `json:"year"`
+		Rating float64 `json:"rating"`
+		Poster string  `json:"poster,omitempty"`
+	}{c.ID, c.Title, c.Year, c.Rating, c.Poster})
 }
 
 // SheetOf is the Movies sheet of the cast member in slot, as the game
@@ -544,8 +542,7 @@ func (p *Puzzle) SheetOf(s *State, slot int, live Live) ([]SheetCard, bool) {
 			out[i] = SheetCard{Year: m.Year, At: halfPoint(m.Rating)}
 			continue
 		}
-		out[i] = SheetCard{Readable: true, ID: m.ID, Title: m.Title, Year: m.Year, Rating: m.Rating,
-			Genres: nonNilStrings(slices.Clone(m.Genres)), At: halfPoint(m.Rating)}
+		out[i] = SheetCard{Readable: true, ID: m.ID, Title: m.Title, Year: m.Year, Rating: m.Rating, At: halfPoint(m.Rating)}
 		all = all && live.Posters[m.ID] != ""
 	}
 	for i := range out {

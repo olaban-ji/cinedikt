@@ -82,13 +82,7 @@ function gameOf(over: Partial<DailyGame> = {}): DailyGame {
   };
 }
 
-const read = (id: string, title: string, year: number, rating: number, genres: string[] = ['Drama']): DailyReadableMovie => ({
-  id,
-  title,
-  year,
-  rating,
-  genres,
-});
+const read = (id: string, title: string, year: number, rating: number): DailyReadableMovie => ({ id, title, year, rating });
 const blank = (year: number, at: number): DailyBlankMovie => ({ year, at });
 
 // Joe Pantoliano's movies, as the server sends them with the 1990s
@@ -100,9 +94,9 @@ const MOVIES: DailyMovie[] = [
   blank(1985, 7.5),
   blank(1987, 7.5),
   blank(1988, 7.5),
-  read('tt0106977', 'The Fugitive', 1993, 7.8, ['Action', 'Crime', 'Drama']),
-  read('tt0115736', 'Bound', 1996, 7.3, ['Crime', 'Romance', 'Thriller']),
-  read('tt0133093', 'The Matrix', 1999, 8.7, ['Action', 'Sci-Fi']),
+  read('tt0106977', 'The Fugitive', 1993, 7.8),
+  read('tt0115736', 'Bound', 1996, 7.3),
+  read('tt0133093', 'The Matrix', 1999, 8.7),
   blank(2000, 8.5),
 ];
 
@@ -307,12 +301,15 @@ describe('what can be read', () => {
   it('is nothing before a range is bought: every card blank, the count plain, and the footer pointing at the facts', () => {
     const v = sheetView(stateOf({ game: gameOf({ facts: {} }), movies: BLANKS }));
     expect(v.cards.every((c) => c.kind === 'blank')).toBe(true);
-    expect(v.cards[0].aria).toBe('A movie from 1983. Buy a range to read it');
+    expect(v.cards[0].aria).toBe('A movie from 1983. Buy the decade or a rating range to read it');
     expect(v.sub).toBe('8 movies · on Cinedikt');
     expect(v.legend).toBe(
-      'Titles only show inside the ranges you buy: the decade, the years, a rating range or the genre. Today’s movie is one of these cards.',
+      'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.',
     );
-    expect(v.foot).toEqual({ kind: 'hint', text: 'Buy a range to read this map. The facts are under the card.' });
+    expect(v.foot).toEqual({
+      kind: 'hint',
+      text: 'Buy the decade or a rating range to read this map. The facts are under the card.',
+    });
   });
 
   it('counts how many can be read once a range is bought, and names the ranges', () => {
@@ -323,10 +320,56 @@ describe('what can be read', () => {
     expect(sheetView(stateOf({ movies: null })).cards).toEqual([]);
   });
 
-  it('never counts a length bought as a range: the map stays unread', () => {
-    const v = sheetView(stateOf({ game: gameOf({ facts: { length: 2 } }), movies: BLANKS }));
-    expect(v.sub).toBe('8 movies · on Cinedikt');
-    expect(v.foot.kind === 'hint' && v.foot.text).toBe('Buy a range to read this map. The facts are under the card.');
+  it('never counts a length or a genre bought as a range: the map stays unread, and the genre unnamed', () => {
+    for (const facts of [{ length: 2 }, { genre: ['Action', 'Sci-Fi'] }, { length: 2, genre: ['Drama'] }]) {
+      const v = sheetView(stateOf({ game: gameOf({ facts }), movies: BLANKS }));
+      expect(v.sub, JSON.stringify(facts)).toBe('8 movies · on Cinedikt');
+      expect(v.legend).toBe(
+        'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.',
+      );
+      expect(v.foot.kind === 'hint' && v.foot.text).toBe(
+        'Buy the decade or a rating range to read this map. The facts are under the card.',
+      );
+      expect(v.cards[0].aria).toBe('A movie from 1983. Buy the decade or a rating range to read it');
+      // Nothing is drawn for them: no decade washed, no rating column.
+      expect(v.rows.some((r) => r.inDecade)).toBe(false);
+      expect(v.column).toBeNull();
+    }
+  });
+
+  it('reads only what the server sends readable: a genre beside the decade adds nothing to the legend or the map', () => {
+    // The 1990s and Drama bought: the server reads every card in the
+    // decade, whatever its genres (The Matrix is no drama), and says
+    // none of them, and the page draws exactly those, with only the
+    // decade named and washed.
+    const s = stateOf({ game: gameOf({ facts: { decade: 1990, genre: ['Drama'] } }) });
+    const v = sheetView(s);
+    expect(readable(s).map((c) => c.title)).toEqual(['The Fugitive', 'Bound', 'The Matrix']);
+    expect(v.legend).toBe('Titles show inside your ranges: 1990s. Today’s movie is one of these cards, but it isn’t marked.');
+    expect(v.legend).not.toContain('Drama');
+    expect(v.rows.filter((r) => r.inDecade).map((r) => r.year)).toEqual([1993, 1996, 1999]);
+    expect(v.column).toBeNull();
+    expect(v.sub).toBe('3 of 8 movies readable · on Cinedikt');
+  });
+
+  it('counts a rating band alone as a range, its column drawn and no decade washed', () => {
+    // The 7.0 to 7.9 band alone: the server reads The Fugitive and Bound,
+    // and sends the rest blank.
+    const movies = [
+      blank(1983, 7),
+      read('tt0106977', 'The Fugitive', 1993, 7.8),
+      read('tt0115736', 'Bound', 1996, 7.3),
+      blank(1999, 8.5),
+    ];
+    const v = sheetView(stateOf({ game: gameOf({ facts: { rating: 2 } }), movies }));
+    expect(v.sub).toBe('2 of 4 movies readable · on Cinedikt');
+    expect(v.legend).toBe(
+      'Titles show inside your ranges: rated 7.0 to 7.9. Today’s movie is one of these cards, but it isn’t marked.',
+    );
+    expect(v.foot.kind === 'hint' && v.foot.text).toBe('Tap a movie to guess it. A wrong guess costs 150.');
+    expect(v.column).not.toBeNull();
+    expect(v.rows.some((r) => r.inDecade)).toBe(false);
+    expect(v.cards.find((c) => c.kind === 'blank')?.aria).toBe('A movie from 1983, outside your ranges');
   });
 
   it('draws today’s movie by the same rule as every other card, readable or blank', () => {
@@ -352,7 +395,7 @@ describe('what can be read', () => {
 describe('the bands drawn for the facts', () => {
   it('washes the years inside the decade bought, on the map’s own striped and ruled bands', () => {
     const rows = sheetRows({ decade: 1990 }, sheetLayout(MOVIES, 540, false));
-    expect(rows.map((r) => [r.year, r.inYears])).toEqual([
+    expect(rows.map((r) => [r.year, r.inDecade])).toEqual([
       [1983, false],
       [1985, false],
       [1987, false],
@@ -366,7 +409,10 @@ describe('the bands drawn for the facts', () => {
     expect(rows[4].band).toBe('cd-band cd-msheet-band-in');
     expect(rows[5].band).toBe('cd-band cd-band-odd cd-msheet-band-in');
     expect(rows[7].band).toBe('cd-band cd-band-odd cd-band-decade');
-    expect(sheetRows({}, sheetLayout(MOVIES, 540, false)).some((r) => r.inYears)).toBe(false);
+    expect(sheetRows({}, sheetLayout(MOVIES, 540, false)).some((r) => r.inDecade)).toBe(false);
+    // Nor for anything else bought: only the decade washes a year.
+    const others = { rating: 2, genre: ['Action'], length: 1 };
+    expect(sheetRows(others, sheetLayout(MOVIES, 540, false)).some((r) => r.inDecade)).toBe(false);
   });
 
   it('centres each year’s label on its first lane', () => {

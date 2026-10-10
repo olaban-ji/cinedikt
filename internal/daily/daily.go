@@ -31,25 +31,33 @@ const Start = 1000
 const NameCost = 100
 
 // What each fact costs. Length and rating are cheapest: each is one of
-// four wide bands. Genre, the decade and the five years inside it narrow
-// further, and the five years can only follow the decade. The director
-// is dearest, because a name can be searched: a filmography is a few
-// steps from the answer.
+// four wide bands. Genre and the decade narrow further. The director is
+// dearest, because a name can be searched: a filmography is a few steps
+// from the answer.
 //
 // The rule for any fact added here: none may give the answer away in a
 // single search. So no plot, no tagline, no quote and no characters'
 // names, since any line of a movie's text can be pasted into a search
 // engine; and no exact number while the game is on, so the length,
-// rating and years come only as ranges, and no one value can be checked
+// rating and year come only as ranges, and no one value can be checked
 // against a candidate. "How it starts", the first sentence of the
 // synopsis, was retired for exactly that: The Matrix's named Neo and
 // Morpheus.
+//
+// Nor may the facts together leave a Movies sheet with nothing but the
+// answer inside them. A sheet shows every card's year and rating, so a
+// fact narrows it by eye as well as by what it reads. Name Drop sold the
+// five years inside the decade too, and with them, the rating and the
+// genre bought, a cast member's sheet kept almost nothing else: two of
+// the 7,181 movies with MinVotes votes kept three others on every one of
+// their six's sheets. So the decade is as fine as the year goes, and
+// each of the six's sheets keeps MinCrowd others inside it and the
+// rating band (Build).
 const (
 	LengthCost   = 50
 	RatingCost   = 50
 	GenreCost    = 100
 	DecadeCost   = 100
-	YearsCost    = 100
 	DirectorCost = 250
 )
 
@@ -113,28 +121,38 @@ func LengthBand(minutes int) int {
 	return 3
 }
 
+// ratingFloors are where the rating bands above the first begin, in
+// tenths: 6.0, 7.0 and 8.0.
+var ratingFloors = [...]int{60, 70, 80}
+
 // RatingBand is an IMDb rating as one of four bands: below 6.0, 6.0 to
 // 6.9, 7.0 to 7.9, and 8.0 or higher. Compared in tenths, which is all
 // IMDb gives, so 7.0 kept as 6.9999 is still 7.0.
 func RatingBand(rating float64) int {
-	tenths := math.Round(rating * 10)
-	switch {
-	case tenths >= 80:
-		return 3
-	case tenths >= 70:
-		return 2
-	case tenths >= 60:
-		return 1
+	tenths := int(math.Round(rating * 10))
+	band := 0
+	for _, floor := range ratingFloors {
+		if tenths >= floor {
+			band++
+		}
 	}
-	return 0
+	return band
+}
+
+// RatingFloors are where the rating bands above the first begin, as
+// ratings: 6.0, 7.0 and 8.0. They are what a query bands a rating by,
+// with Postgres's width_bucket, which counts the floors at or below it
+// just as RatingBand does, so the bands are written once.
+func RatingFloors() []float64 {
+	out := make([]float64, len(ratingFloors))
+	for i, floor := range ratingFloors {
+		out[i] = float64(floor) / 10
+	}
+	return out
 }
 
 // Decade is the decade fact, the first year of it: 1999 is 1990.
 func Decade(year int) int { return year / 10 * 10 }
-
-// Years is the five-year fact, the first year of it: 1999 is 1995, shown
-// as "1995–1999".
-func Years(year int) int { return year / 5 * 5 }
 
 // dayLayout is how a puzzle's day is written: in the API, in the
 // database and as the seed of its shuffles.

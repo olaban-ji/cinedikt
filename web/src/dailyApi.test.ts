@@ -132,14 +132,14 @@ describe('the Daily’s requests', () => {
     const fetch = stubFetch(Array.from({ length: 5 }, () => ({ status: 200, body: { game: {} } })));
     const { sendDailyMove } = await load();
     await sendDailyMove(143, { kind: 'next' }, 'k-1', 1);
-    await sendDailyMove(143, { kind: 'buy', fact: 'years' }, 'k-2', 2);
+    await sendDailyMove(143, { kind: 'buy', fact: 'decade' }, 'k-2', 2);
     await sendDailyMove(143, { kind: 'guess', film: 'tt0111257' }, 'k-3', 3);
     await sendDailyMove(143, { kind: 'sheet', person: 'nm0001592' }, 'k-4', 4);
     await sendDailyMove(143, { kind: 'reveal' }, 'k-5', 5);
     const sent = fetch.mock.calls.map(([url, init]) => [url, JSON.parse(String(init?.body))]);
     expect(sent).toEqual([
       [`/api/daily/143/next?${NY}`, { key: 'k-1', seq: 1 }],
-      [`/api/daily/143/buy?${NY}`, { key: 'k-2', seq: 2, kind: 'years' }],
+      [`/api/daily/143/buy?${NY}`, { key: 'k-2', seq: 2, kind: 'decade' }],
       [`/api/daily/143/guess?${NY}`, { key: 'k-3', seq: 3, film: 'tt0111257' }],
       [`/api/daily/143/sheet?${NY}`, { key: 'k-4', seq: 4, person: 'nm0001592' }],
       [`/api/daily/143/reveal?${NY}`, { key: 'k-5', seq: 5 }],
@@ -152,7 +152,7 @@ describe('the Daily’s requests', () => {
     const body = {
       person: 'nm0001592',
       total: 2,
-      movies: [{ id: 'tt0106977', title: 'The Fugitive', year: 1993, rating: 7.8, genres: ['Action'] }, { year: 1985, at: 7.5 }],
+      movies: [{ id: 'tt0106977', title: 'The Fugitive', year: 1993, rating: 7.8 }, { year: 1985, at: 7.5 }],
     };
     const fetch = stubFetch([{ status: 200, body }]);
     const { fetchDailyMovies } = await load();

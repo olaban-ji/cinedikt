@@ -455,14 +455,16 @@ export type DailySlot =
     };
 
 /** The facts that can be bought, in the order the facts row offers them.
- *  `years` narrows `decade`, and is only for sale once the decade has
- *  been bought. */
-export type DailyFactKind = 'length' | 'rating' | 'genre' | 'decade' | 'years' | 'director';
+ *  There is no narrowing the years past the decade: with five years and a
+ *  rating band bought, a cast member's map held little but the answer
+ *  inside them. A "years" move a game recorded before is replayed as
+ *  nothing, and a new one is refused ("bad"), so the page never sends it. */
+export type DailyFactKind = 'length' | 'rating' | 'genre' | 'decade' | 'director';
 
 /** The facts bought so far. Only a bought fact is there at all. Length
- *  and rating come as one of four bands each, and the years as a decade
- *  or a five-year span, so no single number can be checked against a
- *  candidate: the exact values only come with the end. */
+ *  and rating come as one of four bands each, and the year as a decade,
+ *  so no single number can be checked against a candidate: the exact
+ *  values only come with the end. */
 export interface DailyFacts {
   /** 0 "Under 1h 30m", 1 "1h 30m to 2h", 2 "2h to 2h 30m", 3 "Over 2h 30m". */
   length?: number;
@@ -472,8 +474,6 @@ export interface DailyFacts {
   genre?: string[];
   /** The decade's first year: 1990. */
   decade?: number;
-  /** The five years' first: 1995, for 1995–1999. */
-  years?: number;
   /** Every director, in the crew's order. */
   director?: DailyPerson[];
 }
@@ -604,17 +604,19 @@ export type DailyMove =
   | { kind: 'reveal' };
 
 /** One of a showing person's movies on the Movies sheet, readable: it is
- *  inside every range the reader has bought (the decade or five years,
- *  the rating band, the genre; never the length), or the game is over.
+ *  inside every range the reader has bought, the decade and the rating
+ *  band (never the genre or the length), or the game is over.
  *  Today's movie is one of these by the same rule as any other, and looks
  *  like every other: there is a poster for every readable card, or for
- *  none. Readable cards are the ones with an `id`. */
+ *  none. Readable cards are the ones with an `id`. No card says its
+ *  genres: the genre reads nothing on the map, and a card that said its
+ *  own would let a reader who bought Genre sift the readable ones by hand
+ *  down to today's. */
 export interface DailyReadableMovie {
   id: string;
   title: string;
   year: number;
   rating: number;
-  genres: string[];
   poster?: string;
 }
 

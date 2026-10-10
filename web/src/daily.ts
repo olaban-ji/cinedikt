@@ -52,8 +52,9 @@ export const GAME_NAME = 'Name Drop';
 // would refuse is not sent. The rule for any fact added here, as for the
 // server's: none may give the answer away in a single search. So no
 // plot, tagline, quote or character's name, and the length, the rating
-// and the years only ever as ranges, so no one number can be checked
-// against a candidate. The exact values come with the end.
+// and the year only ever as ranges, the year no closer than its decade,
+// so no one number can be checked against a candidate. The exact values
+// come with the end.
 
 /** Every game starts with this many points, and the score is what is
  *  left, so the most is this. */
@@ -84,7 +85,6 @@ export const FACT_COST: Record<DailyFactKind, number> = {
   rating: 50,
   genre: 100,
   decade: 100,
-  years: 100,
   director: 250,
 };
 
@@ -214,11 +214,6 @@ export function decadeText(decade: number): string {
   return `${decade}s`;
 }
 
-/** "1995–1999", from the five years' first. */
-export function yearsText(years: number): string {
-  return `${years}–${years + 4}`;
-}
-
 /** A runtime as the facts write it: "2h 16m", "2h" on the hour, as the
  *  bands write two hours, and "45m" under one. */
 export function hoursMinutes(minutes: number): string {
@@ -229,9 +224,9 @@ export function hoursMinutes(minutes: number): string {
 }
 
 /** Each fact as the page names it: for sale ("Length range"), bought
- *  ("Length"), among what the result says was paid for ("Five-year
- *  range"), in the share text ("the decade"), and what its button says
- *  to a screen reader before its price. */
+ *  ("Length"), among what the result says was paid for ("Decade"), in
+ *  the share text ("the decade"), and what its button says to a screen
+ *  reader before its price. */
 export const FACTS: Record<
   DailyFactKind,
   { offer: string; bought: string; paid: string; used: string; aria: string }
@@ -258,13 +253,6 @@ export const FACTS: Record<
     used: 'the decade',
     aria: 'Show the decade it came out.',
   },
-  years: {
-    offer: 'Narrow the years',
-    bought: 'Years',
-    paid: 'Five-year range',
-    used: 'a five-year range',
-    aria: 'Narrow the years to five.',
-  },
   director: {
     offer: 'Director',
     bought: 'Director',
@@ -276,7 +264,7 @@ export const FACTS: Record<
 
 /** The facts in the order the row offers them, which is also the order
  *  the result and the share list them in. */
-export const FACT_ORDER: readonly DailyFactKind[] = ['length', 'rating', 'genre', 'decade', 'years', 'director'];
+export const FACT_ORDER: readonly DailyFactKind[] = ['length', 'rating', 'genre', 'decade', 'director'];
 
 /** What a bought fact says, or nothing for one not bought. */
 export function factValue(kind: DailyFactKind, facts: DailyFacts): string {
@@ -289,8 +277,6 @@ export function factValue(kind: DailyFactKind, facts: DailyFacts): string {
       return facts.genre ? facts.genre.join(', ') : '';
     case 'decade':
       return facts.decade == null ? '' : decadeText(facts.decade);
-    case 'years':
-      return facts.years == null ? '' : yearsText(facts.years);
     case 'director':
       return facts.director ? andList(facts.director.map((p) => p.name)) : '';
   }
@@ -322,9 +308,7 @@ export interface FactItem {
 }
 
 /** The facts row while the game is on, in order: length, rating, genre,
- *  the years, director. The years take one place: Decade for sale; then
- *  the decade bought, followed by "Narrow the years" for sale; then the
- *  five years in the decade's place. */
+ *  decade, director, each in its one place, for sale or bought. */
 export function factItems(game: Pick<DailyGame, 'phase' | 'pts' | 'facts'>): FactItem[] {
   const playing = game.phase === 'play';
   const facts = game.facts;
@@ -351,18 +335,7 @@ export function factItems(game: Pick<DailyGame, 'phase' | 'pts' | 'facts'>): Fac
       aria: `${FACTS[kind].aria} It costs ${cost} points.`,
     };
   };
-  const out: FactItem[] = [];
-  for (const kind of FACT_ORDER) {
-    if (kind === 'years') continue;
-    if (kind === 'decade') {
-      if (hasFact('years', facts)) out.push(bought('years'));
-      else if (hasFact('decade', facts)) out.push(bought('decade'), offer('years'));
-      else out.push(offer('decade'));
-      continue;
-    }
-    out.push(hasFact(kind, facts) ? bought(kind) : offer(kind));
-  }
-  return out;
+  return FACT_ORDER.map((kind) => (hasFact(kind, facts) ? bought(kind) : offer(kind)));
 }
 
 /** About the movie, once the game is over: every fact, exact. Anything
@@ -384,8 +357,12 @@ export function factsHeading(done: boolean): string {
 }
 
 /** The note beside the heading while the game is on, and what it becomes
- *  when the reader seems stuck (factNudge). */
-export const FACTS_NOTE = 'Each one also marks the map';
+ *  when the reader seems stuck (factNudge). It names the two chips the
+ *  Movies sheet draws and reads its titles by (rangeBought), and no
+ *  more: it once said every fact marked the map, and a reader who
+ *  bought the genre or the length on its word opened a map with every
+ *  card still blank and nothing drawn. */
+export const FACTS_NOTE = 'Decade and rating mark the map';
 export const NUDGE_NOTE = 'Stuck? A fact narrows it down.';
 
 /** The facts are easy to miss, so once three names are showing and not
@@ -708,7 +685,7 @@ function titleKey(title: string): string {
 }
 
 /** Whether each result shows its year: only where two results share a
- *  title, so a bought range of years cannot be used to sift the list. */
+ *  title, so a bought decade cannot be used to sift the list. */
 export function yearsShown(hits: readonly { title: string }[]): boolean[] {
   const count = new Map<string, number>();
   for (const h of hits) count.set(titleKey(h.title), (count.get(titleKey(h.title)) ?? 0) + 1);
@@ -976,15 +953,18 @@ export function playedText(n: number): { count: string; rest: string } | null {
 }
 
 /** How it works: six numbered items, then the prices, then Got it. The
- *  prices come from the rules, so the two never disagree. */
+ *  prices come from the rules, so the two never disagree. The fifth
+ *  names the decade and the rating range as what shows titles, as the
+ *  facts note does, since a length range bought is a range too and
+ *  reads nothing on a map. */
 export const HOW_IT_WORKS = {
   heading: 'How it works',
   items: [
     'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
     'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
     'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
-    'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade and then a five-year range, or the director.',
-    'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the ranges you’ve bought.',
+    'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade, or the director.',
+    'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the decade or rating range you’ve bought.',
     'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
   ],
   then: `You start with ${fmtN(DAILY_START)} points. Each extra name costs ${NEXT_COST}. Wrong guesses cost ${wrongCost(0)}, then ${wrongCost(1)}, ${wrongCost(2)} and so on. Facts cost ${Math.min(...Object.values(FACT_COST))} to ${Math.max(...Object.values(FACT_COST))}. There’s no clock.`,
@@ -1060,13 +1040,23 @@ export function bannerLabel(no: number, game: Pick<DailyGame, 'phase'> | null): 
 // ---- the Movies sheet ----
 //
 // One showing person's movies on a small Cinedikt map, with the reader's
-// bought facts drawn on it. Titles only show inside the ranges bought,
-// and the server is what keeps to that: a movie outside them comes as a
-// blank card, a year and a place on the rating axis, so the page cannot
-// show what it was never told, and two people's maps cannot be laid
-// side by side to find the one movie both are on. Today's movie is among
-// the cards by the same rule as any other, unmarked. Length is not a
-// range here, since other movies' runtimes are not on a map.
+// bought decade and rating band drawn on it. Titles only show inside
+// those ranges, and the server is what keeps to that: a movie outside
+// them comes as a blank card, a year and a place on the rating axis, so
+// the page cannot show what it was never told, and two people's maps
+// cannot be laid side by side to find the one movie both are on. Today's
+// movie is among the cards by the same rule as any other, unmarked.
+//
+// Only the two ranges the map is drawn on count. Length never did, since
+// other movies' runtimes are not on a map, and genre no longer does. The
+// map shows every readable card's year and rating, so whatever the
+// ranges leave is narrowed further by eye; with five years, a rating
+// band and the genre all bought, a cast member's map held little but the
+// answer. So the years go no closer than the decade, and the server
+// picks only movies whose every cast member keeps a crowd of others
+// inside the answer's decade and rating band, a crowd a genre hiding
+// titles as well would thin straight back down. Whoever's map is
+// chosen, the reader still has to work out which card it is.
 //
 // And there is one map a game. With titles readable inside the ranges
 // bought, two people's readable titles side by side almost always leave
@@ -1176,12 +1166,10 @@ export function choiceOvertaken(
   return now != null && now.phase === 'play' && now.seq !== was.seq && !now.sheet;
 }
 
-/** The years a bought decade or five years take in, inclusive, or null
- *  with neither bought. The five years win: they are inside the decade. */
-export function yearSpan(facts: Pick<DailyFacts, 'decade' | 'years'>): [number, number] | null {
-  if (facts.years != null) return [facts.years, facts.years + 4];
-  if (facts.decade != null) return [facts.decade, facts.decade + 9];
-  return null;
+/** The years a bought decade takes in, inclusive, or null with none
+ *  bought. */
+export function decadeSpan(facts: Pick<DailyFacts, 'decade'>): [number, number] | null {
+  return facts.decade == null ? null : [facts.decade, facts.decade + 9];
 }
 
 /** Each rating band as ratings, from its floor up to, and not including,
@@ -1199,16 +1187,19 @@ export function ratingSpan(facts: Pick<DailyFacts, 'rating'>): readonly [number,
 }
 
 /** Whether any range is bought that makes a card readable: the decade or
- *  the five years, the rating band, or the genre. Length never does. */
+ *  the rating band, the two the map is drawn on. The genre, the length
+ *  and the director never do. */
 export function rangeBought(facts: DailyFacts): boolean {
-  return facts.decade != null || facts.years != null || facts.rating != null || facts.genre != null;
+  return facts.decade != null || facts.rating != null;
 }
 
 /** What the movies the server sends depend on, besides whose they are:
- *  the ranges bought. The sheet asks again whenever this changes, so a
- *  range bought shows the titles inside it. */
+ *  the ranges bought. The sheet asks again whenever this changes, so the
+ *  decade or a rating band bought shows the titles inside it; a genre, a
+ *  length or a director bought changes nothing on the map, and is not
+ *  asked again for. */
 export function rangesKey(facts: DailyFacts): string {
-  return [facts.decade ?? '', facts.years ?? '', facts.rating ?? '', facts.genre?.join(',') ?? '-'].join('|');
+  return [facts.decade ?? '', facts.rating ?? ''].join('|');
 }
 
 /** The sheet's title: "Joe Pantoliano’s movies". */
@@ -1229,25 +1220,28 @@ export function sheetSub(readable: number, total: number, ranged: boolean): stri
 }
 
 /** The legend over the map: where titles show, and that today's movie is
- *  there. Once a range is bought it names the ranges, and says the
- *  answer is not marked. */
+ *  there. Once a range is bought it names the ranges bought, and says
+ *  the answer is not marked. Only the decade and the rating band: a
+ *  genre bought reads nothing on the map, and is never named as one. */
 export function sheetLegend(facts: DailyFacts): string {
   const marks: string[] = [];
-  if (facts.years != null) marks.push(yearsText(facts.years));
-  else if (facts.decade != null) marks.push(decadeText(facts.decade));
+  if (facts.decade != null) marks.push(decadeText(facts.decade));
   if (facts.rating != null) marks.push(`rated ${inSentence(ratingBandText(facts.rating))}`);
-  if (facts.genre?.length) marks.push(facts.genre.join(', '));
   return rangeBought(facts)
     ? `Titles show inside your ranges: ${marks.join(' · ')}. Today’s movie is one of these cards, but it isn’t marked.`
-    : 'Titles only show inside the ranges you buy: the decade, the years, a rating range or the genre. Today’s movie is one of these cards.';
+    : 'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.';
 }
 
+/** What reads the map, for a reader who has bought nothing that does:
+ *  said in the footer and by every blank card. */
+const READS_THE_MAP = 'Buy the decade or a rating range';
+
 /** The footer with nothing picked: how to guess from the map, once there
- *  are titles to guess, and before that where the ranges are sold. */
+ *  are titles to guess, and before that which facts read it. */
 export function sheetHint(nextCost: number, ranged: boolean): string {
   return ranged
     ? `Tap a movie to guess it. A wrong guess costs ${fmtN(nextCost)}.`
-    : 'Buy a range to read this map. The facts are under the card.';
+    : `${READS_THE_MAP} to read this map. The facts are under the card.`;
 }
 
 /** The footer's line under a picked card's title: "1993 · IMDb 7.8". */
@@ -1265,7 +1259,7 @@ export function sheetCardLabel(movie: Pick<DailyReadableMovie, 'title' | 'year' 
 /** A blank card's: only its year, which is all the page knows of it, and
  *  what would read it. */
 export function blankCardLabel(year: number, ranged: boolean): string {
-  return ranged ? `A movie from ${year}, outside your ranges` : `A movie from ${year}. Buy a range to read it`;
+  return ranged ? `A movie from ${year}, outside your ranges` : `A movie from ${year}. ${READS_THE_MAP} to read it`;
 }
 
 /** The sheet's small map: the app's layout at the handoff's metrics. */
@@ -1357,11 +1351,11 @@ export const SEARCH_MIN_CHARS = 2;
 
 /** What the reader is told, at once and without asking, about a move the
  *  server would refuse: a name when everyone is showing, a fact already
- *  bought or the years before the decade, a purchase the points would not
- *  leave one over from, a movie already guessed, a second Movies map or
- *  one for a name not showing. Empty for a move worth sending. The
- *  page's buttons already hold back most of these; this is for the rest,
- *  and for a press that lands as the game changes under it. */
+ *  bought, a purchase the points would not leave one over from, a movie
+ *  already guessed, a second Movies map or one for a name not showing.
+ *  Empty for a move worth sending. The page's buttons already hold back
+ *  most of these; this is for the rest, and for a press that lands as the
+ *  game changes under it. */
 export function earlyRefusal(
   game: Pick<DailyGame, 'pts' | 'slots' | 'facts' | 'log' | 'sheet'>,
   move: DailyMove,
@@ -1372,7 +1366,6 @@ export function earlyRefusal(
       return affords(game.pts, NEXT_COST) ? '' : refusalText('points', 'next');
     case 'buy':
       if (hasFact(move.fact, game.facts)) return refusalText('known', 'buy');
-      if (move.fact === 'years' && !hasFact('decade', game.facts)) return refusalText('bad', 'buy');
       return affords(game.pts, FACT_COST[move.fact]) ? '' : refusalText('points', 'buy');
     case 'guess':
       return guessedIds(game).has(move.film) ? TOASTS.tried : '';
@@ -1543,7 +1536,6 @@ export function refusalText(
       if (kind === 'sheet') return 'You’ve already opened your Movies map.';
       return 'You already have that fact.';
     case 'bad':
-      if (kind === 'buy') return 'Buy the decade first.';
       if (kind === 'movies' || kind === 'sheet') return 'That name isn’t showing yet.';
       return UNREACHABLE;
     // GET /movies for anyone but the person whose map was chosen, while

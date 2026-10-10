@@ -181,9 +181,8 @@ func TestFirstRunOffersOneMovieAnEra(t *testing.T) {
 			t.Errorf("%s was offered with no poster", h.ID)
 		}
 	}
-	// firstrun.sql has eight eras.
-	if len(got) > 8 {
-		t.Errorf("offered %d, want at most one for each of the 8 eras", len(got))
+	if len(got) > len(eras) {
+		t.Errorf("offered %d, want at most one for each of the %d eras", len(got), len(eras))
 	}
 }
 

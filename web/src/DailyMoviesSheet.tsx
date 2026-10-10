@@ -34,13 +34,14 @@ import { useDrag, useEscape, useFocusTrapped } from './sheet';
 import type { Theme } from './theme';
 
 // The Movies sheet: one showing person's movies on a small Cinedikt map,
-// with the reader's bought facts drawn on it and today's movie among the
-// cards, unmarked. Titles show only inside the ranges bought: the server
-// sends every other movie as a blank tile, a year and a place on the
-// rating axis, so there is nothing here to read off it and no names to
-// combine. Its rules — the copy, the metrics — are daily.ts's (the Movies
-// sheet section), put together for the sheet in dailyMovies.ts. This file
-// asks the server for the movies, again once a range is bought, keeps
+// with the reader's bought decade and rating band drawn on it and today's
+// movie among the cards, unmarked. Titles show only inside those ranges,
+// never for a genre or a length bought: the server sends every other
+// movie as a blank tile, a year and a place on the rating axis, so there
+// is nothing here to read off it and no names to combine. Its rules —
+// the copy, the metrics — are daily.ts's (the Movies sheet section), put
+// together for the sheet in dailyMovies.ts. This file asks the server for
+// the movies, again once the decade or a rating range is bought, keeps
 // what the reader has tapped, and draws it (MoviesSheetView, which takes
 // everything as it stands, so it can be rendered without a DOM).
 //
@@ -98,13 +99,14 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
   useEscape(onClose);
   useFocusTrapped(ref);
 
-  // Asked once for the person, again on Try again, and again whenever a
-  // range is bought (rangesKey), which is what turns blank cards into
-  // titles. A second ask for the same person keeps the map it has until
-  // the answer comes; a card picked that the answer leaves blank is let
-  // go by sheetView, which only offers a readable one. A refusal of the
-  // person, as not the map chosen, is the page's to put right
-  // (onNotChosen), read when it comes rather than asked again for.
+  // Asked once for the person, again on Try again, and again whenever the
+  // decade or a rating range is bought (rangesKey), which is what turns
+  // blank cards into titles. A second ask for the same person keeps the
+  // map it has until the answer comes; a card picked that the answer
+  // leaves blank is let go by sheetView, which only offers a readable
+  // one. A refusal of the person, as not the map chosen, is the page's to
+  // put right (onNotChosen), read when it comes rather than asked again
+  // for.
   const key = rangesKey(game.facts);
   const notChosen = useRef(onNotChosen);
   notChosen.current = onNotChosen;
@@ -361,7 +363,7 @@ export function MoviesSheetView({
               )}
               {view.rows.map((r) => (
                 <div key={r.key} className={r.band} style={{ top: r.top, height: r.height }} aria-hidden="true">
-                  <span className={`cd-msheet-year${r.inYears ? ' cd-msheet-year-in' : ''}`} style={{ top: r.labelTop }}>
+                  <span className={`cd-msheet-year${r.inDecade ? ' cd-msheet-year-in' : ''}`} style={{ top: r.labelTop }}>
                     {r.year}
                   </span>
                 </div>

@@ -73,7 +73,7 @@ var films = map[string]Looked{
 }
 
 // factKinds are the facts "buy" sells, in the order the page lists them.
-var factKinds = []string{KindLength, KindRating, KindGenre, KindDecade, KindYears, KindDirector}
+var factKinds = []string{KindLength, KindRating, KindGenre, KindDecade, KindDirector}
 
 // player plays a game the way the store does: each move checked against
 // the game as it stands, priced, recorded and taken.

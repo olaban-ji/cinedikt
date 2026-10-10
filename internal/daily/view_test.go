@@ -134,7 +134,7 @@ func secretsKept(t *testing.T, p *Puzzle, s *State, game Game, when string) {
 	for _, kind := range factKinds {
 		if s.Facts[kind] {
 			bought = append(bought, map[string]string{KindLength: "length", KindRating: "rating", KindGenre: "genre",
-				KindDecade: "decade", KindYears: "years", KindDirector: "director"}[kind])
+				KindDecade: "decade", KindDirector: "director"}[kind])
 		}
 	}
 	slices.Sort(bought)
@@ -157,7 +157,7 @@ func secretsKept(t *testing.T, p *Puzzle, s *State, game Game, when string) {
 func TestNothingBeforeTheEndSaysWhatIsHidden(t *testing.T) {
 	p := matrix()
 	for _, moves := range [][]struct{ kind, arg string }{
-		{{KindSheet, "nm0001592"}, {KindLength, ""}, {KindRating, ""}, {KindGenre, ""}, {KindDecade, ""}, {KindYears, ""}, {KindDirector, ""}},
+		{{KindSheet, "nm0001592"}, {KindLength, ""}, {KindRating, ""}, {KindGenre, ""}, {KindDecade, ""}, {KindDirector, ""}},
 		{{KindNext, ""}, {KindNext, ""}, {KindNext, ""}, {KindNext, ""}, {KindNext, ""}},
 		{{KindGuess, "tt0120601"}, {KindGuess, "tt0115736"}, {KindGuess, "tt9000002"}, {KindGuess, "tt0209144"}},
 	} {
@@ -265,8 +265,8 @@ func TestTheLogHasAnEntryPerMove(t *testing.T) {
 }
 
 // TestEachFactIsSaidAsTheGameSellsIt: the length and rating as bands,
-// the genres, the decade and the five years as their first years, and
-// the directors by name with their hues and photos.
+// the genres, the decade as its first year, and the directors by name
+// with their hues and photos.
 func TestEachFactIsSaidAsTheGameSellsIt(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
@@ -274,7 +274,7 @@ func TestEachFactIsSaidAsTheGameSellsIt(t *testing.T) {
 		g.do(kind, "")
 	}
 	got := rendered(t, Render(p, g.record(), live).Facts)
-	want := `{"length":2,"rating":3,"genre":["Action","Sci-Fi"],"decade":1990,"years":1995,"director":[` +
+	want := `{"length":2,"rating":3,"genre":["Action","Sci-Fi"],"decade":1990,"director":[` +
 		`{"id":"nm0905154","name":"Lana Wachowski","hue":118,"photo":"https://image.tmdb.org/t/p/w185/lana.jpg"},` +
 		`{"id":"nm0905152","name":"Lilly Wachowski","hue":255}]}`
 	if got != want {
@@ -455,17 +455,17 @@ func TestOnlyTheSheetOpenedIsRead(t *testing.T) {
 	closed("once it is over", -1, 6)
 }
 
-// TestBeforeAnyRangeEveryCardIsBlank: with no decade, years, rating or
-// genre bought, a sheet is only where its movies sit: each card exactly
+// TestBeforeAnyRangeEveryCardIsBlank: with neither the decade nor the
+// rating bought, a sheet is only where its movies sit: each card exactly
 // {year, at}, with no id, title, exact rating, genres or poster, today's
-// movie like the rest. Length and the director are no ranges, and a
-// movie guessed is no more readable for it.
+// movie like the rest. The genre, the length and the director are no
+// ranges, and a movie guessed is no more readable for it.
 func TestBeforeAnyRangeEveryCardIsBlank(t *testing.T) {
 	p := matrix()
 	g := play(t, p)
 	g.do(KindSheet, "nm0001592")
 	want := `[{"year":1993,"at":8},{"year":1996,"at":7.5},{"year":1999,"at":8.5},{"year":2000,"at":8.5}]`
-	for _, move := range []struct{ kind, arg string }{{"", ""}, {KindLength, ""}, {KindDirector, ""}, {KindGuess, "tt0209144"}} {
+	for _, move := range []struct{ kind, arg string }{{"", ""}, {KindGenre, ""}, {KindLength, ""}, {KindDirector, ""}, {KindGuess, "tt0209144"}} {
 		if move.kind != "" {
 			g.do(move.kind, move.arg)
 		}
@@ -497,31 +497,36 @@ func TestBeforeAnyRangeEveryCardIsBlank(t *testing.T) {
 	}
 }
 
-// TestACardIsReadableOnlyInsideEveryRangeBought: the decade, the five
-// years, the rating band and the genre each narrow what the sheets
-// read, together as much as the tightest; the length and the director
-// never do. Across all six sheets, each opened in a game of its own
+// TestACardIsReadableOnlyInsideEveryRangeBought: the decade and the
+// rating band each narrow what the sheets read, together as much as the
+// tighter; the genre, the length and the director never narrow them nor
+// open them. Across all six sheets, each opened in a game of its own
 // with everyone showing.
 func TestACardIsReadableOnlyInsideEveryRangeBought(t *testing.T) {
 	p := matrix()
+	// The Fugitive, Speed, Bound and The Matrix are the 1990s'.
+	nineties := []string{"tt0106977", "tt0111257", "tt0115736", "tt0133093"}
+	// 8.0 or higher: Apocalypse Now, The Matrix, Memento, The Lord of the
+	// Rings and V for Vendetta.
+	eights := []string{"tt0078788", "tt0133093", "tt0209144", "tt0120737", "tt0434409"}
 	for _, c := range []struct {
 		facts []string
 		want  []string
 	}{
 		{nil, nil},
 		{[]string{KindLength, KindDirector}, nil},
-		// The Fugitive, Speed, Bound and The Matrix are the 1990s'.
-		{[]string{KindDecade}, []string{"tt0106977", "tt0111257", "tt0115736", "tt0133093"}},
-		{[]string{KindDecade, KindYears}, []string{"tt0115736", "tt0133093"}},
-		// 8.0 or higher: Apocalypse Now, The Matrix, Memento, The Lord of
-		// the Rings and V for Vendetta.
-		{[]string{KindRating}, []string{"tt0078788", "tt0133093", "tt0209144", "tt0120737", "tt0434409"}},
-		// Action and Sci-Fi both: The Matrix and its sequel, never V for
-		// Vendetta or Cloud Atlas, which have one each.
-		{[]string{KindGenre}, []string{"tt0133093", "tt0234215"}},
+		// The genre, Action and Sci-Fi, opens nothing, not even the two
+		// movies that have both.
+		{[]string{KindGenre}, nil},
+		{[]string{KindLength, KindGenre, KindDirector}, nil},
+		{[]string{KindDecade}, nineties},
+		{[]string{KindDecade, KindGenre}, nineties},
+		{[]string{KindRating}, eights},
+		// Nor does it close anything: V for Vendetta and The Lord of the
+		// Rings have neither of the answer's genres, Memento only one.
+		{[]string{KindRating, KindGenre}, eights},
 		{[]string{KindDecade, KindRating}, []string{"tt0133093"}},
-		{[]string{KindRating, KindGenre}, []string{"tt0133093"}},
-		{[]string{KindLength, KindGenre, KindDirector}, []string{"tt0133093", "tt0234215"}},
+		{[]string{KindDecade, KindRating, KindGenre, KindLength}, []string{"tt0133093"}},
 	} {
 		var got []string
 		for slot := range Slots {
@@ -565,15 +570,14 @@ func TestACardIsReadableOnlyInsideEveryRangeBought(t *testing.T) {
 }
 
 // TestARangeHoldsFromItsFloorToBelowItsCeiling, as the page draws it: the
-// five years and the decade take their first and last years, the rating
-// band its floor and not its ceiling, compared in tenths so a 7.0 kept as
-// 6.9999 is still 7.0, and the genre a movie with every one of the
-// answer's and more.
+// decade takes its first and last years, and the rating band its floor
+// and not its ceiling, compared in tenths so a 7.0 kept as 6.9999 is
+// still 7.0. The genre bought, a movie's genres change nothing.
 func TestARangeHoldsFromItsFloorToBelowItsCeiling(t *testing.T) {
 	p := matrix()
 	p.Answer.Rating = 7.5
 	g := play(t, p)
-	for _, kind := range []string{KindDecade, KindYears, KindRating, KindGenre} {
+	for _, kind := range []string{KindDecade, KindRating, KindGenre} {
 		g.do(kind, "")
 	}
 	s := g.state()
@@ -583,19 +587,20 @@ func TestARangeHoldsFromItsFloorToBelowItsCeiling(t *testing.T) {
 		edit func(m *Movie)
 		want bool
 	}{
-		{"inside them all", func(*Movie) {}, true},
-		{"the first of the five years", func(m *Movie) { m.Year = 1995 }, true},
-		{"the last of them", func(m *Movie) { m.Year = 1999 }, true},
-		{"the year before them", func(m *Movie) { m.Year = 1994 }, false},
-		{"the year after them", func(m *Movie) { m.Year = 2000 }, false},
+		{"inside them both", func(*Movie) {}, true},
+		{"the decade's first year", func(m *Movie) { m.Year = 1990 }, true},
+		{"its last", func(m *Movie) { m.Year = 1999 }, true},
+		{"the year before it", func(m *Movie) { m.Year = 1989 }, false},
+		{"the year after it", func(m *Movie) { m.Year = 2000 }, false},
 		{"the band's floor", func(m *Movie) { m.Rating = 7.0 }, true},
 		{"its floor a hair under", func(m *Movie) { m.Rating = 0.1 + 0.2 + 6.7 }, true},
 		{"its top", func(m *Movie) { m.Rating = 7.9 }, true},
 		{"its ceiling", func(m *Movie) { m.Rating = 8.0 }, false},
 		{"below its floor", func(m *Movie) { m.Rating = 6.9 }, false},
 		{"one more genre", func(m *Movie) { m.Genres = []string{"Action", "Adventure", "Sci-Fi"} }, true},
-		{"one genre of the two", func(m *Movie) { m.Genres = []string{"Action", "Thriller"} }, false},
-		{"no genres", func(m *Movie) { m.Genres = nil }, false},
+		{"one genre of the two", func(m *Movie) { m.Genres = []string{"Action", "Thriller"} }, true},
+		{"none of them", func(m *Movie) { m.Genres = []string{"Romance"} }, true},
+		{"no genres", func(m *Movie) { m.Genres = nil }, true},
 	} {
 		m := in
 		m.Genres = slices.Clone(in.Genres)
@@ -633,7 +638,7 @@ func TestABlankCardIsPlacedToTheHalfPoint(t *testing.T) {
 func TestTheAnswersCardIsLikeEveryOther(t *testing.T) {
 	p := matrix()
 	keys := func(m map[string]any) string { return strings.Join(slices.Sorted(maps.Keys(m)), " ") }
-	for _, facts := range [][]string{nil, {KindLength}, {KindDecade}, {KindRating}, {KindGenre}, {KindDecade, KindYears, KindRating, KindGenre}} {
+	for _, facts := range [][]string{nil, {KindLength}, {KindGenre}, {KindDecade}, {KindDecade, KindGenre}, {KindRating}, {KindDecade, KindRating, KindGenre}} {
 		for slot := range Slots {
 			g := opened(t, p, slot)
 			for _, kind := range facts {
@@ -662,10 +667,65 @@ func TestTheAnswersCardIsLikeEveryOther(t *testing.T) {
 					t.Errorf("%v: slot %d has a readable card with %s and one with %s", facts, slot, readable, keys(c))
 				}
 			}
-			if r := strings.Replace(readable, " poster", "", 1); readable != "" && r != "genres id rating title year" {
+			if r := strings.Replace(readable, " poster", "", 1); readable != "" && r != "id rating title year" {
 				t.Errorf("%v: slot %d's readable cards say %s", facts, slot, readable)
 			}
 		}
+	}
+}
+
+// TestNoCardSaysItsGenres, readable or blank, in play or once it is
+// over: the genre is no range, so a sheet read inside the decade and the
+// band holds movies of every genre, and a card that said its own would
+// let a player who bought Genre filter them by hand down to today's.
+// Here Pantoliano's three 1990s movies are Action and Crime, Crime and
+// Thriller, and Action and Sci-Fi: by their genres the answer's would be
+// the only one left.
+func TestNoCardSaysItsGenres(t *testing.T) {
+	p := matrix()
+	var genres []string
+	for _, m := range p.Movies {
+		for _, g := range m.Genres {
+			if !slices.Contains(genres, g) {
+				genres = append(genres, g)
+			}
+		}
+	}
+	says := func(when string, slot int, cards []SheetCard) {
+		t.Helper()
+		body := rendered(t, cards)
+		for _, secret := range append([]string{"genres"}, genres...) {
+			if strings.Contains(body, `"`+secret+`"`) {
+				t.Errorf("%s, slot %d's sheet says %q: %s", when, slot, secret, body)
+			}
+		}
+	}
+	for _, facts := range [][]string{{KindDecade, KindGenre}, {KindRating, KindGenre}, {KindGenre, KindDecade, KindRating}} {
+		for slot := range Slots {
+			g := opened(t, p, slot)
+			for _, kind := range facts {
+				g.do(kind, "")
+			}
+			cards, ok := p.SheetOf(g.state(), slot, live)
+			if !ok || len(readableIDs(cards)) == 0 {
+				t.Fatalf("%v: slot %d's sheet reads nothing: %+v, %v", facts, slot, cards, ok)
+			}
+			says(fmt.Sprintf("with %v bought", facts), slot, cards)
+		}
+	}
+	g := opened(t, p, 0)
+	g.do(KindDecade, "")
+	if joe, _ := p.SheetOf(g.state(), 0, live); !slices.Equal(readableIDs(joe), []string{"tt0106977", "tt0115736", "tt0133093"}) {
+		t.Errorf("Pantoliano's sheet with the 1990s reads %v", readableIDs(joe))
+	}
+	g.do(KindGenre, "")
+	g.do(KindReveal, "")
+	for slot := range Slots {
+		cards, _ := p.SheetOf(g.state(), slot, live)
+		if len(readableIDs(cards)) != len(cards) {
+			t.Fatalf("once it is over, slot %d's sheet has blank cards: %+v", slot, cards)
+		}
+		says("once it is over", slot, cards)
 	}
 }
 
@@ -712,10 +772,10 @@ func TestACardsPlaceSaysNothingItsFaceDoesNot(t *testing.T) {
 // TestASheetHasEveryReadablePosterOrNone: the answer always has a poster,
 // so a sheet where only some readable cards had theirs would mark it out.
 // Pantoliano's three 1990s movies all have one in live, and are sent
-// them, while Memento, blank, is not; Keanu's two readable with Genre,
-// The Matrix and its sequel, do not both, and neither is sent one, the
-// answer included. A blank card never has one, and no poster is read for
-// it.
+// them, while Memento, blank, is not; Weaving's three readable at 8.0 or
+// higher, The Matrix, The Lord of the Rings and V for Vendetta, do not
+// all, and none is sent one, the answer included. A blank card never
+// has one, and no poster is read for it.
 func TestASheetHasEveryReadablePosterOrNone(t *testing.T) {
 	p := matrix()
 	g := opened(t, p, 0)
@@ -737,14 +797,14 @@ func TestASheetHasEveryReadablePosterOrNone(t *testing.T) {
 		t.Errorf("Pantoliano's sheet with the 1990s = %s", body)
 	}
 
-	genre := opened(t, p, 5)
-	genre.do(KindGenre, "")
-	keanu, _ := p.SheetOf(genre.state(), 5, live)
-	if ids := readableIDs(keanu); !slices.Equal(ids, []string{"tt0133093", "tt0234215"}) {
-		t.Fatalf("Keanu's readable with Genre: %v", ids)
+	rating := opened(t, p, 2)
+	rating.do(KindRating, "")
+	hugo, _ := p.SheetOf(rating.state(), 2, live)
+	if ids := readableIDs(hugo); !slices.Equal(ids, []string{"tt0133093", "tt0120737", "tt0434409"}) {
+		t.Fatalf("Weaving's readable with the rating: %v", ids)
 	}
-	if body := rendered(t, keanu); strings.Contains(body, "poster") || strings.Contains(body, "matrix.jpg") {
-		t.Errorf("Keanu's sheet with Genre says %s", body)
+	if body := rendered(t, hugo); strings.Contains(body, "poster") || strings.Contains(body, "matrix.jpg") {
+		t.Errorf("Weaving's sheet with the rating says %s", body)
 	}
 
 	// At the end everything is readable: Pantoliano's all have one, and
@@ -754,7 +814,7 @@ func TestASheetHasEveryReadablePosterOrNone(t *testing.T) {
 	if body := rendered(t, joe); strings.Count(body, `"poster"`) != 4 {
 		t.Errorf("Pantoliano's sheet at the end = %s", body)
 	}
-	keanu, _ = p.SheetOf(g.state(), 5, live)
+	keanu, _ := p.SheetOf(g.state(), 5, live)
 	if body := rendered(t, keanu); strings.Contains(body, "poster") {
 		t.Errorf("Keanu's sheet at the end = %s", body)
 	}

@@ -144,11 +144,12 @@ var answer = Candidate{
 // made, a close relative too; a movie Moss and Pantoliano share, which
 // is neither one's "Also in"; two of Weaving's with the same votes;
 // Foster's one, through the seventh-billed as well; nothing of
-// Fishburne's own, only the sequel and three he made with Foster; and
-// two Pantoliano made, one with Weaving and one with Moss. So each of
-// the six has MinSheet movies besides the answer, and no more.
+// Fishburne's own, only the sequel and three he made with Foster; two
+// Pantoliano made, one with Weaving and one with Moss; and the crowd.
+// So each of the six has MinSheet movies besides the answer and the
+// crowd, and no more.
 func sheets() []MapFilm {
-	return []MapFilm{
+	return append([]MapFilm{
 		{ID: "tt0133093", Title: "The Matrix", Year: 1999, Rating: 8.7, MD: 331, Genres: []string{"Action", "Sci-Fi"}, Votes: 2000000,
 			People: []string{"nm0905154", "nm0905152", "nm0000206", "nm0000401", "nm0005251", "nm0915989", "nm0287825", "nm0001592", "nm0324658"}},
 		{ID: "tt0234215", Title: "The Matrix Reloaded", Year: 2003, Rating: 7.2, Genres: []string{"Action", "Sci-Fi"}, Votes: 9000000,
@@ -173,6 +174,22 @@ func sheets() []MapFilm {
 		{ID: "tt9000007", Title: "A Pantoliano Moss Movie", Year: 1989, Rating: 6.1, Votes: 500, People: []string{"nm0001592", "nm0005251"}},
 		// Only the seventh-billed and a director: on no one's sheet.
 		{ID: "tt9000002", Title: "Nobody's", Year: 2010, Rating: 6.0, Votes: 100, People: []string{"nm0324658", "nm0905154"}},
+	}, crowd()...)
+}
+
+// crowd are three movies all six made in the 1990s, rated 8.0 or more,
+// so inside The Matrix's decade and its rating band: as many as MinCrowd
+// asks of every one of the six's sheets, and the only ones Foster,
+// Weaving, Moss and Fishburne have there. Crediting all six, none is
+// anyone's "Also in".
+func crowd() []MapFilm {
+	six := func() []string {
+		return []string{"nm0000206", "nm0000401", "nm0005251", "nm0915989", "nm0287825", "nm0001592"}
+	}
+	return []MapFilm{
+		{ID: "tt9100001", Title: "The Six in 1990", Year: 1990, Rating: 8.0, Genres: []string{"Drama"}, Votes: 50000, People: six()},
+		{ID: "tt9100002", Title: "The Six in 1994", Year: 1994, Rating: 8.4, Genres: []string{"Drama"}, Votes: 50000, People: six()},
+		{ID: "tt9100003", Title: "The Six in 1998", Year: 1998, Rating: 9.0, Genres: []string{"Drama"}, Votes: 50000, People: six()},
 	}
 }
 
@@ -324,8 +341,11 @@ func TestTheSheetsAreTheSixsMoviesWithTheAnswerUnmarked(t *testing.T) {
 		"1987 tt9000005 [1 4] [1 4] false",
 		"1988 tt9000006 [0 2] [0 2] false",
 		"1989 tt9000007 [0 3] [0 3] false",
+		"1990 tt9100001 [0 1 2 3 4 5] [0 1 2 3 4 5] false",
 		"1993 tt0106977 [0] [0] false",
 		"1994 tt0111257 [5] [5] false",
+		"1994 tt9100002 [0 1 2 3 4 5] [0 1 2 3 4 5] false",
+		"1998 tt9100003 [0 1 2 3 4 5] [0 1 2 3 4 5] false",
 		"1999 tt0133093 [0 1 2 3 4 5] [0 1 2 3 4 5] true",
 		"2000 tt0209144 [0 3] [0 3] false",
 		"2000 tt0241303 [3] [3] false",
@@ -358,7 +378,7 @@ func TestTheSheetsAreTheSixsMoviesWithTheAnswerUnmarked(t *testing.T) {
 }
 
 // TestEachSheetIsItsOwnFourHundredMostVoted: four hundred and ten more
-// of Pantoliano's, the least voted of his, leave his fifteen fewest off
+// of Pantoliano's, the least voted of his, leave his eighteen fewest off
 // his sheet, though Foster is on the ten fewest and her sheet, far from
 // full, has them. On his they would be cards past his cap, there only
 // because someone else of the six is in them, and his sheet run past
@@ -392,19 +412,20 @@ func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
 		t.Errorf("Pantoliano's sheet has %d movies, the answer among them %v; want %d", len(joe), slices.Contains(joe, answer.ID), MaxSheet)
 	}
 	for _, id := range joe {
-		if n := extra(id); n >= 1 && n <= 15 {
-			t.Errorf("Extra %d, among the fifteen least voted of his, is on Pantoliano's sheet", n)
+		if n := extra(id); n >= 1 && n <= 18 {
+			t.Errorf("Extra %d, among the eighteen least voted of his, is on Pantoliano's sheet", n)
 		}
 	}
-	// Hers: the answer, Man and Boy, the three with Fishburne and the ten.
+	// Hers: the answer, Man and Boy, the three with Fishburne, the crowd
+	// and the ten.
 	gloria := p.SheetWants(over, 1)
 	for n := 1; n <= 10; n++ {
 		if !slices.Contains(gloria, fmt.Sprintf("tt97%05d", n)) {
 			t.Errorf("Extra %d, which Foster is on, is not on her sheet", n)
 		}
 	}
-	if len(gloria) != 15 {
-		t.Errorf("Foster's sheet has %d movies, want 15: %v", len(gloria), gloria)
+	if len(gloria) != 18 {
+		t.Errorf("Foster's sheet has %d movies, want 18: %v", len(gloria), gloria)
 	}
 	for _, m := range p.Movies {
 		if m.ID == answer.ID && !slices.Equal(m.Sheets, []int{0, 1, 2, 3, 4, 5}) {
@@ -413,19 +434,19 @@ func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
 		if n := extra(m.ID); n >= 1 && n <= 10 && (!slices.Equal(m.Cast, []int{0, 1}) || !slices.Equal(m.Sheets, []int{1})) {
 			t.Errorf("Extra %d credits %v and is on the sheets of %v, want [0 1] and [1]", n, m.Cast, m.Sheets)
 		}
-		if n := extra(m.ID); n >= 11 && n <= 15 {
+		if n := extra(m.ID); n >= 11 && n <= 18 {
 			t.Errorf("Extra %d, on nobody's sheet, is kept", n)
 		}
 	}
 
 	// Played, Foster's sheet, opened once she is showing, is her
-	// fifteen, the ten among them; his, opened in a game of its own,
+	// eighteen, the ten among them; his, opened in a game of its own,
 	// stays at MaxSheet without them.
 	g := play(t, p)
 	g.do(KindNext, "")
 	g.do(KindSheet, "nm0287825")
 	hers, ok := p.SheetOf(g.state(), 1, Live{})
-	if !ok || len(hers) != 15 {
+	if !ok || len(hers) != 18 {
 		t.Fatalf("Foster's sheet, opened with her showing: %d movies, %v", len(hers), ok)
 	}
 	him := play(t, p)
@@ -442,7 +463,7 @@ func TestEachSheetIsItsOwnFourHundredMostVoted(t *testing.T) {
 // TestBuildRefusesACastMemberWithTooFewOtherMovies: a sheet is free to
 // open, so one with fewer than MinSheet movies besides the answer would
 // give the answer away by elimination. Pantoliano's, the sixth-billed's
-// and open from Play, without The Fugitive, or with nothing but the
+// and open from Play, with nothing but the crowd, or nothing but the
 // answer, is refused, and the refusal names neither the movie nor him.
 func TestBuildRefusesACastMemberWithTooFewOtherMovies(t *testing.T) {
 	without := func(ids ...string) []MapFilm {
@@ -453,7 +474,7 @@ func TestBuildRefusesACastMemberWithTooFewOtherMovies(t *testing.T) {
 		films []MapFilm
 		why   string
 	}{
-		{"without The Fugitive", without("tt0106977"), "3 other movies, fewer than 4"},
+		{"with only the crowd", without("tt0106977", "tt0209144", "tt9000006", "tt9000007"), "3 other movies, fewer than 4"},
 		{"with only the answer", []MapFilm{sheets()[0]}, "0 other movies, fewer than 4"},
 	} {
 		_, err := Build(1, oct9, answer, billed, wachowskis, c.films)
@@ -470,6 +491,170 @@ func TestBuildRefusesACastMemberWithTooFewOtherMovies(t *testing.T) {
 	}
 	if _, err := Build(1, oct9, answer, billed, wachowskis, sheets()); err != nil {
 		t.Errorf("with MinSheet movies each besides the answer: %v", err)
+	}
+}
+
+// TestEachOfTheSixNeedsACrowdInTheAnswersDecadeAndBand: a player who has
+// bought the decade and the rating reads only the cards inside both, so
+// every one of the six's sheets must keep MinCrowd there besides the
+// answer. Pantoliano, left out of one of the crowd, has two, and the
+// candidate is refused, saying nothing of who or what; given one more
+// of his own in the 1990s at 8.0 or more, he has three, and it is a
+// puzzle. A movie of his that only someone else's cap let in counts for
+// nothing on his sheet, and nor do the answer, the 1990s below 8.0 and
+// 8.0 or more outside the 1990s.
+func TestEachOfTheSixNeedsACrowdInTheAnswersDecadeAndBand(t *testing.T) {
+	two := sheets()
+	crowded := slices.IndexFunc(two, func(f MapFilm) bool { return f.ID == "tt9100002" })
+	two[crowded].People = slices.DeleteFunc(two[crowded].People, func(id string) bool { return id == "nm0001592" })
+	_, err := Build(1, oct9, answer, billed, wachowskis, two)
+	var unfit Unfit
+	why := "one of the six has 2 other movies in the answer's decade and rating band besides their Also in, fewer than 3"
+	if !errors.As(err, &unfit) || err.Error() != "daily: "+why {
+		t.Fatalf("Pantoliano with two: %v, want a refusal saying %q", err, why)
+	}
+	for _, name := range []string{"Matrix", answer.ID, "Pantoliano", "nm0001592", "The Six"} {
+		if strings.Contains(err.Error(), name) {
+			t.Errorf("the refusal %q names %s", err, name)
+		}
+	}
+	if err := Fit(answer, billed, wachowskis, two); err == nil || err.Error() != "daily: "+why {
+		t.Errorf("Fit, with two: %v, want the same refusal", err)
+	}
+	three := append(slices.Clone(two), MapFilm{ID: "tt9100004", Title: "Pantoliano in 1996", Year: 1996, Rating: 8.1,
+		Votes: 400, People: []string{"nm0001592"}})
+	p, err := Build(1, oct9, answer, billed, wachowskis, three)
+	if err != nil {
+		t.Fatalf("Pantoliano with three: %v", err)
+	}
+	if fourth := p.Movies[slices.IndexFunc(p.Movies, func(m Movie) bool { return m.ID == "tt9100004" })]; !slices.Equal(fourth.Sheets, []int{0}) {
+		t.Errorf("Pantoliano's own third is on the sheets of %v", fourth.Sheets)
+	}
+	// None of these is a third: the 1990s at 7.9, 8.0 or more in 2000,
+	// and, past his cap, one he made with Foster.
+	for _, f := range []MapFilm{
+		{ID: "tt9100005", Title: "Pantoliano at 7.9", Year: 1996, Rating: 7.9, Votes: 400, People: []string{"nm0001592"}},
+		{ID: "tt9100006", Title: "Pantoliano in 2000", Year: 2000, Rating: 8.8, Votes: 400, People: []string{"nm0001592"}},
+	} {
+		if _, err := Build(1, oct9, answer, billed, wachowskis, append(slices.Clone(two), f)); err == nil || err.Error() != "daily: "+why {
+			t.Errorf("with %s: %v, want the refusal", f.Title, err)
+		}
+	}
+	capped := slices.Clone(two)
+	capped = append(capped, MapFilm{ID: "tt9100007", Title: "Pantoliano and Foster", Year: 1996, Rating: 8.1, Votes: 1,
+		People: []string{"nm0001592", "nm0287825"}})
+	for n := 1; n <= MaxSheet; n++ {
+		capped = append(capped, MapFilm{ID: fmt.Sprintf("tt97%05d", n), Title: fmt.Sprintf("Extra %d", n), Year: 1950,
+			Rating: 6, Votes: 1000 + n, People: []string{"nm0001592"}})
+	}
+	if _, err := Build(1, oct9, answer, billed, wachowskis, capped); err == nil || err.Error() != "daily: "+why {
+		t.Errorf("with a third past his cap, on Foster's sheet alone: %v, want the refusal", err)
+	}
+}
+
+// TestACastMembersOwnAlsoInIsNoPartOfTheirCrowd: it is named beside them
+// from the moment they show, so on their sheet it is a card the player
+// already knows is not today's. Pantoliano, left out of one of the
+// crowd, is given a third of his own in the 1990s at 8.0 or more, the
+// most voted of his own and so his "Also in": with only two others to
+// weigh, the candidate is refused, saying nothing of who or what. One
+// more of his there, less voted, makes three besides it, and it is a
+// puzzle; and an "Also in" outside the decade or the band takes nothing
+// from the three.
+func TestACastMembersOwnAlsoInIsNoPartOfTheirCrowd(t *testing.T) {
+	two := sheets()
+	crowded := slices.IndexFunc(two, func(f MapFilm) bool { return f.ID == "tt9100002" })
+	two[crowded].People = slices.DeleteFunc(two[crowded].People, func(id string) bool { return id == "nm0001592" })
+	named := MapFilm{ID: "tt9100004", Title: "Pantoliano in 1996", Year: 1996, Rating: 8.1, Votes: 500000, People: []string{"nm0001592"}}
+	alsoIn := func(p *Puzzle) string {
+		if p.Cast[0].Also == nil {
+			return ""
+		}
+		return p.Cast[0].Also.ID
+	}
+
+	_, err := Build(1, oct9, answer, billed, wachowskis, append(slices.Clone(two), named))
+	why := "one of the six has 2 other movies in the answer's decade and rating band besides their Also in, fewer than 3"
+	var unfit Unfit
+	if !errors.As(err, &unfit) || err.Error() != "daily: "+why {
+		t.Fatalf("his third his own Also in: %v, want a refusal saying %q", err, why)
+	}
+	for _, name := range []string{"Matrix", answer.ID, "Pantoliano", "nm0001592", "tt9100004", "The Six"} {
+		if strings.Contains(err.Error(), name) {
+			t.Errorf("the refusal %q names %s", err, name)
+		}
+	}
+	if err := Fit(answer, billed, wachowskis, append(slices.Clone(two), named)); err == nil || err.Error() != "daily: "+why {
+		t.Errorf("Fit, with his third his own Also in: %v, want the same refusal", err)
+	}
+	// Less voted than The Fugitive, the same movie is not his "Also in",
+	// and counts.
+	quiet := named
+	quiet.Votes = 400
+	if p, err := Build(1, oct9, answer, billed, wachowskis, append(slices.Clone(two), quiet)); err != nil {
+		t.Errorf("his third less voted than The Fugitive: %v", err)
+	} else if got := alsoIn(p); got != "tt0106977" {
+		t.Errorf("his third less voted than The Fugitive, Pantoliano is also in %s", got)
+	}
+
+	fourth := MapFilm{ID: "tt9100005", Title: "Pantoliano in 1997", Year: 1997, Rating: 8.2, Votes: 300, People: []string{"nm0001592"}}
+	p, err := Build(1, oct9, answer, billed, wachowskis, append(slices.Clone(two), named, fourth))
+	if err != nil {
+		t.Fatalf("three besides his own Also in: %v", err)
+	}
+	if got := alsoIn(p); got != named.ID {
+		t.Errorf("Pantoliano is also in %s, want %s", got, named.ID)
+	}
+
+	for _, outside := range []MapFilm{
+		{ID: "tt9100006", Title: "Pantoliano at 7.9", Year: 1996, Rating: 7.9, Votes: 600000, People: []string{"nm0001592"}},
+		{ID: "tt9100007", Title: "Pantoliano in 2000", Year: 2000, Rating: 8.8, Votes: 600000, People: []string{"nm0001592"}},
+	} {
+		p, err := Build(1, oct9, answer, billed, wachowskis, append(slices.Clone(two), quiet, outside))
+		if err != nil {
+			t.Errorf("with %s his Also in: %v", outside.Title, err)
+			continue
+		}
+		if got := alsoIn(p); got != outside.ID {
+			t.Errorf("with %s, Pantoliano is also in %s", outside.Title, got)
+		}
+	}
+}
+
+// TestTheCrowdIsTheDecadeAndTheBandTheFactsSell, at their edges: for an
+// answer of 1999 rated 7.4, a movie of 1990 or 1999 is in its decade and
+// one of 1989 or 2000 is not, and one rated 7.0 or 7.9 is in its band and
+// one rated 6.9 or 8.0 is not. The crowd here is two inside both and a
+// third moved to each edge: inside, the candidate is a puzzle, and just
+// outside, it is refused.
+func TestTheCrowdIsTheDecadeAndTheBandTheFactsSell(t *testing.T) {
+	a := answer
+	a.Rating = 7.4
+	for _, c := range []struct {
+		year   int
+		rating float64
+		fit    bool
+	}{
+		{1995, 7.5, true},
+		{1990, 7.5, true}, {1999, 7.5, true}, {1989, 7.5, false}, {2000, 7.5, false},
+		{1995, 7.0, true}, {1995, 0.1 + 0.2 + 6.7, true}, {1995, 7.9, true}, {1995, 6.9, false}, {1995, 8.0, false},
+	} {
+		films := sheets()
+		for i := range films {
+			if strings.HasPrefix(films[i].ID, "tt91") {
+				films[i].Year, films[i].Rating = 1995, 7.5
+			}
+			if films[i].ID == "tt9100003" {
+				films[i].Year, films[i].Rating = c.year, c.rating
+			}
+		}
+		_, err := Build(1, oct9, a, billed, wachowskis, films)
+		if fit := err == nil; fit != c.fit {
+			t.Errorf("the third in %d at %v: %v, want fit %v", c.year, c.rating, err, c.fit)
+		}
+		if err != nil && !strings.Contains(err.Error(), "2 other movies in the answer's decade and rating band") {
+			t.Errorf("the third in %d at %v: %v", c.year, c.rating, err)
+		}
 	}
 }
 
@@ -497,6 +682,14 @@ func TestBuildRefusesWhatIsNoGame(t *testing.T) {
 		if !errors.As(err, &unfit) || !strings.Contains(err.Error(), c.why) || strings.Contains(err.Error(), "Matrix") {
 			t.Errorf("%s: %v, want a refusal saying %q", c.name, err, c.why)
 		}
+		// Fit asks every rule but the colour, as Build does.
+		fit := Fit(c.a, c.cast, c.dir, sheets())
+		if c.why == "no colour" && fit != nil || c.why != "no colour" && (fit == nil || fit.Error() != err.Error()) {
+			t.Errorf("%s: Fit says %v, where Build says %v", c.name, fit, err)
+		}
+	}
+	if err := Fit(answer, billed, wachowskis, sheets()); err != nil {
+		t.Errorf("Fit, with everything: %v", err)
 	}
 }
 

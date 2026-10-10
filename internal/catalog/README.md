@@ -226,53 +226,104 @@ catalog's jobs do, waits for a published catalog like them, rests
 `meta.daily_puzzles` has it, and most passes stop there; the one after
 midnight UTC picks the new last day, and a publish wakes it in case a
 day it could not pick for has an answer in the new catalog. For a
-missing day it reads the candidates once a pass (`dailyCandidates`:
-the `first_run` pool, rated, with a poster that is `ok` with an
-address, and `gridFilm`, each with its runtime and its poster's colour
-where they are known), orders them with `daily.Order` against what the
-days around it used (`dailyRecent`: the answers 90 days either side,
-the eras of the six days before and the first genres of the two), and
-tries them in turn (`firstFair`). Nothing is asked of a candidate's
-synopsis: no fact is a line of its text, since any line can be pasted
-into a search engine, so a movie OMDb has no plot for is as fair an
-answer as any.
+missing day it reads the candidates once a pass (`dailyCandidates`),
+orders them with `daily.Order` against what the days around it used
+(`dailyRecent`: the answers 90 days either side, the eras of the six
+days before and the first genres of the two), and tries them in turn
+(`firstFair`).
+
+The candidates are every movie with `daily.MinVotes` (25,000) votes,
+rated and passing `gridFilm`, with a runtime, which the Length fact is
+sold from, and a poster that is `ok` with an address, each with its
+poster's colour where it is known. Each is placed in the era of `eras`
+(`store.go`) its year falls in, the bands `firstrun.sql` ranks the
+opening screen's pool in, written once and into both, so a movie made
+before 1920 has no era and is no candidate. They were that pool
+itself, `first_run`, until the crowd rule below: only 70 of its movies
+make a puzzle under it, too few to go 90 days without an answer coming
+back. Nothing is asked of a candidate's synopsis: no fact is a line of
+its text, since any line can be pasted into a search engine, so a
+movie OMDb has no plot for is as fair an answer as any.
+
+Only the crowded come back. `daily.Build` refuses a candidate unless
+each of its six has `daily.MinCrowd` (three) movies on their own sheet
+inside its decade and its rating band, besides it and their own Also
+in movie, since a Movies sheet shows every card's year and rating and
+a reader who has bought both ranges is looking at the cards inside
+them whatever the sheet reads (see the root README, Daily, Choosing
+the puzzle). About one movie with `MinVotes` votes in twenty passes,
+so asked a candidate at a time the rule would read twenty candidates'
+people and sheets for every day picked. The query asks it of every
+movie at once, as the reads below would see it: the six are
+`peopleOn`'s first six billed cast, credited as actor or actress, with
+a name, and credited neither as its director nor in its crew's
+directors, in billing order; each one's sheet is `sheetFilms`'s, their
+`daily.MaxSheet` most voted, ties to the lower id, with the answer
+moved first, so a movie of theirs is on it when its place, counted
+that way, is within the cap; the decade is `daily.Decade`'s, and the
+band is `width_bucket` over `daily.RatingFloors`, the floors
+`daily.RatingBand` counts, so the bands are written once. It leaves
+out only each one's own Also in, which turns on close relatives and
+shared titles (`daily.RelativeShared`, `sharesTitle`), more than a
+query can fairly say, so it keeps every candidate `Build` would and a
+few it will not: in October 2026 it kept 344 of the movies with
+`MinVotes` votes, of which `dailyPuzzleOf` refused 42 for the crowd
+and 4 for `daily.MinSheet`, each before any poster was fetched, and
+298 make a puzzle. The query takes about two seconds on the full
+catalog, and a pass that picks all ten days about as long, the reads
+of each day's one or two candidates a few milliseconds each.
+`TestTheCandidatesAreTheOnesBuildFindsCrowded` holds the two to
+agreeing at every edge: a crowd movie moved to either side of the
+decade or the band, one of the six taken off one, the star credited as
+its director either way, a sixth-billed with an Also in inside the
+decade and the band, which only `Build` refuses, and the star's cap
+counted with the answer moved first.
+`TestAnyMovieWithMinVotesCanBeTheAnswer` picks one off `first_run`
+with `MinVotes` votes, and none with one fewer.
 
 `dailyPuzzleOf` refuses a candidate, as a `daily.Unfit`, as early as
-it can, so what is cheap is asked before what is not. One with no
-runtime goes first. Then its people are read with the map's own
-`peopleOn`, and one without a director or six billed cast goes. The
-six come from peopleOn's cast, and someone who both acted in it and
-directed it is a director there, never one of the six, so the Director
-fact can never name a hidden name. Then its poster's colour
-(`candidateColour`): the colour job's, or, for a poster the job has
-not reached, one worked out now with `PosterColour`, at the job's
-`colourWidth` and then the address kept, and saved back to
-`meta.posters.colour` as the job would save it. A poster that cannot
-be read is no colour, and the candidate goes; its error, which names
-the poster's address and so the movie, is never passed on. Only then
-are the six's movies read, in one query (`sheetFilms`): each one's
-`daily.MaxSheet` (400) most voted that they are credited on as actor,
-actress or director or in the crew's directors, rated and passing
-`gridFilm`, the answer first, with every one of the answer's people
-credited on each, not only the six, so a close relative can be told.
-`daily.Build` keeps, for each movie, which of the six it credits and
+it can, so what is cheap is asked before what is not. Its people are
+read first, with the map's own `peopleOn`, and one without a director
+or six billed cast goes. The six come from peopleOn's cast, and
+someone who both acted in it and directed it is a director there,
+never one of the six, so the Director fact can never name a hidden
+name. Then the six's movies are read, in one query (`sheetFilms`):
+each one's `daily.MaxSheet` (400) most voted that they are credited on
+as actor, actress or director or in the crew's directors, rated and
+passing `gridFilm`, the answer first, with every one of the answer's
+people credited on each, not only the six, so a close relative can be
+told. `daily.Fit` then asks every rule `daily.Build` does but the
+colour: it keeps, for each movie, which of the six it credits and
 whose own cap let it in, so a movie of one's that another of the six
-is on below their own cap is on the first's sheet only; refuses a
-candidate one of whose six has fewer than `daily.MinSheet` (four)
-movies besides the answer on their sheet, a floor chosen rather than
-measured; and picks each one's Also in movie. The puzzle is inserted
-with `ON CONFLICT (day) DO NOTHING`, so a second process picking the
-same day keeps whichever wrote first. A clash on `no` is not skipped:
-it means the numbering has gone wrong and a day would go without a
-puzzle for good, so it is an error the pass returns. A day no
-candidate fits is an error, the other days are picked all the same,
-and the pass returns every such day joined, which reaches Telegram the
-way any job's failure does. How long a pass takes on the full catalog
-has not been measured since the sheets replaced the old board. On a
-new database the first pass runs the moment the first catalog is
-published, while the poster pass is still reaching the candidates'
-posters, so it can find few or none; a day it cannot pick waits for
-the next pass.
+is on below their own cap is on the first's sheet only; picks each
+one's Also in movie; and refuses a candidate one of whose six has
+fewer than `daily.MinSheet` (four) movies besides the answer on their
+sheet, a floor chosen rather than measured, or fewer than
+`daily.MinCrowd` in the answer's decade and band besides it and their
+Also in. Only then its poster's colour (`candidateColour`): the colour
+job's, or, for a poster the job has not reached, one worked out now
+with `PosterColour`, at the job's `colourWidth` and then the address
+kept, and saved back to `meta.posters.colour` as the job would save
+it. The colour job colours only `first_run`, so most candidates have
+none yet, and asking it last means a poster is fetched only for one
+that will make a puzzle
+(`TestAPosterIsFetchedOnlyForACandidateThatWillMakeAPuzzle`). A poster
+that cannot be read is no colour, and the candidate goes; its error,
+which names the poster's address and so the movie, is never passed on.
+`daily.Build` asks every rule again, the colour last, and makes the
+puzzle. The puzzle is inserted with `ON CONFLICT (day) DO NOTHING`, so
+a second process picking the same day keeps whichever wrote first. A
+clash on `no` is not skipped: it means the numbering has gone wrong
+and a day would go without a puzzle for good, so it is an error the
+pass returns. A day no candidate fits is an error, the other days are
+picked all the same, and the pass returns every such day joined, which
+reaches Telegram the way any job's failure does. The two seconds of a
+full pass above were measured read-only, so they leave out the poster
+fetches: the colour job had not reached 266 of the 344, and seven of
+the ten picks would have fetched one. On a new database the first pass
+runs the moment the first catalog is published, while the poster pass
+is still reaching the candidates' posters, so it can find few or none;
+a day it cannot pick waits for the next pass.
 
 `dailyCandidates` first looks for `runtime_minutes` on the live
 `titles` (`hasRuntimes`, in `information_schema`). A live catalog
@@ -302,8 +353,9 @@ candidate" in its place and still unwraps to the error it was.
 Development's Play again is `RepickDailyPuzzle`, in `dailydev.go`, the
 only thing that ever deals a picked day again. The API offers it only
 outside production (`WithDailyDev`); nothing here knows which it is
-in, so nothing else may call it. It reads the puzzle, the candidates
-and `dailyRecent` for its day, adds the answer it is replacing to the
+in, so nothing else may call it. It reads the puzzle, the candidates,
+afresh on every press and so in about two seconds, and `dailyRecent`
+for its day, adds the answer it is replacing to the
 answers left out, though the day's own is among them already, and
 orders the candidates with `daily.OrderBy` from a generator seeded at
 random rather than from the day: in the day's order each press would
@@ -376,42 +428,53 @@ applies `meta.sql` twice over no daily tables, twice over Point
 Blank's and twice over Name Drop's, and finds the same shape every
 time.
 
-The moves' kind check has changed twice since, and `CREATE TABLE IF
-NOT EXISTS` leaves a moves table made by an earlier `meta.sql` with
-that file's check. Name Drop itself first sold an overlap, which put a
-second person on a Movies sheet and lit only the movies the two
-shared; the answer is on every sheet, so two or three names in it was
-most of the way to it, and it went. Then, with titles readable inside
-the ranges bought, two people's sheets side by side almost always left
-only today's movie, so a game came to open one sheet, chosen once, a
-`sheet` move. So a second `DO` block, after the `CREATE`, reads the
-kinds `pg_constraint` shows `daily_moves_kind_check` naming and sets
-them, in any order, beside the full list (`next`, `length`, `rating`,
-`genre`, `decade`, `years`, `director`, `sheet`, `guess`, `reveal`),
-and only when they differ, or the check is missing, makes it again,
-naming exactly that list. Before it does, it deletes every game
-holding a move the new check would refuse, the moves going with it by
-cascade, rather than the moves alone: the game cannot be kept without
-them, since its points, its end and the `seq` of every move after
-were worked out with them, and its next move would be recorded under
-a `seq` already taken. On every shape there has been, that is an
-overlap and nothing else, and nothing was released, so only test
-games ever bought one; asking it of any kind rather than the overlap
-alone means making the check again can never fail. The players are
-kept, and every other game. On a fresh database, and on one already in
-the new shape, the block does nothing, the check not even made again,
-every time the file runs. Three tests apply `meta.sql` twice over each
-shape and find a fresh database's every time, its check naming the
-sheet and not the overlap. `TestMetaBringsPointBlanksTablesToNameDrop`
-starts from no daily tables, Point Blank's and Name Drop's.
+The moves' kind check has changed three times since, and
+`CREATE TABLE IF NOT EXISTS` leaves a moves table made by an earlier
+`meta.sql` with that file's check. Name Drop itself first sold an
+overlap, which put a second person on a Movies sheet and lit only the
+movies the two shared; the answer is on every sheet, so two or three
+names in it was most of the way to it, and it went. Then, with titles
+readable inside the ranges bought, two people's sheets side by side
+almost always left only today's movie, so a game came to open one
+sheet, chosen once, a `sheet` move. Then the five years inside the
+decade, `years`, went too: a sheet shows every card's year and rating,
+and with them, the rating band and the genre bought, a cast member's
+sheet held hardly anything but the answer inside them. So a second
+`DO` block, after the `CREATE`, reads the kinds `pg_constraint` shows
+`daily_moves_kind_check` naming and sets them, in any order, beside
+the full list (`next`, `length`, `rating`, `genre`, `decade`,
+`director`, `sheet`, `guess`, `reveal`), and only when they differ, or
+the check is missing, makes it again, naming exactly that list. Before
+it does, it deletes every game holding a move the new check would
+refuse, the moves going with it by cascade, rather than the moves
+alone: the game cannot be kept without them, since its points, its end
+and the `seq` of every move after were worked out with them, and its
+next move would be recorded under a `seq` already taken. On every
+shape there has been, that is an overlap or the years and nothing
+else, and nothing was released, so only test games ever bought either;
+asking it of any kind rather than those alone means making the check
+again can never fail. A local database whose test games bought the
+years loses those games the first time this `meta.sql` runs on it. The
+players are kept, and every other game. On a fresh database, and on
+one already in the new shape, the block does nothing, the check not
+even made again, every time the file runs. Four tests apply `meta.sql`
+twice over each shape and find a fresh database's every time, its
+check naming the sheet and neither the overlap nor the years.
+`TestMetaBringsPointBlanksTablesToNameDrop` starts from no daily
+tables, Point Blank's and Name Drop's.
 `TestMetaTakesTheOverlapOutOfTheKindCheck` builds the first check,
-with a game that bought an overlap and one that did not, and finds
-the one game and both players kept. `TestMetaAddsTheSheetToTheKindCheck`
+with a game that bought an overlap and one that did not, and finds the
+one game and both players kept. `TestMetaAddsTheSheetToTheKindCheck`
 builds the second, which took neither the overlap nor the sheet, with
 games of every other kind of move, finished and not, and finds every
 game, move and player kept, the game still in play able to open its
 sheet, and, run once more holding that sheet, the check left as it
-was.
+was. `TestMetaTakesTheYearsOutOfTheKindCheck` builds the third, which
+took the sheet and the years, with a game that bought the years after
+the decade and opened a sheet, and one that bought the decade and the
+rating and ended, and finds the first game gone with its moves, the
+other with its moves and both players kept, the years refused and
+every other kind taken, and, run once more, the check left as it was.
 
 `DailyAct` makes each move in one transaction holding the game's row
 (`FOR UPDATE`), in this order: a key already recorded is a retry,
@@ -501,10 +564,14 @@ replays. A player's games and moves go with them
 with no `ON DELETE`, so a puzzle somebody has played cannot be deleted
 by accident. The tests empty all four (`resetDaily`) and add what a
 puzzle needs to the published fixture: ten candidates, one for each
-day a full pass keeps, one in each of the opening screen pool's eight
-eras and a second in two of them, each with a runtime, a poster and
-its colour, and all eight people, a director and seven billed cast, on
-every one of them; sixty movies through those people, one each, so
-every candidate's sheets hold 56 movies, the other nine candidates
-among them as close relatives; and one unrated movie that must be on
-no sheet.
+day a full pass keeps, well past `daily.MinVotes` and none of them in
+`first_run`, one in each of the opening screen's eight eras and a
+second in two of them, each with a runtime, a poster and its colour,
+and all eight people, a director and seven billed cast, on every one
+of them; each candidate's crowd, three movies of its year and rating
+crediting all six, so every sheet keeps `daily.MinCrowd` inside its
+decade and band, with too few votes and no poster to be candidates
+themselves; sixty movies through those people, one each, so every
+candidate's sheets hold 86 movies, the other nine candidates among
+them as close relatives; and one unrated movie that must be on no
+sheet.

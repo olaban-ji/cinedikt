@@ -5,7 +5,8 @@ package catalog
 //
 // A day's answer is a well-known movie, its cast shown one name at a
 // time, and the Movies sheets the six's own movies, with the map's film
-// test and its cap. What makes a fair answer and what its puzzle holds
+// test and its cap, every one of them crowded inside the answer's decade
+// and rating band. What makes a fair answer and what its puzzle holds
 // are internal/daily's to decide; this file reads the candidates, each
 // one's people and their movies, and keeps what was picked in
 // meta.daily_puzzles, copied whole, so nothing about a puzzle moves when
@@ -227,15 +228,43 @@ func (s *Store) hasRuntimes(ctx context.Context) (bool, error) {
 	return has, nil
 }
 
-// dailyCandidates are the movies that could be an answer: the most voted
-// 250 of each era in the opening screen's pool, so every one is well
-// known and the eras are spread, each rated and with a poster, which the
-// end of the game shows and whose colour fills the hidden card until
-// then. Nothing is asked of its synopsis: no fact is a line of its text,
-// so a movie OMDb has no plot for is as fair an answer as any. A
-// candidate with no runtime or no colour yet is still one; the pick
-// decides (dailyPuzzleOf). ErrNoRuntimes before the catalog has runtimes
-// at all.
+// dailyCandidates are the movies that could be an answer: every one with
+// daily.MinVotes votes, rated and passing gridFilm, with a runtime, the
+// Length fact, and a poster that is ok with an address, which the end of
+// the game shows and whose colour fills the hidden card until then. Its
+// era is the one of eras its year falls in, so a movie made before the
+// first has none and is no candidate, which in October 2026 left out one
+// movie with MinVotes votes. Nothing is asked of its synopsis: no fact
+// is a line of its text, so a movie OMDb has no plot for is as fair an
+// answer as any. A candidate whose poster has no colour yet is still
+// one; the pick works it out (dailyPuzzleOf). ErrNoRuntimes before the
+// catalog has runtimes at all.
+//
+// Only the crowded come back: those each of whose six has
+// daily.MinCrowd movies besides it on their sheet inside its decade and
+// its rating band. Of the movies with MinVotes votes about one in twenty
+// is, so asked of a candidate at a time the rule would read twenty
+// candidates' people and sheets for every day picked; asked here, of
+// every one at once, it is one query, of about two seconds on the full
+// catalog. It is daily.Build's rule as the reads of a candidate's puzzle
+// see it: the six are peopleOn's first six billed cast, those credited
+// on it as actor or actress, with a name, and neither credited as its
+// director nor in its crew's directors, in billing order; each one's
+// sheet is sheetFilms's, their daily.MaxSheet most voted of the movies
+// they are credited on as actor, actress or director or in the crew's
+// directors, rated and passing gridFilm, the answer first and ties to
+// the lower id, so a movie is on it when its place among theirs, with
+// the answer moved first, is within the cap; and the decade is
+// daily.Decade's and the band daily.RatingBand's, from
+// daily.RatingFloors.
+//
+// All but one part of it: Build also sets each one's own "Also in"
+// aside, which turns on close relatives and shared titles
+// (daily.RelativeShared, sharesTitle), more than a query can fairly
+// say. So the query keeps every candidate Build would and a few it
+// will not, 42 of its 344 in October 2026, each a cheap refusal in
+// dailyPuzzleOf before any poster is fetched, and Build, asking the
+// whole rule again of what was read, has the last word.
 func (s *Store) dailyCandidates(ctx context.Context) ([]daily.Candidate, error) {
 	has, err := s.hasRuntimes(ctx)
 	if err != nil {
@@ -245,16 +274,68 @@ func (s *Store) dailyCandidates(ctx context.Context) ([]daily.Candidate, error) 
 		return nil, ErrNoRuntimes
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.tconst, t.primary_title, t.start_year, r.average_rating::float8, p.released,
-		       coalesce(t.runtime_minutes, 0), coalesce(p.colour::text, ''), p.poster_url,
-		       f.era, t.genres, f.num_votes
-		FROM `+Live+`.first_run f
-		JOIN `+Live+`.titles t USING (tconst)
-		JOIN `+Live+`.ratings r USING (tconst)
-		JOIN meta.posters p USING (tconst)
-		WHERE p.status = 'ok'
-		  AND btrim(coalesce(p.poster_url, '')) <> ''
-		  AND `+gridFilm)
+		WITH cand AS (
+		    SELECT t.tconst, t.primary_title, t.start_year, r.average_rating, p.released, t.runtime_minutes,
+		           coalesce(p.colour::text, '') AS colour, p.poster_url, e.lo AS era, t.genres, r.num_votes,
+		           width_bucket(r.average_rating, $4::numeric[]) AS band
+		    FROM `+Live+`.titles t
+		    JOIN `+Live+`.ratings r USING (tconst)
+		    JOIN meta.posters p USING (tconst)
+		    JOIN (VALUES `+erasSQL()+`) AS e (lo, hi) ON t.start_year BETWEEN e.lo AND e.hi
+		    WHERE r.num_votes >= $1
+		      AND t.runtime_minutes > 0
+		      AND p.status = 'ok'
+		      AND btrim(coalesce(p.poster_url, '')) <> ''
+		      AND `+gridFilm+`
+		), billed AS (
+		    SELECT pr.tconst AS answer, pr.nconst, min(pr.ordering) AS ord
+		    FROM cand c
+		    JOIN `+Live+`.principals pr ON pr.tconst = c.tconst
+		    JOIN `+Live+`.names n ON n.nconst = pr.nconst
+		    GROUP BY pr.tconst, pr.nconst
+		    HAVING NOT bool_or(pr.category = 'director')
+		       AND NOT EXISTS (SELECT 1 FROM `+Live+`.directors d WHERE d.tconst = pr.tconst AND d.nconst = pr.nconst)
+		), six AS (
+		    SELECT answer, nconst
+		    FROM (SELECT answer, nconst, row_number() OVER (PARTITION BY answer ORDER BY ord) AS slot FROM billed) b
+		    WHERE slot <= $5
+		), credits AS (
+		    SELECT pr.tconst, pr.nconst
+		    FROM `+Live+`.principals pr
+		    WHERE pr.nconst IN (SELECT nconst FROM six) AND pr.category IN ('actor', 'actress', 'director')
+		    UNION
+		    SELECT d.tconst, d.nconst
+		    FROM `+Live+`.directors d
+		    WHERE d.nconst IN (SELECT nconst FROM six)
+		), theirs AS (
+		    -- Each one's movies, numbered in the order their sheet is
+		    -- capped in, but for the answer, which each candidate moves
+		    -- first.
+		    SELECT c.nconst, c.tconst, t.start_year / 10 AS decade,
+		           width_bucket(r.average_rating, $4::numeric[]) AS band,
+		           row_number() OVER (PARTITION BY c.nconst ORDER BY r.num_votes DESC, c.tconst) AS n
+		    FROM credits c
+		    JOIN `+Live+`.titles t USING (tconst)
+		    JOIN `+Live+`.ratings r USING (tconst)
+		    LEFT JOIN meta.posters p USING (tconst)
+		    WHERE `+gridFilm+`
+		), crowds AS (
+		    -- A movie numbered after the answer keeps its place once the
+		    -- answer is moved first; one numbered before it moves down one.
+		    SELECT s.answer, count(f.tconst) AS crowd
+		    FROM six s
+		    JOIN cand c ON c.tconst = s.answer
+		    JOIN theirs a ON a.nconst = s.nconst AND a.tconst = s.answer
+		    LEFT JOIN theirs f ON f.nconst = s.nconst AND f.tconst <> s.answer
+		         AND f.decade = c.start_year / 10 AND f.band = c.band
+		         AND f.n + (a.n > f.n)::int <= $2
+		    GROUP BY s.answer, s.nconst
+		)
+		SELECT c.tconst, c.primary_title, c.start_year, c.average_rating::float8, c.released, c.runtime_minutes,
+		       c.colour, c.poster_url, c.era, c.genres, c.num_votes
+		FROM cand c
+		WHERE c.tconst IN (SELECT answer FROM crowds GROUP BY answer HAVING count(*) = $5 AND min(crowd) >= $3)`,
+		daily.MinVotes, daily.MaxSheet, daily.MinCrowd, daily.RatingFloors(), daily.MinCast)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: daily candidates: %w", err)
 	}
@@ -291,16 +372,14 @@ const chipDirector = "director"
 // are the app's own chip row (peopleOn), billed cast in billing order and
 // directors in crew order, so the six are the six a reader would see on
 // its map, and someone who directed it is never one of them. What is
-// cheap to refuse on is refused before what is not: the runtime, then
-// the people, then the colour, which may mean fetching the poster, then
-// the movies, of which each of the six needs daily.MinSheet besides the
-// answer.
+// cheap to refuse on is refused before what is not: the people, then the
+// movies, of which each of the six needs daily.MinSheet besides the
+// answer and daily.MinCrowd inside its decade and rating band besides
+// their own Also in as well (daily.Fit), and only then the colour, which
+// may mean fetching the poster. Most candidates have no colour yet, the
+// colour job colouring only the opening screen's pool, so a poster is
+// fetched only for one that will make a puzzle.
 func (s *Store) dailyPuzzleOf(ctx context.Context, client *http.Client, no int, day time.Time, c daily.Candidate) (*daily.Puzzle, error) {
-	// Build says the same, as it says the rest, but saying it here saves
-	// reading what could never make a puzzle.
-	if c.Length <= 0 {
-		return nil, daily.Unfit("it has no runtime")
-	}
 	people, _, err := s.peopleOn(ctx, c.ID)
 	if err != nil {
 		return nil, err
@@ -318,18 +397,18 @@ func (s *Store) dailyPuzzleOf(ctx context.Context, client *http.Client, no int, 
 	if len(directors) < daily.MinDirectors || len(cast) < daily.MinCast {
 		return nil, daily.Unfit(fmt.Sprintf("it has %d directors and %d billed cast", len(directors), len(cast)))
 	}
-	if c.Colour, err = s.candidateColour(ctx, client, c); err != nil {
-		return nil, err
-	}
-	if !daily.ColourOK(c.Colour) {
-		return nil, daily.Unfit("its poster has no colour")
-	}
 	six := make([]string, daily.MinCast)
 	for i, p := range cast[:daily.MinCast] {
 		six[i] = p.ID
 	}
 	films, err := s.sheetFilms(ctx, c.ID, six, ids)
 	if err != nil {
+		return nil, err
+	}
+	if err := daily.Fit(c, cast, directors, films); err != nil {
+		return nil, err
+	}
+	if c.Colour, err = s.candidateColour(ctx, client, c); err != nil {
 		return nil, err
 	}
 	return daily.Build(no, day, c, cast, directors, films)

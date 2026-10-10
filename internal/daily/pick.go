@@ -28,8 +28,9 @@ type Candidate struct {
 	// which the pick works the colour out from then.
 	Colour string
 	Poster string
-	// Era is the movie's era in the opening screen's pool, the most
-	// voted 250 of each: the lower year of its band.
+	// Era is the movie's era: the first year of the opening screen's
+	// band its year falls in, the bands its pool is ranked in, which the
+	// week's mix tells days apart by (Order).
 	Era    int
 	Genres []string
 	Votes  int
@@ -118,6 +119,15 @@ type MapFilm struct {
 
 // What a candidate must have to be a day's answer.
 const (
+	// MinVotes is how many IMDb votes a movie needs to be a candidate at
+	// all: enough that it is worth naming. It is far below what the
+	// opening screen's pool asks, the most voted 250 of each of its
+	// eras, because the crowd rule (MinCrowd) passes about one movie in
+	// twenty-five. On the catalog of October 2026 that pool held only 70
+	// movies that make a puzzle, fewer than RepeatDays, so the pick would
+	// soon have run out of answers it had not used in ninety days. With
+	// 25,000 votes 298 do, and with 100,000, 121.
+	MinVotes = 25000
 	// MinDirectors is enough for the Director fact to sell somebody.
 	MinDirectors = 1
 	// MinCast is the six the game shows: a movie with fewer billed cast
@@ -133,6 +143,22 @@ const (
 	// a movie or two, would hand it over by elimination, where it is
 	// meant to sit among the cards unmarked.
 	MinSheet = 4
+	// MinCrowd is how many movies each of the six's sheet must hold
+	// inside both the answer's decade and its rating band, the two
+	// ranges a sheet is read by (view.go), besides the answer and their
+	// own "Also in", which is named beside them from the moment they
+	// show and so is a card the player knows is not today's. The decade
+	// and the band are where a card sits on the map, so a player who has
+	// bought both and opened a sheet is looking at the cards inside them
+	// whatever they read, and with a card or two there besides the
+	// answer it is all but picked out by eye, where the facts are meant
+	// to narrow the guess and not to make it. Three leaves a handful of
+	// titles to weigh on whichever sheet a game opens. Of the movies with
+	// MinVotes votes in October 2026, 298 make a puzzle keeping three on
+	// every one of the six's sheets; four would leave 101, and five 27.
+	// Counting the "Also in" as one of them would have let in 42 more,
+	// each with a sheet where only two were left to weigh.
+	MinCrowd = 3
 )
 
 // Unfit is why a candidate cannot be a day's answer. It never names the
@@ -156,10 +182,40 @@ func (u Unfit) Error() string { return "daily: " + string(u) }
 // other five, is not the answer, is not a close relative and does not
 // share the answer's title (sharesTitle), any of which would give the
 // answer away; ties fall to the lower id, so a pick made twice keeps the
-// same one. The movies kept are those on someone's
-// sheet, sorted by year then id, so where a movie sits in the list says
-// nothing about how well known it is.
+// same one. And each one's sheet must hold MinCrowd movies inside the
+// answer's decade and its rating band (Decade, RatingBand: the decade
+// and the band the facts sell) besides the answer and their own "Also
+// in". The movies kept are those on someone's sheet, sorted by year then
+// id, so where a movie sits in the list says nothing about how well
+// known it is.
+//
+// The poster's colour is asked last, after every rule Fit asks.
 func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []MapFilm) (*Puzzle, error) {
+	p, err := build(no, day, a, cast, directors, films)
+	if err != nil {
+		return nil, err
+	}
+	if !ColourOK(a.Colour) {
+		return nil, Unfit("its poster has no colour")
+	}
+	return p, nil
+}
+
+// Fit is why a candidate cannot be an answer, as Build says it, by every
+// rule but its poster's colour, or nil when it keeps them all. The colour
+// is the one rule that can cost a fetch: the catalog works out the
+// colour of a poster the colour job has not reached when the pick asks
+// for it, which is most of the candidates MinVotes lets in, and a poster
+// fetched for one the sheets then refuse is fetched for nothing. So it
+// asks Fit first, and fetches a poster only for a candidate that will
+// make a puzzle.
+func Fit(a Candidate, cast, directors []Named, films []MapFilm) error {
+	_, err := build(0, time.Time{}, a, cast, directors, films)
+	return err
+}
+
+// build is Build without the colour.
+func build(no int, day time.Time, a Candidate, cast, directors []Named, films []MapFilm) (*Puzzle, error) {
 	if len(directors) < MinDirectors {
 		return nil, Unfit("it has no director")
 	}
@@ -168,9 +224,6 @@ func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []
 	}
 	if a.Length <= 0 {
 		return nil, Unfit("it has no runtime")
-	}
-	if !ColourOK(a.Colour) {
-		return nil, Unfit("its poster has no colour")
 	}
 	six := make([]Billed, MinCast)
 	for i, c := range cast[:MinCast] {
@@ -268,6 +321,9 @@ func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []
 			return nil, Unfit(fmt.Sprintf("one of the six has %d other movies, fewer than %d", n, MinSheet))
 		}
 	}
+	// A movie crediting one of the six alone is kept only for being on a
+	// sheet, and theirs is the only one it can be on, so each one's "Also
+	// in" is a card on their own sheet.
 	also := make([]*MapFilm, len(six))
 	for i, m := range movies {
 		f := from[i]
@@ -276,6 +332,22 @@ func Build(no int, day time.Time, a Candidate, cast, directors []Named, films []
 		}
 		if b := also[m.Cast[0]]; b == nil || f.Votes > b.Votes || (f.Votes == b.Votes && f.ID < b.ID) {
 			also[m.Cast[0]] = f
+		}
+	}
+	// Someone's own "Also in" is named beside them from the moment they
+	// show, so it is a card on their sheet the player already knows is
+	// not today's, and it is no part of their crowd.
+	decade, band := Decade(a.Year), RatingBand(a.Rating)
+	for s := range six {
+		n := 0
+		for _, m := range movies {
+			named := also[s] != nil && m.ID == also[s].ID
+			if m.ID != a.ID && !named && slices.Contains(m.Sheets, s) && Decade(m.Year) == decade && RatingBand(m.Rating) == band {
+				n++
+			}
+		}
+		if n < MinCrowd {
+			return nil, Unfit(fmt.Sprintf("one of the six has %d other movies in the answer's decade and rating band besides their Also in, fewer than %d", n, MinCrowd))
 		}
 	}
 	slices.SortFunc(movies, func(x, y Movie) int { return cmp.Or(cmp.Compare(x.Year, y.Year), cmp.Compare(x.ID, y.ID)) })

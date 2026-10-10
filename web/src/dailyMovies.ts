@@ -1,18 +1,20 @@
 // The Movies sheet's pure parts, which DailyMoviesSheet.tsx draws: one
 // showing name's movies laid out on a small Cinedikt map, which cards can
-// be read and how strongly each is drawn, the bands the bought years and
+// be read and how strongly each is drawn, the bands the bought decade and
 // rating draw over it, where the sheet opens scrolled to, and what its
 // footer says. daily.ts holds the rules these rest on — the copy, the
 // small metrics — and this file puts them together for the sheet. Like
 // daily.ts it is checked without a DOM (dailyMovies.test.ts).
 //
 // What can be read is the server's to say, not this file's. A movie
-// inside every range the reader has bought comes with its title, rating
-// and the rest; any other comes as a blank card, its year and its place
-// on the rating axis, and nothing here could put a title on it. Today's
-// movie is one more card among them, by the same rule, and nothing here
-// can tell it from the rest or tries: every card is laid out and drawn
-// from what every card of its kind carries.
+// inside every range the reader has bought, the decade and the rating
+// band, comes with its title, rating and the rest; any other comes as a
+// blank card, its year and its place on the rating axis, and nothing
+// here could put a title on it. A genre bought is never drawn here, nor
+// named as a range: it reads nothing on the map. Today's movie is one
+// more card among them, by the same rule, and nothing here can tell it
+// from the rest or tries: every card is laid out and drawn from what
+// every card of its kind carries.
 
 import type { DailyBlankMovie, DailyGame, DailyMovie, DailyPerson, DailyReadableMovie } from './api';
 import {
@@ -22,6 +24,7 @@ import {
   UNREACHABLE,
   blankCardLabel,
   codesOf,
+  decadeSpan,
   guessedIds,
   hueColour,
   pickLine,
@@ -34,7 +37,6 @@ import {
   sheetSub,
   sheetTitle,
   shownSlots,
-  yearSpan,
 } from './daily';
 import {
   AXIS_LABEL_W,
@@ -265,9 +267,9 @@ export interface SheetRow {
   year: number;
   top: number;
   height: number;
-  /** Inside the bought decade or five years: washed in the accent, and
-   *  its label in the accent's text colour. */
-  inYears: boolean;
+  /** Inside the bought decade: washed in the accent, and its label in
+   *  the accent's text colour. */
+  inDecade: boolean;
   /** The map's own band classes (striped, ruled at a decade), and the
    *  wash for a bought year. */
   band: string;
@@ -306,19 +308,19 @@ export function ratingColumn(
   return { left: a, width: Math.max(4, b - a) };
 }
 
-/** The rows, each washed when it is inside the years bought. */
+/** The rows, each washed when it is inside the decade bought. */
 export function sheetRows(facts: DailyGame['facts'], layout: Pick<GridLayout, 'rows' | 'metrics'>): SheetRow[] {
-  const years = yearSpan(facts);
+  const decade = decadeSpan(facts);
   const labelTop = SHEET_METRICS.padTop + layout.metrics.cardH / 2 - YEAR_LABEL_RISE;
   return layout.rows.map((r) => {
-    const inYears = !!years && r.year >= years[0] && r.year <= years[1];
+    const inDecade = !!decade && r.year >= decade[0] && r.year <= decade[1];
     return {
       key: String(r.year),
       year: r.year,
       top: r.top,
       height: r.height,
-      inYears,
-      band: `${bandClass(r)}${inYears ? ' cd-msheet-band-in' : ''}`,
+      inDecade,
+      band: `${bandClass(r)}${inDecade ? ' cd-msheet-band-in' : ''}`,
       labelTop,
     };
   });

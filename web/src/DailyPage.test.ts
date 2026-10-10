@@ -436,7 +436,7 @@ describe('the game page while the game is on', () => {
   it('heads the facts panel “Buy a fact”, with a note beside it, over one row of facts', () => {
     const html = drawn(PLAYING);
     expect(html).toContain(
-      '<section class="cd-nd-facts" aria-labelledby="cd-nd-facts-head"><div class="cd-nd-facts-top"><h2 id="cd-nd-facts-head" class="cd-nd-facts-head">Buy a fact</h2><p class="cd-nd-facts-note" aria-live="polite">Each one also marks the map</p></div><div class="cd-nd-fact-list">',
+      '<section class="cd-nd-facts" aria-labelledby="cd-nd-facts-head"><div class="cd-nd-facts-top"><h2 id="cd-nd-facts-head" class="cd-nd-facts-head">Buy a fact</h2><p class="cd-nd-facts-note" aria-live="polite">Decade and rating mark the map</p></div><div class="cd-nd-fact-list">',
     );
   });
 
@@ -456,19 +456,14 @@ describe('the game page while the game is on', () => {
     expect(html).toContain(
       '<button type="button" class="cd-nd-fact" aria-label="Show its genre. It costs 100 points.">Genre<span class="cd-nd-cost">−100</span></button>',
     );
-    // The years only after the decade: Decade bought, then Narrow the years.
+    // The decade bought keeps its place, and the director follows it:
+    // there is nothing to narrow the years further.
     expect(html).toContain(
-      '<span class="cd-nd-fact-got"><span class="cd-nd-fact-label">Decade</span><span class="cd-nd-fact-value">1990s</span></span><button type="button" class="cd-nd-fact" aria-label="Narrow the years to five. It costs 100 points.">Narrow the years<span class="cd-nd-cost">−100</span></button>',
+      '<span class="cd-nd-fact-got"><span class="cd-nd-fact-label">Decade</span><span class="cd-nd-fact-value">1990s</span></span><button type="button" class="cd-nd-fact" aria-label="Show the director. It costs 250 points.">Director<span class="cd-nd-cost">−250</span></button>',
     );
     const labels = [...html.matchAll(/class="cd-nd-fact"[^>]*>([^<]+)</g)].map((m) => m[1]);
-    expect(labels).toEqual(['Length range', 'Rating range', 'Genre', 'Narrow the years', 'Director']);
-  });
-
-  it('puts the five years in the decade’s place once they are bought', () => {
-    const html = drawn(gameOf({ pts: 800, facts: { decade: 1990, years: 1995 } }));
-    expect(html).toContain('<span class="cd-nd-fact-label">Years</span><span class="cd-nd-fact-value">1995–1999</span>');
+    expect(labels).toEqual(['Length range', 'Rating range', 'Genre', 'Director']);
     expect(html).not.toContain('Narrow the years');
-    expect(html).not.toContain('>Decade<');
   });
 
   it('holds back a fact the points would not leave one over from', () => {
@@ -982,7 +977,7 @@ describe('How it works', () => {
       'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
     );
     expect(html).toContain(
-      '<span>Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the ranges you’ve bought.</span>',
+      '<span>Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the decade or rating range you’ve bought.</span>',
     );
     expect(html).toContain(
       '<p class="cd-nd-rules-then">You start with 1,000 points. Each extra name costs 100. Wrong guesses cost 100, then 150, 200 and so on. Facts cost 50 to 250. There’s no clock.</p>',
