@@ -3617,6 +3617,17 @@ button {
   text-align: center;
 }
 
+/* With the Daily's banner over the headline, the banner is what the eye
+   lands on first, and the screen takes less air above it: 3% of the
+   window's height, never less than 28. On a 1080p monitor's window,
+   about 940px tall, that is what keeps a second row of four films
+   under the banner, which from 9% only came back from 992px. At the
+   class's own weight, so the phone's and the landscape phone's numbers,
+   below, still have the last word. */
+.cd-cold:where(:has(> .cd-daily-banner)) {
+  padding-top: clamp(28px, 3vh, 110px);
+}
+
 .cd-cold p,
 .cd-about p {
   margin: 0;
@@ -5004,6 +5015,10 @@ button {
   .cd-cold {
     padding-top: clamp(28px, 6vh, 110px);
   }
+
+  .cd-cold:where(:has(> .cd-daily-banner)) {
+    padding-top: clamp(28px, 3vh, 110px);
+  }
 }
 
 /* The theme choice's buttons are 30px to the eye, and 44 to a finger:
@@ -5105,7 +5120,7 @@ button {
   gap: 16px;
   box-sizing: border-box;
   width: min(640px, 100%);
-  margin-bottom: 18px;
+  margin-bottom: 12px;
   padding: 12px 12px 12px 14px;
   border-radius: 16px;
   background: var(--s);

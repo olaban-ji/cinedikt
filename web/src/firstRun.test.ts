@@ -13,13 +13,23 @@ describe('coldTopPad', () => {
   });
 
   it('follows the window’s height everywhere else, faster from 860 up', () => {
-    expect(coldTopPad(1180, 820)).toBeCloseTo(820 * 0.06);
-    expect(coldTopPad(1440, 900)).toBeCloseTo(900 * 0.09);
-    expect(coldTopPad(820, 1180)).toBeCloseTo(1180 * 0.09);
-    expect(coldTopPad(1024, 520)).toBeCloseTo(31.2);
+    expect(coldTopPad(1180, 820, false)).toBeCloseTo(820 * 0.06);
+    expect(coldTopPad(1440, 900, false)).toBeCloseTo(900 * 0.09);
+    expect(coldTopPad(820, 1180, false)).toBeCloseTo(1180 * 0.09);
+    expect(coldTopPad(1024, 520, false)).toBeCloseTo(31.2);
     // And never more than 110. (The 28 floor is below anything but a
     // landscape phone, which has its own 18.)
-    expect(coldTopPad(1440, 1600)).toBe(110);
+    expect(coldTopPad(1440, 1600, false)).toBe(110);
+  });
+
+  it('takes less air over the Daily’s banner, which the stand-in counts as there', () => {
+    expect(coldTopPad(1920, 1080)).toBeCloseTo(1080 * 0.03);
+    expect(coldTopPad(820, 1180)).toBeCloseTo(1180 * 0.03);
+    // 28 on any window under 934px: a 1080p monitor's is about 940.
+    expect(coldTopPad(1440, 900)).toBe(28);
+    expect(coldTopPad(1180, 820)).toBe(28);
+    expect(coldTopPad(1440, 4000)).toBe(110);
+    expect([coldTopPad(390, 844), coldTopPad(844, 390)]).toEqual([36, 18]);
   });
 });
 
@@ -29,12 +39,15 @@ describe('coldScreenCount', () => {
     expect(coldScreenCount(820, 1180)).toBe(COLD_MAX);
   });
 
-  it('gives a second row up to the Daily’s banner on a 900px desktop window', () => {
-    // The banner puts 98px over the headline, and a second row of four
-    // needs a window 992px tall now, where it needed 856.
+  it('keeps a second row under the Daily’s banner on a 1080p monitor’s window', () => {
+    // The banner puts 92px over the headline. With 9% of the window
+    // above it, a second row of four needed a window 992px tall, where
+    // without it it needed 856; with 3% it needs 925, under the 935 to
+    // 975 a browser leaves of a 1080p monitor.
     expect(coldScreenCount(1440, 900)).toBe(4);
-    expect(coldScreenCount(1440, 991)).toBe(4);
-    expect(coldScreenCount(1440, 992)).toBe(COLD_MAX);
+    expect(coldScreenCount(1920, 924)).toBe(4);
+    expect(coldScreenCount(1920, 925)).toBe(COLD_MAX);
+    expect(coldScreenCount(1920, 940)).toBe(COLD_MAX);
   });
 
   it('shows all eight in their one row on a landscape phone', () => {
@@ -72,13 +85,13 @@ describe('coldScreenCount', () => {
   // The window sizes this used to get wrong, with every class's numbers
   // written out again here: header row 64 / 52 / 66, the padding above
   // the headline, the Daily's banner with its margin and the gap after
-  // it (68 + 18 + 12; on a phone a two-line 81.1 + 10 + 12), the
+  // it (68 + 12 + 12; on a phone a two-line 81.1 + 10 + 12), the
   // headline and sub-line with 12 after each, the grid's margin 28 (16
   // on a landscape phone), and its bottom padding 48 (24). A tile is its
   // 2:3 frame and a 9 + 16.2 + 2 + 14.4 caption (9 + 14.4 + 2 + 13.2 on
   // a landscape phone).
   it('asks for no more rows than the window can show', () => {
-    const banner = 68 + 18 + 12;
+    const banner = 68 + 12 + 12;
     const cases: [number, number, number, number, number, number, number, number][] = [
       // vw, vh, columns, gap, max width, header row, banner + intro + margins, foot
       [1280, 720, 4, 18, 640, 66, banner + 49.68 + 12 + 48 + 12 + 28, 48],
@@ -102,10 +115,10 @@ describe('coldScreenCount', () => {
 
   it('keeps a landscape phone’s one row, below the banner, though it no longer fits', () => {
     // 390px tall has room for the header, the copy and one row of eight
-    // with 30px to spare, and the banner is 98. One row is the least the
+    // with 30px to spare, and the banner is 92. One row is the least the
     // screen offers, so the films are still there, and the screen
     // scrolls to them, as the Daily's handoff draws it.
-    const top = 52 + coldTopPad(844, 390) + 98 + 30.24 + 12 + 21.75 + 12 + 16;
+    const top = 52 + coldTopPad(844, 390) + 92 + 30.24 + 12 + 21.75 + 12 + 16;
     const tile = ((Math.min(844 - 40, 820) - 12 * 7) / 8) * 1.5 + 9 + 14.4 + 2 + 13.2;
     expect(390 - top - 24).toBeLessThan(tile);
     expect(coldScreenCount(844, 390)).toBe(COLD_MAX);
@@ -113,13 +126,17 @@ describe('coldScreenCount', () => {
 
   it('lands where the handoffs’ screenshots put the grid', () => {
     // The grid starts at 297 at 1440×900, 322 at 820×1180 and 162 at
-    // 844×390 in the first handoff's renders, and the Daily's handoff
-    // moves everything under its banner 98px further down; the stand-in
-    // comes to the same place, so it asks for the same rows a
-    // measurement would.
-    expect(coldScreenCount(1440, 900, 297 + 98)).toBe(coldScreenCount(1440, 900));
-    expect(coldScreenCount(820, 1180, 322 + 98)).toBe(coldScreenCount(820, 1180));
-    expect(coldScreenCount(844, 390, 162 + 98)).toBe(coldScreenCount(844, 390));
+    // 844×390 in the first handoff's renders, with 9% of the window over
+    // the headline. The Daily's banner moves everything under it 92px
+    // further down, and takes the air over it down to 3% (6% under
+    // 860); the stand-in comes to the same place, so it asks for the
+    // same rows a measurement would.
+    // What the banner adds over the grid: itself, less the 9% it takes
+    // the place of, plus the 3% it has instead.
+    const under = (vh: number, was: number) => 92 - was + Math.max(28, vh * 0.03);
+    expect(coldScreenCount(1440, 900, 297 + under(900, 81))).toBe(coldScreenCount(1440, 900));
+    expect(coldScreenCount(820, 1180, 322 + under(1180, 106.2))).toBe(coldScreenCount(820, 1180));
+    expect(coldScreenCount(844, 390, 162 + 92)).toBe(coldScreenCount(844, 390));
   });
 
   it('counts a phone’s banner at two lines, so a reader in the middle of a game loses no row', () => {

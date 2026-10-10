@@ -40,8 +40,8 @@ const CAPTION_SHORT = 9 + 12 * 1.2 + 2 + 11 * 1.2;
 /** The banner on a desktop, a tablet and a landscape phone, which all
  *  draw it the same: 12px of padding top and bottom round the fan of
  *  cards, which at 44px is the tallest thing in it (the words beside it
- *  come to 43.85), then its 18px margin and the column's gap. */
-const BANNER = 24 + 44 + 18 + COLUMN_GAP;
+ *  come to 43.85), then its 12px margin and the column's gap. */
+const BANNER = 24 + 44 + 12 + COLUMN_GAP;
 
 /** On a phone: 10px of padding top and bottom, the pill's 20px row, 2px,
  *  and the game's name at 17px and a line-height of 1.15 — two lines of
@@ -59,13 +59,16 @@ const GEOMETRY: Record<ScreenClass, ColdGeometry> = {
 };
 
 /** The padding `.cd-cold` takes off the top: 36 on a phone, 18 on a
- *  landscape phone, and otherwise `clamp(28px, 6vh, 110px)`, or 9vh on a
- *  window 860px tall or more. */
-export function coldTopPad(vw: number, vh: number): number {
+ *  landscape phone, and otherwise, under the Daily's banner,
+ *  `clamp(28px, 3vh, 110px)`, or without it `clamp(28px, 6vh, 110px)`,
+ *  9vh on a window 860px tall or more. The stand-in counts the banner
+ *  as there (coldScreenCount), so that is the default. */
+export function coldTopPad(vw: number, vh: number, banner = true): number {
   const cls = screenOf(vw, vh).cls;
   if (cls === 'phone') return 36;
   if (cls === 'short') return 18;
-  return Math.min(Math.max(28, vh * (vh < 860 ? 0.06 : 0.09)), 110);
+  const share = banner ? 0.03 : vh < 860 ? 0.06 : 0.09;
+  return Math.min(Math.max(28, vh * share), 110);
 }
 
 /** The headline and the sub-line, with the gaps after each, for when the
