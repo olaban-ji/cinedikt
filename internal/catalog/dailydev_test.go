@@ -3,6 +3,9 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -356,5 +359,52 @@ func TestPlayAgainKeepsItsCandidatesUntilTheCatalogMoves(t *testing.T) {
 			t.Fatal("the candidates were never read in the background")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestADealTakesAMovieWithItsColourFirst: a candidate whose poster colour
+// is not known has its poster fetched to work it out, and a poster that
+// does not answer held a press for the fetch's whole deadline. So a deal
+// draws from the coloured first: here every other candidate's poster
+// hangs, and each deal is the one coloured movie left, at once.
+func TestADealTakesAMovieWithItsColourFirst(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	today := todaysPuzzle(t, s)
+	yesterday, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, -1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keep string
+	for g := 1; g <= dailyCandidates; g++ {
+		id := fmt.Sprintf("tt99001%02d", g)
+		if id != today.Answer.ID && id != yesterday.Answer.ID {
+			keep = id
+			break
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * DealColourFetch)
+	}))
+	t.Cleanup(srv.Close)
+	if _, err := s.pool.Exec(ctx, `UPDATE meta.posters SET colour = NULL, poster_url = $1 || '/' || tconst || '.jpg'
+		WHERE tconst LIKE 'tt99001%' AND tconst <> $2`, srv.URL, keep); err != nil {
+		t.Fatal(err)
+	}
+	for i, player := range twoPlayers(t, s) {
+		began := time.Now()
+		if err := s.DealDailyPuzzle(ctx, player.ID, today.No); err != nil {
+			t.Fatal(err)
+		}
+		if took := time.Since(began); took > DealColourFetch {
+			t.Errorf("deal %d took %v, waiting on a poster", i+1, took)
+		}
+		got, err := s.DailyDeal(ctx, player.ID, today.No)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Answer.ID != keep {
+			t.Errorf("deal %d dealt %s, want %s, the one with its colour", i+1, got.Answer.ID, keep)
+		}
 	}
 }

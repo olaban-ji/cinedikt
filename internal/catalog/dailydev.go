@@ -8,10 +8,13 @@ package catalog
 // nothing here knows whether they are, so nothing else may call it.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -70,7 +73,14 @@ func (s *Store) DealDailyPuzzle(ctx context.Context, player int64, no int) error
 		return err
 	}
 	order := daily.OrderBy(daily.Seeded(strconv.FormatUint(rand.Uint64(), 36)), cands, recent)
-	p, err := s.firstFair(ctx, nil, nil, no, day.Day, order)
+	// Candidates whose poster colour is known first, still in the order
+	// drawn among themselves: one without has its poster fetched now to
+	// work the colour out, and a poster that does not answer held a press
+	// for the fetch's whole deadline, ten seconds and more, before the
+	// candidate was passed over. Those come last, with a deadline a person
+	// waiting can bear.
+	slices.SortStableFunc(order, func(a, b daily.Candidate) int { return cmp.Compare(colourless(a), colourless(b)) })
+	p, err := s.firstFair(ctx, nil, &http.Client{Timeout: DealColourFetch}, no, day.Day, order)
 	if errors.Is(err, errNoneFair) {
 		return ErrNoOtherAnswer
 	}
@@ -78,6 +88,17 @@ func (s *Store) DealDailyPuzzle(ctx context.Context, player int64, no int) error
 		return err
 	}
 	return s.putDailyDeal(ctx, player, p)
+}
+
+// DealColourFetch is how long a deal waits for a poster to work out a
+// candidate's colour, for the few it reaches without one.
+const DealColourFetch = 3 * time.Second
+
+func colourless(c daily.Candidate) int {
+	if c.Colour == "" {
+		return 1
+	}
+	return 0
 }
 
 // DealCandidatesLife is how long the candidates Play again deals from
