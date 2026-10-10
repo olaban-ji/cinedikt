@@ -56,6 +56,11 @@ export default defineRailway(() => {
     // Railway, out of the repository, and are not touched by an apply.
     // A name missing from this list would be deleted on the next apply.
     env: {
+      // The Dockerfile sets production. Dev overrides it with
+      // "development" so the Daily's Play again route is there to test
+      // with, at the cost of plain-text logs on stderr, which Railway
+      // shows as errors, and no analytics. Prod leaves it unset.
+      APP_ENV: preserve(),
       TMDB_API_KEY: preserve(),
       TMDB_ACCESS_TOKEN: preserve(),
       // TMDb requests a second for the whole process, every client and
