@@ -159,18 +159,23 @@ func dailyJob(s *Store, now *time.Time) *DailyJob {
 	return &DailyJob{Store: s, Logger: quietLogger(), Now: func() time.Time { return *now }}
 }
 
-// TestTheDailyJobKeepsYesterdayToEightDaysAheadPicked, once: a pass
-// picks every day from UTC yesterday, which readers west of UTC are
-// still on, to eight days past UTC today, numbered from the first, each
-// a different answer, and the next pass changes nothing. Every one of
-// the ten candidates is an answer, though none has an overview from
-// OMDb and half have none at all.
+// TestTheDailyJobKeepsYesterdayToEightDaysAheadPicked, once: from the
+// day after launch, a pass keeps every day picked from UTC yesterday,
+// which readers west of UTC are still on, to eight days past UTC today,
+// numbered from launch day, each a different answer, and the next pass
+// changes nothing. Every one of the ten candidates is an answer, though
+// none has an overview from OMDb and half have none at all.
 func TestTheDailyJobKeepsYesterdayToEightDaysAheadPicked(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	dailyFixture(t, s)
-	now := oct8
+	// Launched on the 7th, the pass the next day adds the 16th.
+	now := oct8.AddDate(0, 0, -1)
 	job := dailyJob(s, &now)
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now = oct8
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -231,26 +236,23 @@ func TestTheDailyJobKeepsYesterdayToEightDaysAheadPicked(t *testing.T) {
 	}
 }
 
-// TestTheJobNeverPicksADayBeforeTheFirst: a database whose first puzzle
-// is UTC today's, as one that picked before readers had zones is, keeps
-// its numbers; yesterday is left without a puzzle rather than made
-// No. 0.
+// TestTheJobNeverPicksADayBeforeTheFirst: launch day is No. 1, and UTC
+// yesterday, which the window reaches back to for the zones west of
+// UTC, is left without a puzzle rather than made No. 0, on the first
+// pass and every one after it, so the numbers never move.
 func TestTheJobNeverPicksADayBeforeTheFirst(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	dailyFixture(t, s)
-	now := oct8.AddDate(0, 0, 1)
+	now := oct8
 	job := dailyJob(s, &now)
-	job.Days = 2
-	if err := job.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	now, job.Days = oct8, 0
-	if err := job.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, -1)); !errors.Is(err, ErrNotFound) {
-		t.Errorf("the day before the first: %v, want ErrNotFound", err)
+	for range 2 {
+		if err := job.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, -1)); !errors.Is(err, ErrNotFound) {
+			t.Errorf("the day before launch: %v, want ErrNotFound", err)
+		}
 	}
 	for i, want := range []int{1, 2, 3, 9} {
 		day := oct8.AddDate(0, 0, []int{0, 1, 2, 8}[i])
@@ -484,9 +486,11 @@ func TestEachOfTheSixNeedsMoviesBesideTheAnswer(t *testing.T) {
 			t.Fatalf("%v\n%s", err, stmt)
 		}
 	}
-	now := oct8
+	// Launched on the 7th, by a pass that keeps only that day: the day
+	// before it is never picked.
+	now := oct8.AddDate(0, 0, -1)
 	job := dailyJob(s, &now)
-	job.Days = 1
+	job.Days = 2
 	if err := job.Run(ctx); err == nil || !strings.Contains(err.Error(), "candidates can be the daily answer for 2026-10-07") {
 		t.Errorf("a sixth-billed with no other movie: %v, want the day said to have no answer", err)
 	}
@@ -587,9 +591,11 @@ func TestAnAnswerNeedsARuntimeAndSixBilledCast(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `UPDATE `+Live+`.titles SET runtime_minutes = NULL WHERE tconst LIKE 'tt99001%' AND tconst <> 'tt9900104'`); err != nil {
 		t.Fatal(err)
 	}
-	now := oct8
+	// Launched on the 7th, by a pass that keeps only that day: the day
+	// before it is never picked.
+	now := oct8.AddDate(0, 0, -1)
 	job := dailyJob(s, &now)
-	job.Days = 1
+	job.Days = 2
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -641,9 +647,11 @@ func TestAnyMovieWithMinVotesCanBeTheAnswer(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `UPDATE `+Live+`.ratings SET num_votes = $1 WHERE tconst = 'tt9900104'`, daily.MinVotes-1); err != nil {
 		t.Fatal(err)
 	}
-	now := oct8
+	// Launched on the 7th, by a pass that keeps only that day: the day
+	// before it is never picked.
+	now := oct8.AddDate(0, 0, -1)
 	job := dailyJob(s, &now)
-	job.Days = 1
+	job.Days = 2
 	if err := job.Run(ctx); err == nil || !strings.Contains(err.Error(), "none of 0 candidates can be the daily answer for 2026-10-07") {
 		t.Errorf("with %d votes: %v, want the day said to have no answer", daily.MinVotes-1, err)
 	}
@@ -822,8 +830,9 @@ func TestAPosterWithNoColourIsColouredFromThePicture(t *testing.T) {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	now := oct8
-	job := &DailyJob{Store: s, Client: srv.Client(), Days: 1, Now: func() time.Time { return now },
+	// Launched on the 7th, keeping only that day.
+	now := oct8.AddDate(0, 0, -1)
+	job := &DailyJob{Store: s, Client: srv.Client(), Days: 2, Now: func() time.Time { return now },
 		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
@@ -898,8 +907,9 @@ func TestAPosterIsFetchedOnlyForACandidateThatWillMakeAPuzzle(t *testing.T) {
 	if err != nil || len(cands) != 1 || cands[0].ID != "tt9900104" || cands[0].Colour != "" {
 		t.Fatalf("the candidates are %+v, %v; want Candidate 4 alone, uncoloured", cands, err)
 	}
-	now := oct8
-	job := &DailyJob{Store: s, Client: srv.Client(), Days: 1, Now: func() time.Time { return now }, Logger: quietLogger()}
+	// Launched on the 7th, keeping only that day.
+	now := oct8.AddDate(0, 0, -1)
+	job := &DailyJob{Store: s, Client: srv.Client(), Days: 2, Now: func() time.Time { return now }, Logger: quietLogger()}
 	if err := job.Run(ctx); err == nil || !strings.Contains(err.Error(), "none of 1 candidates can be the daily answer") {
 		t.Errorf("with %d movies of the newcomer's: %v, want the day said to have no answer", daily.MinCrowd, err)
 	}
@@ -922,10 +932,15 @@ func TestADayWithNoFairAnswerFailsThePass(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	dailyFixture(t, s)
-	now := oct8
+	// Launched on the 7th, with the 16th added the next day: the ten
+	// candidates are the ten days' answers.
+	now := oct8.AddDate(0, 0, -1)
 	job := dailyJob(s, &now)
-	if err := job.Run(ctx); err != nil {
-		t.Fatal(err)
+	for _, at := range []time.Time{now, oct8} {
+		now = at
+		if err := job.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	now = oct8.AddDate(0, 0, 1)
 	err := job.Run(ctx)
@@ -939,37 +954,42 @@ func TestADayWithNoFairAnswerFailsThePass(t *testing.T) {
 	}
 }
 
-// TestTheFirstPuzzleIsNumberOne: a fresh database's first puzzle is UTC
-// yesterday's, since readers west of UTC are still on it, and numbers
-// count from it, so a later first pass still numbers from it.
+// TestTheFirstPuzzleIsNumberOne: a fresh database's first puzzle is
+// launch day's, UTC today's, and not the day before, though readers
+// west of UTC are still on it: a first puzzle numbered 2 reads as one
+// somebody missed. Numbers count from it, so a pass days later numbers
+// its days from launch, a day nobody picked keeping its number.
 func TestTheFirstPuzzleIsNumberOne(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	dailyFixture(t, s)
 	now := oct8
 	job := dailyJob(s, &now)
-	job.Days = 1
+	job.Days = 2
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, -1)); err != nil || p.No != 1 {
-		t.Fatalf("UTC yesterday: %+v, %v; want No. 1", p, err)
+	if p, err := s.DailyPuzzle(ctx, oct8); err != nil || p.No != 1 {
+		t.Fatalf("launch day: %+v, %v; want No. 1", p, err)
 	}
+	if _, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, -1)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the day before launch: %v, want ErrNotFound", err)
+	}
+	// Three days on, the window is the 10th and the 11th; the 9th was
+	// never picked, and is still No. 2.
 	now = oct8.AddDate(0, 0, 3)
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	p, err := s.DailyPuzzle(ctx, now.AddDate(0, 0, -1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.No != 4 {
-		t.Errorf("three days after No. 1 is No. %d", p.No)
+	for day, want := range map[time.Time]int{now.AddDate(0, 0, -1): 3, now: 4} {
+		if p, err := s.DailyPuzzle(ctx, day); err != nil || p.No != want {
+			t.Errorf("%s: %+v, %v; want No. %d", daily.DayString(day), p, err, want)
+		}
 	}
 }
 
 // TestAMissedFirstDayKeepsItsNumber: a first pass that could not pick
-// its first day, but kept the days after it, has no No. 1. The days it
+// launch day, but kept the days after it, has no No. 1. The days it
 // kept are numbered from the missing day, so the next pass fills that
 // day as No. 1 while it is still in the window, and a new day past the
 // end takes the next free number rather than one already taken.
@@ -982,27 +1002,31 @@ func TestAMissedFirstDayKeepsItsNumber(t *testing.T) {
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// What a first pass leaves when UTC yesterday's pick fails.
+	// What a first pass leaves when launch day's pick fails.
 	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.daily_puzzles WHERE no = 1`); err != nil {
 		t.Fatal(err)
 	}
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if p, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, -1)); err != nil || p.No != 1 {
+	if p, err := s.DailyPuzzle(ctx, oct8); err != nil || p.No != 1 {
 		t.Fatalf("the missed first day: %+v, %v; want No. 1 again", p, err)
 	}
 	if _, err := s.pool.Exec(ctx, `DELETE FROM meta.daily_puzzles WHERE no = 1`); err != nil {
 		t.Fatal(err)
 	}
-	// A day on, the missed day has left the window, and 17 October is
-	// the first new day: it is No. 11, counted from the missed day.
-	now = oct8.AddDate(0, 0, 1)
+	// Two days on, the missed day has left the window, which starts at
+	// the 9th, and the 17th and 18th are new: the 18th is No. 11,
+	// counted from the missed day.
+	now = oct8.AddDate(0, 0, 2)
 	if err := job.Run(ctx); err != nil {
 		t.Fatalf("the pass after a missed first day: %v", err)
 	}
-	if p, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, 9)); err != nil || p.No != 11 {
-		t.Errorf("17 October: %+v, %v; want No. 11", p, err)
+	if _, err := s.DailyPuzzle(ctx, oct8); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the missed day, out of the window: %v, want ErrNotFound", err)
+	}
+	if p, err := s.DailyPuzzle(ctx, oct8.AddDate(0, 0, 10)); err != nil || p.No != 11 {
+		t.Errorf("18 October: %+v, %v; want No. 11", p, err)
 	}
 }
 
@@ -1019,7 +1043,7 @@ func TestThePickNeverLogsTheAnswer(t *testing.T) {
 	if err := job.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logs.String(), fmt.Sprintf(`msg="daily puzzle picked" day=2026-10-07 no=1 movies=%d`, dailySheet)) {
+	if !strings.Contains(logs.String(), fmt.Sprintf(`msg="daily puzzle picked" day=2026-10-08 no=1 movies=%d`, dailySheet)) {
 		t.Errorf("the pass did not say what it picked:\n%s", logs.String())
 	}
 	for _, secret := range []string{"tt99001", "Candidate"} {

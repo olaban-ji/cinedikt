@@ -23,11 +23,16 @@ func todaysPuzzle(t *testing.T, s *Store) *daily.Puzzle {
 	t.Helper()
 	ctx := context.Background()
 	dailyFixture(t, s)
-	now := oct8
+	// Launched on the 7th, so the 8th is No. 2 with yesterday's puzzle
+	// before it.
+	now := oct8.AddDate(0, 0, -1)
 	job := dailyJob(s, &now)
 	job.Days = 2
-	if err := job.Run(ctx); err != nil {
-		t.Fatal(err)
+	for _, at := range []time.Time{now, oct8} {
+		now = at
+		if err := job.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	p, err := s.DailyPuzzle(ctx, oct8)
 	if err != nil {

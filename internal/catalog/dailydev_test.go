@@ -178,9 +178,15 @@ func TestADealWithNoOtherAnswerChangesNothing(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	dailyFixture(t, s)
-	now := oct8
-	if err := dailyJob(s, &now).Run(ctx); err != nil {
-		t.Fatal(err)
+	// Launched on the 7th, with the 16th added the next day: the ten
+	// candidates are the ten days' answers.
+	now := oct8.AddDate(0, 0, -1)
+	job := dailyJob(s, &now)
+	for _, at := range []time.Time{now, oct8} {
+		now = at
+		if err := job.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	today, err := s.DailyPuzzle(ctx, oct8)
 	if err != nil {

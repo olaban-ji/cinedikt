@@ -112,13 +112,16 @@ func (j *DailyJob) Run(ctx context.Context) error {
 	}
 	// No. 1's day is worked back from the lowest number kept
 	// (firstDailyDay), and on a table nothing has been picked into it is
-	// the first day of this pass's window, UTC yesterday, whether or not
-	// that day can be picked: a day missed keeps its number for a later
-	// pass. A day before No. 1's is never picked once there is a puzzle:
-	// it would be No. 0, and every number after it would move. Readers
-	// whose date is earlier wait for the first.
+	// UTC today, whether or not that day can be picked: a day missed keeps
+	// its number for a later pass. Launch day is No. 1, rather than the
+	// day before it, which the window reaches back to for the zones west
+	// of UTC: a first puzzle numbered 2 reads as one somebody missed. A
+	// day before No. 1's is never picked: it would be No. 0, and every
+	// number after it would move. Readers whose date is earlier, in a
+	// zone still on the day before launch, wait for the first; from
+	// 11:00 UTC no inhabited zone is.
 	if first.IsZero() {
-		first = from
+		first = daily.Today(now())
 	}
 	var cands []daily.Candidate
 	var failed []error

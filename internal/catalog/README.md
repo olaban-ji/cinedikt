@@ -385,8 +385,9 @@ and the Telegram board's figures.
 A puzzle's number is its day's distance from No. 1's day, plus one.
 No. 1's day is worked back from the lowest-numbered puzzle
 (`firstDailyDay`: `day - (no - 1)`), never read as `min(day)`. On an
-empty table it is the first day of the pass's window, UTC yesterday,
-whether or not that day can be picked. The first pass runs while
+empty table it is UTC today, launch day, whether or not that day can
+be picked, and not the first day of the pass's window, UTC yesterday:
+a first puzzle numbered 2 reads as one somebody missed. The first pass runs while
 posters are still arriving, and if it misses its first day but keeps
 the next, `min(day)` would count from 1 again, onto numbers already
 taken; worked back, the missed day keeps No. 1 and a later pass fills
