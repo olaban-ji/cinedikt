@@ -83,6 +83,9 @@ type Runner struct {
 	// runner names them among its own when it takes the jobs, so the board
 	// shows them on rather than off.
 	Queued []string
+	// DailyLaunch is the date Cinedikt Daily's first puzzle is for, zero
+	// for the day the first pass runs (DailyJob.Launch).
+	DailyLaunch time.Time
 
 	// store is the jobs' pool, opened by Start.
 	store *Store
@@ -246,7 +249,7 @@ func (r *Runner) run(ctx context.Context, wakes *Wakes) {
 	// catalog does. Every pass is a read once the days are picked; the
 	// one after midnight UTC picks the new last day, and a new generation
 	// wakes it in case a day it could not pick for has an answer now.
-	puzzles := &DailyJob{Store: r.store, Logger: r.Logger.With("job", "daily-puzzles")}
+	puzzles := &DailyJob{Store: r.store, Logger: r.Logger.With("job", "daily-puzzles"), Launch: r.DailyLaunch}
 	keep(jobLoop{name: "daily puzzles", job: notify.JobDaily, rest: DailyRest,
 		run: puzzles.Run, wake: wakes.Daily, checked: puzzles.Stats})
 	start(func() {

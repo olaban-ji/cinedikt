@@ -58,6 +58,13 @@ type DailyJob struct {
 	Days int
 	// Now is the clock; nil is time.Now. A test moves it.
 	Now func() time.Time
+	// Launch is the day No. 1 is for, on a table nothing has been picked
+	// into yet, when that is later than UTC today: a server deployed
+	// ahead of launch picks nothing before it, so the Daily stays out of
+	// sight until each reader's date reaches it. Zero, or a day already
+	// past, is UTC today. Once anything is picked, the numbers count from
+	// that, and this is not read.
+	Launch time.Time
 	// Client fetches the poster of a candidate the colour job has not
 	// reached, to work its colour out; nil is one with ColourFetch's
 	// deadline.
@@ -122,6 +129,9 @@ func (j *DailyJob) Run(ctx context.Context) error {
 	// 11:00 UTC no inhabited zone is.
 	if first.IsZero() {
 		first = daily.Today(now())
+		if launch := daily.Today(j.Launch); !j.Launch.IsZero() && launch.After(first) {
+			first = launch
+		}
 	}
 	var cands []daily.Candidate
 	var failed []error

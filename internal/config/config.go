@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -57,6 +58,15 @@ type Config struct {
 	// such as dev, which keeps production's JSON logs and analytics; the
 	// environment real players use never sets it.
 	DailyDevTools bool
+	// DailyLaunch is the date Cinedikt Daily's first puzzle is for, from
+	// DAILY_LAUNCH ("2026-10-12"), so a server can be deployed ahead of
+	// launch with the Daily out of sight until each reader's own midnight
+	// that day: no earlier day is ever picked, and the opening screen
+	// shows the Daily only once the reader's date has a puzzle. Zero,
+	// unset, launches on the day the first pass runs, UTC today, as does
+	// a date already past. Only a database with no puzzle reads it, so it
+	// can stay set.
+	DailyLaunch time.Time
 
 	// --- catalog ---
 
@@ -309,6 +319,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	launch, err := dateOf("DAILY_LAUNCH")
+	if err != nil {
+		return Config{}, err
+	}
 
 	c := Config{
 		Environment:        env,
@@ -331,6 +345,7 @@ func Load() (Config, error) {
 		MixpanelToken:      strings.TrimSpace(os.Getenv("MIXPANEL_PROJECT_TOKEN")),
 		AnalyticsEnabled:   strings.EqualFold(strings.TrimSpace(os.Getenv("ANALYTICS_ENABLED")), "true"),
 		DailyDevTools:      strings.EqualFold(strings.TrimSpace(os.Getenv("DAILY_DEV_TOOLS")), "true"),
+		DailyLaunch:        launch,
 		APIAddr:            listenAddr(),
 		WebDir:             os.Getenv("WEB_DIR"),
 
@@ -394,6 +409,21 @@ func environment() (string, error) {
 	default:
 		return "", fmt.Errorf("config: APP_ENV=%q: want %q or %q", v, EnvDevelopment, EnvProduction)
 	}
+}
+
+// dateOf reads key as a date, "2026-10-12", which is that day in UTC:
+// zero when it is unset, and an error naming the key when it is not a
+// date, rather than a launch quietly on the wrong day.
+func dateOf(key string) (time.Time, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return time.Time{}, nil
+	}
+	d, err := time.Parse(time.DateOnly, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("config: %s=%q: want a date such as 2026-10-12", key, v)
+	}
+	return d, nil
 }
 
 func envOr(key, fallback string) string {

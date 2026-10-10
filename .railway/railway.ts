@@ -60,6 +60,12 @@ export default defineRailway(() => {
       // among them, while the Dockerfile's APP_ENV=production keeps the
       // JSON logs and analytics. Set on dev only; prod never sets it.
       DAILY_DEV_TOOLS: preserve(),
+      // The Daily's launch day, "2026-10-12": No. 1 is for it, and nothing
+      // before it is picked, so the service can be deployed ahead of it
+      // with the Daily out of sight until each reader's midnight that
+      // day. Unset launches on the day of the first pass. Read only by a
+      // database with no puzzle yet, so it can stay set.
+      DAILY_LAUNCH: preserve(),
       TMDB_API_KEY: preserve(),
       TMDB_ACCESS_TOKEN: preserve(),
       // TMDb requests a second for the whole process, every client and

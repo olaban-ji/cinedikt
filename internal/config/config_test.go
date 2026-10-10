@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestListenAddr(t *testing.T) {
@@ -137,6 +138,37 @@ func TestTheDailysToolsAreOnOutsideProductionOrWhenAsked(t *testing.T) {
 		}
 		if got.DailyDev() != c.want {
 			t.Errorf("APP_ENV=%q DAILY_DEV_TOOLS=%q: tools on %v, want %v", c.env, c.tools, got.DailyDev(), c.want)
+		}
+	}
+}
+
+// TestTheDailysLaunchIsADate: DAILY_LAUNCH is a day, read as UTC, and
+// anything but a date stops the start rather than launching on the
+// wrong day; unset is no date at all.
+func TestTheDailysLaunchIsADate(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/cinedikt")
+	for _, c := range []struct {
+		value string
+		want  time.Time
+		bad   bool
+	}{
+		{"", time.Time{}, false},
+		{"2026-10-12", time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), false},
+		{" 2026-10-12 ", time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), false},
+		{"12/10/2026", time.Time{}, true},
+		{"2026-13-01", time.Time{}, true},
+		{"Monday", time.Time{}, true},
+	} {
+		t.Setenv("DAILY_LAUNCH", c.value)
+		got, err := Load()
+		if c.bad {
+			if err == nil || !strings.Contains(err.Error(), "DAILY_LAUNCH") {
+				t.Errorf("DAILY_LAUNCH=%q: %v, want a refusal naming it", c.value, err)
+			}
+			continue
+		}
+		if err != nil || !got.DailyLaunch.Equal(c.want) {
+			t.Errorf("DAILY_LAUNCH=%q: %v, %v; want %v", c.value, got.DailyLaunch, err, c.want)
 		}
 	}
 }

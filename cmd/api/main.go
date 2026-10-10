@@ -207,6 +207,8 @@ func run(logger *slog.Logger) error {
 		// The queue's jobs that report to the same sink, so the board
 		// counts them as running here.
 		Queued: queue.Jobs(),
+		// No. 1's date, when the Daily is deployed ahead of launch.
+		DailyLaunch: cfg.DailyLaunch,
 	}).Start(ctx); err != nil {
 		return err
 	}

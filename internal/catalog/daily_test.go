@@ -988,6 +988,56 @@ func TestTheFirstPuzzleIsNumberOne(t *testing.T) {
 	}
 }
 
+// TestALaunchDateKeepsTheDailyOutOfSightUntilIt: a server deployed
+// ahead of launch picks nothing before the launch day, which is No. 1,
+// and readers whose date is earlier have no puzzle, as before any first.
+// Once anything is picked the numbers count from it, whatever the
+// setting says later; and a launch day already past is UTC today.
+func TestALaunchDateKeepsTheDailyOutOfSightUntilIt(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	dailyFixture(t, s)
+	now := oct8
+	job := dailyJob(s, &now)
+	job.Launch = oct8.AddDate(0, 0, 2)
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, day := range []time.Time{oct8.AddDate(0, 0, -1), oct8, oct8.AddDate(0, 0, 1)} {
+		if _, err := s.DailyPuzzle(ctx, day); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s, before launch: %v, want ErrNotFound", daily.DayString(day), err)
+		}
+	}
+	want := map[time.Time]int{oct8.AddDate(0, 0, 2): 1, oct8.AddDate(0, 0, 8): 7}
+	check := func(when string) {
+		t.Helper()
+		for day, no := range want {
+			if p, err := s.DailyPuzzle(ctx, day); err != nil || p.No != no {
+				t.Errorf("%s, %s: %+v, %v; want No. %d", when, daily.DayString(day), p, err, no)
+			}
+		}
+	}
+	check("deployed two days early")
+
+	// A launch moved later once the first is picked changes nothing.
+	now, job.Launch = oct8.AddDate(0, 0, 1), oct8.AddDate(0, 0, 5)
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want[oct8.AddDate(0, 0, 9)] = 8
+	check("with the launch moved after the first pick")
+
+	// Deployed after the launch day it was given: today is No. 1.
+	resetDaily(t, s)
+	now, job.Launch = oct8, oct8.AddDate(0, 0, -3)
+	if err := job.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.DailyPuzzle(ctx, oct8); err != nil || p.No != 1 {
+		t.Errorf("a launch day already past: today is %+v, %v; want No. 1", p, err)
+	}
+}
+
 // TestAMissedFirstDayKeepsItsNumber: a first pass that could not pick
 // launch day, but kept the days after it, has no No. 1. The days it
 // kept are numbered from the missing day, so the next pass fills that
