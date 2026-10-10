@@ -174,6 +174,9 @@ describe('the theme tokens', () => {
       // The glow round the Daily's title card: today's poster colour,
       // lightened, worked out in script (daily.ts's posterGlow).
       '--glow',
+      // Where the Movies sheet's one-time pointer puts its caret, over
+      // the card it points at (dailyMovies.ts's coachAt).
+      '--caret',
     ]);
     // Set by the very rule that reads it: the sheet's wash is an oklch()
     // made from --h, which has to live in a custom property to ship as

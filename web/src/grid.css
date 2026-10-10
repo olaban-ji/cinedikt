@@ -8640,6 +8640,40 @@ button.cd-nd-tried-chip::before {
   font-variant-numeric: tabular-nums;
 }
 
+/* The one-time pointer at the named cards: a pill in the accent under the
+   first that can be guessed, its caret on the card's middle (--caret,
+   set inline with its place), showing a beat after the map lands and
+   gone from the first tap. Presses go through it to the cards. */
+.cd-msheet-coach {
+  position: absolute;
+  z-index: 4;
+  box-sizing: border-box;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--acc);
+  box-shadow: var(--sh);
+  color: var(--accInk);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: cd-fade 0.25s ease 0.35s both;
+}
+
+.cd-msheet-coach::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: calc(var(--caret) - 5px);
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--acc);
+  transform: rotate(45deg);
+}
+
 .cd-msheet-tried {
   color: var(--down);
 }
@@ -8769,7 +8803,8 @@ button.cd-nd-tried-chip::before {
    text, so there the rings come back as system-colour borders. */
 @media (forced-colors: active) {
   .cd-msheet,
-  .cd-msheet-card {
+  .cd-msheet-card,
+  .cd-msheet-coach {
     border: 1px solid ButtonText;
   }
 
@@ -8778,13 +8813,18 @@ button.cd-nd-tried-chip::before {
   }
 }
 
-/* A sheet let go short of closing is back at once, and nothing fades as
-   cards are picked or a range bought turns blank tiles into titles. */
+/* A sheet let go short of closing is back at once, nothing fades as
+   cards are picked or a range bought turns blank tiles into titles, and
+   the pointer is simply there. */
 @media (prefers-reduced-motion: reduce) {
   .cd-msheet-phone,
   .cd-msheet-close,
   .cd-msheet-card,
   .cd-msheet-guess {
     transition: none;
+  }
+
+  .cd-msheet-coach {
+    animation: none;
   }
 }

@@ -964,7 +964,7 @@ export const HOW_IT_WORKS = {
     'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
     'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
     'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade, or the director.',
-    'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the decade or rating range you’ve bought.',
+    'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Movies are named only inside the decade or rating range you’ve bought, and today’s movie is always one of them.',
     'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
   ],
   then: `You start with ${fmtN(DAILY_START)} points. Each extra name costs ${NEXT_COST}. Wrong guesses cost ${wrongCost(0)}, then ${wrongCost(1)}, ${wrongCost(2)} and so on. Facts cost ${Math.min(...Object.values(FACT_COST))} to ${Math.max(...Object.values(FACT_COST))}. There’s no clock.`,
@@ -1212,37 +1212,67 @@ function moviesWord(n: number): string {
 }
 
 /** The line under it: "13 movies · on Cinedikt" before any range, then
- *  "5 of 13 movies readable · on Cinedikt". */
-export function sheetSub(readable: number, total: number, ranged: boolean): string {
+ *  "5 of 13 movies named · on Cinedikt". */
+export function sheetSub(named: number, total: number, ranged: boolean): string {
   return ranged
-    ? `${fmtN(readable)} of ${fmtN(total)} ${moviesWord(total)} readable · on Cinedikt`
+    ? `${fmtN(named)} of ${fmtN(total)} ${moviesWord(total)} named · on Cinedikt`
     : `${fmtN(total)} ${moviesWord(total)} · on Cinedikt`;
 }
 
-/** The legend over the map: where titles show, and that today's movie is
- *  there. Once a range is bought it names the ranges bought, and says
- *  the answer is not marked. Only the decade and the rating band: a
- *  genre bought reads nothing on the map, and is never named as one. */
-export function sheetLegend(facts: DailyFacts): string {
-  const marks: string[] = [];
-  if (facts.decade != null) marks.push(decadeText(facts.decade));
-  if (facts.rating != null) marks.push(`rated ${inSentence(ratingBandText(facts.rating))}`);
-  return rangeBought(facts)
-    ? `Titles show inside your ranges: ${marks.join(' · ')}. Today’s movie is one of these cards, but it isn’t marked.`
-    : 'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.';
-}
-
-/** What reads the map, for a reader who has bought nothing that does:
- *  said in the footer and by every blank card. */
+/** What names the map's movies, for a reader who has bought nothing that
+ *  does: said in the legend and by every blank card. */
 const READS_THE_MAP = 'Buy the decade or a rating range';
 
+/** The named cards on a sheet, as the server sent them, and of those the
+ *  ones not guessed yet. */
+export interface SheetCount {
+  named: number;
+  left: number;
+}
+
+/** The legend over the map: which of the person's movies are named, and
+ *  how many of them today's movie can be, or before any range what would
+ *  name them. Only the decade and the rating band: a genre bought names
+ *  nothing on the map, and is never mentioned.
+ *
+ *  The ranges bought are the answer's own, so today's movie is always
+ *  one of the named cards, and the count is a true "one of these": every
+ *  card named, and once a wrong guess has ruled some out, the ones left.
+ *  It is what the reader could count on the map themselves; said, it
+ *  turns "titles show inside your ranges" into a number of cards to work
+ *  through. Null while the movies are on their way. */
+export function sheetLegend(facts: DailyFacts, count: SheetCount | null = null): string {
+  if (!rangeBought(facts)) return `${READS_THE_MAP} to see titles. Today’s movie is somewhere on this map.`;
+  const which = [
+    facts.decade != null ? decadeText(facts.decade) : '',
+    'movies',
+    facts.rating != null ? `rated ${inSentence(ratingBandText(facts.rating))}` : '',
+  ];
+  return `Their ${which.filter(Boolean).join(' ')} are named. ${oneOfThese(count)}`;
+}
+
+function oneOfThese(count: SheetCount | null): string {
+  if (!count || count.left < 1) return 'Today’s movie is one of them.';
+  if (count.left < count.named) {
+    return count.left === 1
+      ? 'Today’s movie is the one you haven’t tried.'
+      : `Today’s movie is one of the ${fmtN(count.left)} you haven’t tried.`;
+  }
+  return count.named === 1 ? 'Today’s movie is the one named.' : `Today’s movie is one of these ${fmtN(count.named)}.`;
+}
+
 /** The footer with nothing picked: how to guess from the map, once there
- *  are titles to guess, and before that which facts read it. */
+ *  are titles to guess, and before that where the facts that name them
+ *  are. */
 export function sheetHint(nextCost: number, ranged: boolean): string {
   return ranged
     ? `Tap a movie to guess it. A wrong guess costs ${fmtN(nextCost)}.`
-    : `${READS_THE_MAP} to read this map. The facts are under the card.`;
+    : 'The decade and the rating are among the facts under the card.';
 }
+
+/** Said once on a device, by the first named card the first time a map
+ *  has any: the cards are what is pressed to guess. */
+export const SHEET_COACH = 'Tap a title to guess it';
 
 /** The footer's line under a picked card's title: "1993 · IMDb 7.8". */
 export function pickLine(movie: Pick<DailyReadableMovie, 'year' | 'rating'>): string {
@@ -1259,7 +1289,7 @@ export function sheetCardLabel(movie: Pick<DailyReadableMovie, 'title' | 'year' 
 /** A blank card's: only its year, which is all the page knows of it, and
  *  what would read it. */
 export function blankCardLabel(year: number, ranged: boolean): string {
-  return ranged ? `A movie from ${year}, outside your ranges` : `A movie from ${year}. ${READS_THE_MAP} to read it`;
+  return ranged ? `A movie from ${year}, outside your ranges` : `A movie from ${year}. ${READS_THE_MAP} to see its title`;
 }
 
 /** The sheet's small map: the app's layout at the handoff's metrics. */

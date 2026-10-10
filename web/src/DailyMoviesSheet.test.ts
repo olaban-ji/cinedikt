@@ -129,7 +129,7 @@ describe('the sheet as it opens', () => {
   });
 
   it('shows the legend and how to guess while the movies are on their way, and no chips to combine names', () => {
-    expect(html).toContain('Titles show inside your ranges: 1990s. Today’s movie is one of these cards, but it isn’t marked.');
+    expect(html).toContain('<p class="cd-msheet-legend">Their 1990s movies are named. Today’s movie is one of them.</p>');
     expect(html).toContain('Tap a movie to guess it. A wrong guess costs 150.');
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toContain('cd-msheet-card');
@@ -172,8 +172,8 @@ describe('the header', () => {
     expect(html).toContain('class="cd-msheet-head" style="--tone:oklch(0.76 0.13 205)"');
   });
 
-  it('says how much can be read as a polite live region', () => {
-    expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">3 of 6 movies readable · on Cinedikt</p>');
+  it('says how many are named as a polite live region', () => {
+    expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">3 of 6 movies named · on Cinedikt</p>');
   });
 
   it('goes straight from the header to the legend, with no row of names between', () => {
@@ -184,27 +184,25 @@ describe('the header', () => {
 describe('before any range is bought', () => {
   const html = draw({ game: gameOf({ facts: {} }), movies: BLANKS });
 
-  it('counts the movies, and says titles only show inside the ranges bought', () => {
+  it('counts the movies, and says what would name them', () => {
     expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">6 movies · on Cinedikt</p>');
     expect(html).toContain(
-      '<p class="cd-msheet-legend">Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.</p>',
+      '<p class="cd-msheet-legend">Buy the decade or a rating range to see titles. Today’s movie is somewhere on this map.</p>',
     );
   });
 
   it('draws every card as a blank tile: an empty poster, no title, no rating, faded, and not to be pressed', () => {
     expect(count(html, 'class="cd-msheet-card cd-msheet-card-blank"')).toBe(6);
     expect(html).toMatch(
-      /<button type="button" class="cd-msheet-card cd-msheet-card-blank" style="left:\d+px;top:\d+px;width:112px;height:42px;opacity:0.3" aria-label="A movie from 1983. Buy the decade or a rating range to read it" disabled=""><span class="cd-msheet-poster" aria-hidden="true"><\/span><\/button>/,
+      /<button type="button" class="cd-msheet-card cd-msheet-card-blank" style="left:\d+px;top:\d+px;width:112px;height:42px;opacity:0.3" aria-label="A movie from 1983. Buy the decade or a rating range to see its title" disabled=""><span class="cd-msheet-poster" aria-hidden="true"><\/span><\/button>/,
     );
     expect(html).not.toContain('cd-msheet-card-title');
     expect(html).not.toContain('cd-msheet-card-foot');
     expect(html).not.toContain('aria-pressed');
   });
 
-  it('points the reader at the facts under the card that read it', () => {
-    expect(html).toContain(
-      '<span class="cd-msheet-hint">Buy the decade or a rating range to read this map. The facts are under the card.</span>',
-    );
+  it('points the reader at the facts under the card that name them', () => {
+    expect(html).toContain('<span class="cd-msheet-hint">The decade and the rating are among the facts under the card.</span>');
   });
 });
 
@@ -213,8 +211,8 @@ describe('with only a genre bought', () => {
 
   it('is still unread, and never names the genre as a range nor draws it', () => {
     expect(html).toContain('<p class="cd-msheet-sub" aria-live="polite">6 movies · on Cinedikt</p>');
-    expect(html).toContain('Titles only show inside the ranges you buy: the decade or a rating range.');
-    expect(html).toContain('Buy the decade or a rating range to read this map.');
+    expect(html).toContain('Buy the decade or a rating range to see titles. Today’s movie is somewhere on this map.');
+    expect(html).toContain('The decade and the rating are among the facts under the card.');
     expect(html).not.toContain('Action');
     expect(html).not.toContain('Sci-Fi');
     expect(html).not.toContain('cd-msheet-band-in');
@@ -231,9 +229,9 @@ describe('the map once a range is bought', () => {
     expect(count(html, 'class="cd-msheet-line"')).toBe(6);
   });
 
-  it('names the ranges bought in the legend, and says today’s movie is among the cards unmarked', () => {
+  it('says in the legend which movies the ranges bought name, and how many of them today’s can be', () => {
     expect(html).toContain(
-      '<p class="cd-msheet-legend">Titles show inside your ranges: 1990s · rated 7.0 to 7.9. Today’s movie is one of these cards, but it isn’t marked.</p>',
+      '<p class="cd-msheet-legend">Their 1990s movies rated 7.0 to 7.9 are named. Today’s movie is one of the 2 you haven’t tried.</p>',
     );
   });
 
@@ -287,6 +285,31 @@ describe('the footer', () => {
 
   it('says Already tried, and cannot be pressed, for a movie guessed already', () => {
     expect(draw({ pick: 'tt0115736' })).toContain('<button type="button" class="cd-msheet-guess" disabled="">Already tried</button>');
+  });
+});
+
+describe('the one-time pointer at the named cards', () => {
+  it('is drawn under the first that can be guessed, for the eye alone, until a card is tapped', () => {
+    expect(draw({ coach: true })).toMatch(
+      /<div class="cd-msheet-coach" style="left:\d+px;top:\d+px;width:172px;--caret:\d+px" aria-hidden="true">Tap a title to guess it<\/div><\/div><\/div>/,
+    );
+    expect(draw()).not.toContain('cd-msheet-coach');
+    expect(draw({ coach: true, pick: 'tt0106977' })).not.toContain('cd-msheet-coach');
+  });
+
+  it('is not drawn by the sheet as it opens, before its movies have come', () => {
+    expect(
+      renderToStaticMarkup(
+        createElement(DailyMoviesSheet, {
+          no: 143,
+          person: JOE.id,
+          game: gameOf(),
+          theme: 'dark',
+          onGuess: () => {},
+          onClose: () => {},
+        }),
+      ),
+    ).not.toContain('cd-msheet-coach');
   });
 });
 

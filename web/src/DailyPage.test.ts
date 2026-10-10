@@ -977,7 +977,7 @@ describe('How it works', () => {
       'Today’s movie starts as a blank card in its poster’s colour, and you see one person from its cast, with another movie they were in.',
     );
     expect(html).toContain(
-      '<span>Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the decade or rating range you’ve bought.</span>',
+      '<span>Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Movies are named only inside the decade or rating range you’ve bought, and today’s movie is always one of them.</span>',
     );
     expect(html).toContain(
       '<p class="cd-nd-rules-then">You start with 1,000 points. Each extra name costs 100. Wrong guesses cost 100, then 150, 200 and so on. Facts cost 50 to 250. There’s no clock.</p>',

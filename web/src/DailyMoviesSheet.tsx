@@ -150,7 +150,15 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
     () => (movies && width > 0 ? sheetLayout(movies, width, phone) : null),
     [movies, width, phone],
   );
-  const view = sheetView({ game, person, movies, layout, pick, reach, theme });
+  // The pointer at the named cards is shown once on a device, the first
+  // time a map has any, and is gone from the first tap.
+  const [coachDue] = useState(() => !coachSeen());
+  const [tapped, setTapped] = useState(false);
+  const view = sheetView({ game, person, movies, layout, pick, reach, theme, coach: coachDue && !tapped });
+  const coached = view.coach != null;
+  useEffect(() => {
+    if (coached) markCoachSeen();
+  }, [coached]);
 
   // It opens scrolled to the first readable movie, once, as soon as there
   // is a map to scroll. Instant whatever the motion setting: nothing has
@@ -207,7 +215,10 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
       mapRef={mapRef}
       on={{
         close: onClose,
-        card: setPick,
+        card: (id) => {
+          setPick(id);
+          setTapped(true);
+        },
         guess,
         retry: () => setAttempt((n) => n + 1),
         key: onKeyDown,
@@ -218,6 +229,27 @@ export function DailyMoviesSheet(props: MoviesSheetProps): JSX.Element {
       }}
     />
   );
+}
+
+/** Where the device keeps that the pointer at the named cards has been
+ *  shown. */
+const COACH_KEY = 'cinedikt.daily.coach';
+
+function coachSeen(): boolean {
+  try {
+    return localStorage.getItem(COACH_KEY) != null;
+  } catch {
+    // With storage blocked it would be shown on every map, so it is not.
+    return true;
+  }
+}
+
+function markCoachSeen(): void {
+  try {
+    localStorage.setItem(COACH_KEY, '1');
+  } catch {
+    // Nothing to keep it in; coachSeen says so already.
+  }
 }
 
 /** The band of the map around where the scroller stands, in the warm
@@ -388,6 +420,22 @@ export function MoviesSheetView({
                   onPick={on.card}
                 />
               ))}
+              {/* Drawn only: the footer says the same to a screen reader,
+                  and a press goes through it to the cards. */}
+              {view.coach && (
+                <div
+                  className="cd-msheet-coach"
+                  style={{
+                    left: view.coach.left,
+                    top: view.coach.top,
+                    width: view.coach.width,
+                    ['--caret' as string]: `${view.coach.caret}px`,
+                  }}
+                  aria-hidden="true"
+                >
+                  {view.coach.text}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -199,6 +199,7 @@ import {
   sharedPeople,
   sheetAsk,
   sheetCardLabel,
+  SHEET_COACH,
   sheetHint,
   sheetLegend,
   sheetAfter,
@@ -564,7 +565,7 @@ describe('the facts', () => {
       director: { director: [LANA] },
     };
     const mapLine = HOW_IT_WORKS.items[4].split('. ').at(-1) ?? '';
-    expect(mapLine).toBe('Titles only show inside the decade or rating range you’ve bought.');
+    expect(mapLine).toBe('Movies are named only inside the decade or rating range you’ve bought, and today’s movie is always one of them.');
     for (const kind of FACT_ORDER) {
       const word = FACTS[kind].offer.split(' ')[0].toLowerCase();
       const marks = rangeBought(alone[kind]);
@@ -1089,7 +1090,7 @@ describe('the words', () => {
       'Guess whenever you like. Each wrong guess, or each tap on the next name, shows another person, working up to the star.',
       'Every wrong guess says how warm it was: cold, warm or hot, with the decade and genre compared.',
       'Stuck? Buy a fact about the movie: a length range, a rating range, its genre, the decade, or the director.',
-      'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Titles only show inside the decade or rating range you’ve bought.',
+      'Tap Movies on a name to see their movies on a Cinedikt map. You get one map a game, so choose whose. Movies are named only inside the decade or rating range you’ve bought, and today’s movie is always one of them.',
       'A wrong guess also fills in anyone from the cast it shares with today’s movie.',
     ]);
     expect(HOW_IT_WORKS.then).toBe(
@@ -1186,44 +1187,64 @@ describe('the Movies sheet', () => {
     expect(sheetTitle('Joe Pantoliano')).toBe('Joe Pantoliano’s movies');
   });
 
-  it('counts its movies, and once a range is bought how many of them can be read', () => {
+  it('counts its movies, and once a range is bought how many of them are named', () => {
     expect(sheetSub(0, 13, false)).toBe('13 movies · on Cinedikt');
-    expect(sheetSub(5, 13, true)).toBe('5 of 13 movies readable · on Cinedikt');
-    expect(sheetSub(1, 1, true)).toBe('1 of 1 movie readable · on Cinedikt');
+    expect(sheetSub(5, 13, true)).toBe('5 of 13 movies named · on Cinedikt');
+    expect(sheetSub(1, 1, true)).toBe('1 of 1 movie named · on Cinedikt');
     expect(sheetSub(0, 1, false)).toBe('1 movie · on Cinedikt');
   });
 
-  it('says where titles show, and once ranges are bought which, and that today’s movie is unmarked', () => {
-    expect(sheetLegend({})).toBe(
-      'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.',
-    );
-    // A length, a director or a genre is not a range: nothing more can be
-    // read, and the genre is never named as one.
+  it('says what names its movies, and once ranges are bought which are named and how many today’s movie can be', () => {
+    expect(sheetLegend({})).toBe('Buy the decade or a rating range to see titles. Today’s movie is somewhere on this map.');
+    // A length, a director or a genre is not a range: nothing more is
+    // named, and the genre is never mentioned.
     expect(sheetLegend({ length: 2, director: [LANA] })).toBe(sheetLegend({}));
     expect(sheetLegend({ genre: ['Action', 'Sci-Fi'] })).toBe(sheetLegend({}));
-    expect(sheetLegend({ decade: 1990, rating: 3 })).toBe(
-      'Titles show inside your ranges: 1990s · rated 8.0 or higher. Today’s movie is one of these cards, but it isn’t marked.',
+    expect(sheetLegend({ genre: ['Action'] }, { named: 4, left: 4 })).toBe(sheetLegend({}));
+    const nine = { named: 9, left: 9 };
+    expect(sheetLegend({ decade: 1990 }, nine)).toBe('Their 1990s movies are named. Today’s movie is one of these 9.');
+    expect(sheetLegend({ rating: 2 }, { named: 12, left: 12 })).toBe(
+      'Their movies rated 7.0 to 7.9 are named. Today’s movie is one of these 12.',
     );
-    // Only the ranges bought are listed.
-    expect(sheetLegend({ decade: 1990, genre: ['Action', 'Sci-Fi'] })).toBe(
-      'Titles show inside your ranges: 1990s. Today’s movie is one of these cards, but it isn’t marked.',
+    expect(sheetLegend({ decade: 1990, rating: 3 }, { named: 4, left: 4 })).toBe(
+      'Their 1990s movies rated 8.0 or higher are named. Today’s movie is one of these 4.',
     );
-    expect(sheetLegend({ rating: 2, genre: ['Action', 'Sci-Fi'], length: 1 })).toBe(
-      'Titles show inside your ranges: rated 7.0 to 7.9. Today’s movie is one of these cards, but it isn’t marked.',
+    // Only the ranges bought are named.
+    expect(sheetLegend({ decade: 1990, genre: ['Action', 'Sci-Fi'] }, nine)).toBe(sheetLegend({ decade: 1990 }, nine));
+    expect(sheetLegend({ rating: 2, genre: ['Action', 'Sci-Fi'], length: 1 }, nine)).toBe(sheetLegend({ rating: 2 }, nine));
+  });
+
+  it('counts down the named cards as wrong guesses rule them out', () => {
+    expect(sheetLegend({ decade: 1990 }, { named: 9, left: 7 })).toBe(
+      'Their 1990s movies are named. Today’s movie is one of the 7 you haven’t tried.',
     );
+    expect(sheetLegend({ decade: 1990 }, { named: 9, left: 1 })).toBe(
+      'Their 1990s movies are named. Today’s movie is the one you haven’t tried.',
+    );
+    expect(sheetLegend({ decade: 1990 }, { named: 1, left: 1 })).toBe('Their 1990s movies are named. Today’s movie is the one named.');
+    expect(sheetLegend({ decade: 1990 }, { named: 1200, left: 1200 })).toBe(
+      'Their 1990s movies are named. Today’s movie is one of these 1,200.',
+    );
+    // Nothing to count yet, or a count that cannot be today's.
+    expect(sheetLegend({ decade: 1990 })).toBe('Their 1990s movies are named. Today’s movie is one of them.');
+    expect(sheetLegend({ decade: 1990 }, { named: 3, left: 0 })).toBe(sheetLegend({ decade: 1990 }));
   });
 
   it('writes the lowest rating band in lower case inside the legend’s sentence, and as a heading in the facts row', () => {
-    expect(sheetLegend({ rating: 0 })).toBe(
-      'Titles show inside your ranges: rated below 6.0. Today’s movie is one of these cards, but it isn’t marked.',
+    expect(sheetLegend({ rating: 0 }, { named: 5, left: 5 })).toBe(
+      'Their movies rated below 6.0 are named. Today’s movie is one of these 5.',
     );
     expect(factValue('rating', { rating: 0 })).toBe('Below 6.0');
   });
 
-  it('says how to guess from it once there is something to read, and before that where the ranges are', () => {
+  it('says how to guess from it once there is something named, and before that where the facts that name them are', () => {
     expect(sheetHint(150, true)).toBe('Tap a movie to guess it. A wrong guess costs 150.');
     expect(sheetHint(1200, true)).toBe('Tap a movie to guess it. A wrong guess costs 1,200.');
-    expect(sheetHint(150, false)).toBe('Buy the decade or a rating range to read this map. The facts are under the card.');
+    expect(sheetHint(150, false)).toBe('The decade and the rating are among the facts under the card.');
+  });
+
+  it('points once at the named cards as what is pressed to guess', () => {
+    expect(SHEET_COACH).toBe('Tap a title to guess it');
   });
 
   it('names a readable card for a screen reader, and a blank one by its year alone', () => {
@@ -1232,7 +1253,7 @@ describe('the Movies sheet', () => {
     expect(pickLine({ year: 0, rating: 7 })).toBe('IMDb 7.0');
     expect(sheetCardLabel(fugitive, false)).toBe('The Fugitive, 1993, rated 7.8');
     expect(sheetCardLabel(fugitive, true)).toBe('The Fugitive, 1993, rated 7.8, already tried');
-    expect(blankCardLabel(1985, false)).toBe('A movie from 1985. Buy the decade or a rating range to read it');
+    expect(blankCardLabel(1985, false)).toBe('A movie from 1985. Buy the decade or a rating range to see its title');
     expect(blankCardLabel(1985, true)).toBe('A movie from 1985, outside your ranges');
   });
 

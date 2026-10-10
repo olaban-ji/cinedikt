@@ -6,11 +6,13 @@ import {
   CARD_BLANK,
   CARD_READ,
   CARD_TRIED,
+  COACH_W,
   GUESS_IT,
   SHEET_BOTTOM_PAD,
   SHEET_EDGE_LEFT,
   SHEET_EDGE_RIGHT,
   cardOpacity,
+  coachAt,
   isReadable,
   moviesFailed,
   openedOn,
@@ -151,7 +153,7 @@ describe('the movies the server sends', () => {
     expect(sheetEntries(odd)).toHaveLength(MOVIES.length);
     expect(sheetLayout(odd, 540, false).cards).toHaveLength(MOVIES.length);
     expect(sheetView(stateOf({ movies: odd, layout: sheetLayout(odd, 540, false) })).sub).toBe(
-      '3 of 8 movies readable · on Cinedikt',
+      '3 of 8 movies named · on Cinedikt',
     );
   });
 });
@@ -301,21 +303,28 @@ describe('what can be read', () => {
   it('is nothing before a range is bought: every card blank, the count plain, and the footer pointing at the facts', () => {
     const v = sheetView(stateOf({ game: gameOf({ facts: {} }), movies: BLANKS }));
     expect(v.cards.every((c) => c.kind === 'blank')).toBe(true);
-    expect(v.cards[0].aria).toBe('A movie from 1983. Buy the decade or a rating range to read it');
+    expect(v.cards[0].aria).toBe('A movie from 1983. Buy the decade or a rating range to see its title');
     expect(v.sub).toBe('8 movies · on Cinedikt');
     expect(v.legend).toBe(
-      'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.',
+      'Buy the decade or a rating range to see titles. Today’s movie is somewhere on this map.',
     );
     expect(v.foot).toEqual({
       kind: 'hint',
-      text: 'Buy the decade or a rating range to read this map. The facts are under the card.',
+      text: 'The decade and the rating are among the facts under the card.',
     });
   });
 
-  it('counts how many can be read once a range is bought, and names the ranges', () => {
+  it('counts how many are named once a range is bought, and how many of those today’s movie can be', () => {
+    // Three named, Bound among them already guessed wrong: today's movie
+    // is one of the other two.
     const v = sheetView(stateOf());
-    expect(v.sub).toBe('3 of 8 movies readable · on Cinedikt');
-    expect(v.legend).toBe('Titles show inside your ranges: 1990s. Today’s movie is one of these cards, but it isn’t marked.');
+    expect(v.sub).toBe('3 of 8 movies named · on Cinedikt');
+    expect(v.legend).toBe('Their 1990s movies are named. Today’s movie is one of the 2 you haven’t tried.');
+    // With nothing guessed, every one named.
+    const fresh = gameOf({ log: [{ type: 'fact', kind: 'decade', cost: 100 }] });
+    expect(sheetView(stateOf({ game: fresh })).legend).toBe('Their 1990s movies are named. Today’s movie is one of these 3.');
+    // While the movies are on their way there is nothing yet to count.
+    expect(sheetView(stateOf({ movies: null })).legend).toBe('Their 1990s movies are named. Today’s movie is one of them.');
     expect(sheetView(stateOf({ movies: null })).sub).toBe('');
     expect(sheetView(stateOf({ movies: null })).cards).toEqual([]);
   });
@@ -325,12 +334,12 @@ describe('what can be read', () => {
       const v = sheetView(stateOf({ game: gameOf({ facts }), movies: BLANKS }));
       expect(v.sub, JSON.stringify(facts)).toBe('8 movies · on Cinedikt');
       expect(v.legend).toBe(
-        'Titles only show inside the ranges you buy: the decade or a rating range. Today’s movie is one of these cards.',
+        'Buy the decade or a rating range to see titles. Today’s movie is somewhere on this map.',
       );
       expect(v.foot.kind === 'hint' && v.foot.text).toBe(
-        'Buy the decade or a rating range to read this map. The facts are under the card.',
+        'The decade and the rating are among the facts under the card.',
       );
-      expect(v.cards[0].aria).toBe('A movie from 1983. Buy the decade or a rating range to read it');
+      expect(v.cards[0].aria).toBe('A movie from 1983. Buy the decade or a rating range to see its title');
       // Nothing is drawn for them: no decade washed, no rating column.
       expect(v.rows.some((r) => r.inDecade)).toBe(false);
       expect(v.column).toBeNull();
@@ -345,11 +354,11 @@ describe('what can be read', () => {
     const s = stateOf({ game: gameOf({ facts: { decade: 1990, genre: ['Drama'] } }) });
     const v = sheetView(s);
     expect(readable(s).map((c) => c.title)).toEqual(['The Fugitive', 'Bound', 'The Matrix']);
-    expect(v.legend).toBe('Titles show inside your ranges: 1990s. Today’s movie is one of these cards, but it isn’t marked.');
+    expect(v.legend).toBe('Their 1990s movies are named. Today’s movie is one of the 2 you haven’t tried.');
     expect(v.legend).not.toContain('Drama');
     expect(v.rows.filter((r) => r.inDecade).map((r) => r.year)).toEqual([1993, 1996, 1999]);
     expect(v.column).toBeNull();
-    expect(v.sub).toBe('3 of 8 movies readable · on Cinedikt');
+    expect(v.sub).toBe('3 of 8 movies named · on Cinedikt');
   });
 
   it('counts a rating band alone as a range, its column drawn and no decade washed', () => {
@@ -362,10 +371,9 @@ describe('what can be read', () => {
       blank(1999, 8.5),
     ];
     const v = sheetView(stateOf({ game: gameOf({ facts: { rating: 2 } }), movies }));
-    expect(v.sub).toBe('2 of 4 movies readable · on Cinedikt');
-    expect(v.legend).toBe(
-      'Titles show inside your ranges: rated 7.0 to 7.9. Today’s movie is one of these cards, but it isn’t marked.',
-    );
+    expect(v.sub).toBe('2 of 4 movies named · on Cinedikt');
+    // Bound, one of the two, was guessed wrong, which leaves one.
+    expect(v.legend).toBe('Their movies rated 7.0 to 7.9 are named. Today’s movie is the one you haven’t tried.');
     expect(v.foot.kind === 'hint' && v.foot.text).toBe('Tap a movie to guess it. A wrong guess costs 150.');
     expect(v.column).not.toBeNull();
     expect(v.rows.some((r) => r.inDecade)).toBe(false);
@@ -545,6 +553,63 @@ describe('the phone sheet', () => {
   });
 });
 
+describe('the one-time pointer at the named cards', () => {
+  type Named = Extract<SheetCard, { kind: 'readable' }>;
+  const at = (left: number, top: number, tried = false): Named => ({
+    kind: 'readable',
+    key: `${left}:${top}`,
+    id: `tt${left}${top}`,
+    title: 'A movie',
+    left,
+    top,
+    rating: '7.5',
+    tried,
+    picked: false,
+    opacity: 1,
+    aria: '',
+    warm: false,
+  });
+
+  it('sits under the first named card that can be guessed, its caret on the card’s middle', () => {
+    // Bound is tried, so the first that can be guessed is The Fugitive.
+    const v = sheetView(stateOf({ coach: true }));
+    const fugitive = cardOf(stateOf(), 'tt0106977');
+    expect(v.coach).not.toBeNull();
+    const c = v.coach!;
+    expect(c.text).toBe('Tap a title to guess it');
+    expect(c.width).toBe(COACH_W);
+    expect(c.top).toBe(fugitive.top + v.cardH + 9);
+    expect(Math.abs(c.left + c.caret - (fugitive.left + v.cardW / 2))).toBeLessThanOrEqual(1);
+  });
+
+  it('passes over cards already tried and blank ones, and goes by row, then from the left', () => {
+    expect(coachAt([at(300, 50, true), blankAt(10, 40), at(200, 90), at(100, 90)], 540, 112, 42)?.top).toBe(141);
+    expect(coachAt([at(300, 50, true), at(200, 90), at(100, 90)], 540, 112, 42)?.caret).toBe(156 - 70);
+    expect(coachAt([at(300, 50, true), blankAt(10, 40)], 540, 112, 42)).toBeNull();
+  });
+
+  it('stays inside the map, its caret still over the card', () => {
+    // A card at the left edge: the pill starts there too.
+    expect(coachAt([at(44, 0)], 540, 112, 42)).toMatchObject({ left: 14, caret: 86 });
+    expect(coachAt([at(0, 0)], 540, 112, 42)).toMatchObject({ left: 0, caret: 56 });
+    // At the right edge: it ends there, and the caret moves along it.
+    expect(coachAt([at(428, 0)], 540, 112, 42)).toMatchObject({ left: 540 - COACH_W, caret: 484 - (540 - COACH_W) });
+    // Never closer to the pill's ends than its rounding.
+    expect(coachAt([at(530, 0)], 540, 20, 42)).toMatchObject({ left: 540 - COACH_W, caret: COACH_W - 18 });
+  });
+
+  it('is only there when it is due, there is a named card, the movies have come and nothing has been tapped', () => {
+    expect(sheetView(stateOf()).coach).toBeNull();
+    expect(sheetView(stateOf({ coach: true, pick: 'tt0106977' })).coach).toBeNull();
+    expect(sheetView(stateOf({ coach: true, game: gameOf({ facts: {} }), movies: BLANKS })).coach).toBeNull();
+    expect(sheetView(stateOf({ coach: true, movies: null })).coach).toBeNull();
+  });
+
+  function blankAt(left: number, top: number): SheetCard {
+    return { kind: 'blank', key: `~${left}:${top}`, left, top, opacity: 0.3, aria: '' };
+  }
+});
+
 describe('the stylesheet', () => {
   const text = css.replace(/\/\*[\s\S]*?\*\//g, '');
   const rule = (sel: string) => {
@@ -590,6 +655,12 @@ describe('the stylesheet', () => {
   it('draws the grabber 38 by 5, 8px from the top', () => {
     expect(rule('.cd-msheet-grab span')).toMatch(/width: 38px;\s*height: 5px;\s*border-radius: 3px;\s*background: var\(--ln3\);/);
     expect(rule('.cd-msheet-grab')).toContain('padding-top: 8px;');
+  });
+
+  it('lets a press through the pointer to the cards, and keeps it still when motion is reduced', () => {
+    expect(rule('.cd-msheet-coach')).toContain('pointer-events: none;');
+    expect(rule('.cd-msheet-coach')).toContain('z-index: 4;');
+    expect(text).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[^@]*\.cd-msheet-coach \{\s*animation: none;/);
   });
 
   it('fades cards in and out over .25s, and keeps the axis 26px tall and pinned', () => {

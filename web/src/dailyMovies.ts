@@ -18,6 +18,7 @@
 
 import type { DailyBlankMovie, DailyGame, DailyMovie, DailyPerson, DailyReadableMovie } from './api';
 import {
+  SHEET_COACH,
   SHEET_METRICS,
   SHEET_PHONE_SHARE,
   SHEET_READ_TOP,
@@ -335,6 +336,47 @@ export function openingScroll(cards: readonly Pick<SheetCard, 'top' | 'kind'>[])
   return first == null ? 0 : Math.max(0, first - SHEET_READ_TOP);
 }
 
+/** The one-time pointer at the named cards: a pill under the first card
+ *  that can still be guessed, its caret at the card's middle. */
+export interface SheetCoach {
+  text: string;
+  left: number;
+  top: number;
+  width: number;
+  /** The caret's middle, from the pill's left edge. */
+  caret: number;
+}
+
+/** The pill's width: the words on one line at the hint's size. */
+export const COACH_W = 172;
+/** Between the card's foot and the caret's tip. */
+const COACH_GAP = 9;
+/** How near the pill's edge the caret may come, past its rounding. */
+const CARET_INSET = 18;
+
+/** Where the pointer goes: under the first named card not yet tried, in
+ *  reading order, the card the sheet opened scrolled to, or one near it.
+ *  It sits under the card, not over it, since the axis covers the top of
+ *  the map, and is held inside the plot, its caret still on the card.
+ *  Null with no card to point at. */
+export function coachAt(
+  cards: readonly SheetCard[],
+  plotW: number,
+  cardW: number,
+  cardH: number,
+): SheetCoach | null {
+  let first: Extract<SheetCard, { kind: 'readable' }> | null = null;
+  for (const c of cards) {
+    if (c.kind !== 'readable' || c.tried) continue;
+    if (!first || c.top < first.top || (c.top === first.top && c.left < first.left)) first = c;
+  }
+  if (!first) return null;
+  const mid = first.left + cardW / 2;
+  const left = Math.max(0, Math.min(mid - COACH_W / 2, plotW - COACH_W));
+  const caret = Math.max(CARET_INSET, Math.min(mid - left, COACH_W - CARET_INSET));
+  return { text: SHEET_COACH, left: Math.round(left), top: first.top + cardH + COACH_GAP, width: COACH_W, caret: Math.round(caret) };
+}
+
 // ---- the footer ----
 
 export const GUESS_IT = 'Guess it';
@@ -394,6 +436,9 @@ export interface SheetState {
    *  load; null until the sheet has been scrolled to where it opens. */
   reach: { top: number; bottom: number } | null;
   theme: Theme;
+  /** The one-time pointer at the named cards is still to be shown on
+   *  this device, and nothing has been tapped yet. */
+  coach?: boolean;
 }
 
 export interface SheetView {
@@ -403,10 +448,11 @@ export interface SheetView {
   tone: string;
   code: string;
   title: string;
-  /** "13 movies · on Cinedikt", or "5 of 13 movies readable · on
+  /** "13 movies · on Cinedikt", or "5 of 13 movies named · on
    *  Cinedikt" once a range is bought; nothing while the movies are on
    *  their way. */
   sub: string;
+  /** Which movies are named, and how many today's could be. */
   legend: string;
   rows: SheetRow[];
   ticks: SheetTick[];
@@ -419,6 +465,9 @@ export interface SheetView {
   foot: SheetFoot;
   /** Where to scroll to when the sheet opens. */
   scrollTo: number;
+  /** The one-time pointer, when it is due and there is a card to point
+   *  at. */
+  coach: SheetCoach | null;
 }
 
 /** Everything the sheet draws, from where it stands. */
@@ -438,15 +487,16 @@ export function sheetView(s: SheetState): SheetView {
       cards.push(isReadable(m) ? readableCard(m, c, s, tried.has(m.id), cardH) : blankCard(m, c, ranged));
     }
   }
-  const readable = cards.filter((c) => c.kind === 'readable').length;
+  const named = cards.filter((c): c is Extract<SheetCard, { kind: 'readable' }> => c.kind === 'readable');
+  const left = named.filter((c) => !c.tried).length;
   const picked = s.pick ? byKey.get(s.pick) : undefined;
   return {
     person: lead?.person ?? null,
     tone: lead ? hueColour(lead.person.hue, theme) : '',
     code: lead ? (codes.get(lead.person.id) ?? '?') : '',
     title: sheetTitle(lead?.person.name ?? ''),
-    sub: s.movies && layout ? sheetSub(readable, cards.length, ranged) : '',
-    legend: sheetLegend(game.facts),
+    sub: s.movies && layout ? sheetSub(named.length, cards.length, ranged) : '',
+    legend: sheetLegend(game.facts, s.movies && layout ? { named: named.length, left } : null),
     rows: layout ? sheetRows(game.facts, layout) : [],
     ticks: layout ? sheetTicks(layout) : [],
     column: layout ? ratingColumn(game.facts, layout) : null,
@@ -456,6 +506,8 @@ export function sheetView(s: SheetState): SheetView {
     cardH: layout?.metrics.cardH ?? 0,
     foot: sheetFoot(picked && isReadable(picked) ? picked : null, game),
     scrollTo: openingScroll(cards),
+    coach:
+      s.coach && layout && !s.pick ? coachAt(cards, layout.plotW, layout.metrics.cardW, layout.metrics.cardH) : null,
   };
 }
 
